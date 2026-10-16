@@ -166,8 +166,8 @@ mod tests {
 
     use super::*;
 
-    /// Golden vectors checked against rfbproto.rst: FramebufferUpdate,
-    /// SetColourMapEntries, Bell and ServerCutText sections (2026-10-16).
+    // Golden vectors checked against rfbproto.rst: FramebufferUpdate,
+    // SetColourMapEntries, Bell and ServerCutText sections (2026-10-16).
     fn vectors() -> Vec<(ServerMessage, Vec<u8>)> {
         vec![
             (ServerMessage::UpdateBegin { rects: 3 }, vec![0, 0, 0, 3]),
