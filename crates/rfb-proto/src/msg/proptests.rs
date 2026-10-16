@@ -8,7 +8,7 @@ use proptest::prelude::*;
 use super::{client::ClientMessage, server::ServerMessage};
 use crate::{
     ProtoError,
-    types::{PixelFormat, Rect},
+    types::{PixelFormat, Rect, Screen},
 };
 
 fn pixel_format() -> impl Strategy<Value = PixelFormat> {
@@ -55,6 +55,26 @@ fn client_message() -> impl Strategy<Value = ClientMessage> {
         (any::<u8>(), any::<u16>(), any::<u16>())
             .prop_map(|(buttons, x, y)| ClientMessage::PointerEvent { buttons, x, y }),
         prop::collection::vec(any::<u8>(), 0..256).prop_map(ClientMessage::ClientCutText),
+        (
+            0..=crate::consts::limits::MAX_FB_DIMENSION,
+            0..=crate::consts::limits::MAX_FB_DIMENSION,
+            prop::collection::vec(any::<(u32, [u16; 4], u32)>(), 0..8),
+        )
+            .prop_map(|(width, height, screens)| ClientMessage::SetDesktopSize {
+                width,
+                height,
+                screens: screens
+                    .into_iter()
+                    .map(|(id, r, flags)| Screen {
+                        id,
+                        x: r[0],
+                        y: r[1],
+                        width: r[2],
+                        height: r[3],
+                        flags,
+                    })
+                    .collect(),
+            }),
     ]
 }
 

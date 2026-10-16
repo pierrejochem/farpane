@@ -561,3 +561,157 @@ mod robustness {
         }
     }
 }
+
+mod resize {
+    use super::*;
+    use crate::types::Screen;
+
+    /// An `ExtendedDesktopSize` rectangle: `reason` in x, `status` in y.
+    fn ext_rect(
+        reason: u16,
+        status: u16,
+        w: u16,
+        h: u16,
+        screens: &[Screen],
+    ) -> (RectHeader, Vec<u8>) {
+        let mut payload = vec![u8::try_from(screens.len()).unwrap(), 0, 0, 0];
+        for s in screens {
+            s.write(&mut payload);
+        }
+        (hdr(pseudo::EXT_DESKTOP_SIZE, reason, status, w, h), payload)
+    }
+
+    fn screen(id: u32, w: u16, h: u16) -> Screen {
+        Screen {
+            id,
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+            flags: 0,
+        }
+    }
+
+    /// A connected pair whose client asked for `ExtendedDesktopSize`.
+    fn pair() -> Pair {
+        let mut p = Pair::new(V::V3_8, security::NONE);
+        p.handshake();
+        p.client_sends(&ClientMessage::SetEncodings(vec![
+            enc::COPY_RECT,
+            pseudo::EXT_DESKTOP_SIZE,
+        ]));
+        p.server_events();
+        p
+    }
+
+    fn send(p: &mut Pair, rects: &[(RectHeader, Vec<u8>)]) -> Result<(), ProtoError> {
+        let encoded: Vec<EncodedRect<'_>> = rects
+            .iter()
+            .map(|(header, payload)| EncodedRect {
+                header: *header,
+                payload,
+            })
+            .collect();
+        let mut out = Vec::new();
+        p.server.send_update(&encoded, &mut out)?;
+        p.to_client.extend_from_slice(&out);
+        Ok(())
+    }
+
+    #[test]
+    fn a_successful_layout_resizes_both_sides_and_unlocks_the_request() {
+        let mut p = pair();
+        assert!(!p.client.supports_desktop_resize());
+        // Initial layout, sent for a non-incremental request: reason 0, status 0.
+        send(&mut p, &[ext_rect(0, 0, W, H, &[screen(1, W, H)])]).unwrap();
+        p.client_events();
+        assert!(p.client.supports_desktop_resize());
+
+        // The server changes the size; rectangles after it use the new bounds.
+        send(
+            &mut p,
+            &[
+                ext_rect(0, 0, 640, 480, &[screen(1, 640, 480)]),
+                (hdr(enc::COPY_RECT, 600, 400, 10, 10), vec![0; 4]),
+            ],
+        )
+        .unwrap();
+        assert_eq!(p.client_events().len(), 4);
+        assert_eq!(p.client.framebuffer_size(), (640, 480));
+        assert_eq!(p.server.framebuffer_size(), (640, 480));
+    }
+
+    #[test]
+    fn a_refusal_does_not_change_the_size_even_if_its_size_fields_are_nonsense() {
+        let mut p = pair();
+        // Client-initiated (x = 1), "administratively prohibited" (y = 1).
+        send(&mut p, &[ext_rect(1, 1, 9999, 9999, &[])]).unwrap();
+        p.client_events();
+        assert_eq!(p.client.framebuffer_size(), (W, H));
+        assert_eq!(p.server.framebuffer_size(), (W, H));
+        assert!(
+            p.client.supports_desktop_resize(),
+            "a refusal still proves the extension"
+        );
+    }
+
+    #[test]
+    fn set_desktop_size_is_refused_until_the_extension_has_been_seen() {
+        let mut p = pair();
+        let request = ClientMessage::SetDesktopSize {
+            width: 800,
+            height: 600,
+            screens: vec![screen(1, 800, 600)],
+        };
+        let mut out = Vec::new();
+        assert_eq!(
+            p.client.send(&request, &mut out),
+            Err(ProtoError::ExtensionNotConfirmed("SetDesktopSize"))
+        );
+        assert!(out.is_empty(), "nothing is written");
+
+        send(&mut p, &[ext_rect(0, 0, W, H, &[screen(1, W, H)])]).unwrap();
+        p.client_events();
+        p.client_sends(&request);
+        assert_eq!(
+            p.server_events(),
+            [ServerConnEvent::Message(request)],
+            "the server receives exactly what was asked"
+        );
+    }
+
+    #[test]
+    fn an_oversized_layout_is_fatal() {
+        let mut p = pair();
+        let big = crate::consts::limits::MAX_FB_DIMENSION + 1;
+        // The server side would never send it; feed the bytes directly.
+        let (h, payload) = ext_rect(0, 0, big, 10, &[]);
+        let mut bytes = Vec::new();
+        ServerMessage::UpdateBegin { rects: 1 }
+            .write(&mut bytes)
+            .unwrap();
+        bytes.extend_from_slice(&h.to_bytes());
+        bytes.extend_from_slice(&payload);
+        p.to_client.extend_from_slice(&bytes);
+        let mut out = Vec::new();
+        let result = loop {
+            match p.client.poll(&mut p.to_client, &mut out) {
+                Ok(Some(_)) => {}
+                other => break other,
+            }
+        };
+        assert!(
+            matches!(result, Err(ProtoError::LimitExceeded { .. })),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn the_server_checks_that_the_layout_payload_matches_its_screen_count() {
+        let mut p = pair();
+        let (h, mut payload) = ext_rect(0, 0, W, H, &[screen(1, W, H)]);
+        payload.pop(); // one byte short
+        let r = send(&mut p, &[(h, payload)]);
+        assert!(matches!(r, Err(ProtoError::Malformed { .. })), "{r:?}");
+    }
+}

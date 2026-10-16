@@ -252,3 +252,19 @@ fn unknown_encodings_are_fatal() {
         Err(ProtoError::UnsupportedEncoding(12345))
     );
 }
+
+#[test]
+fn extended_desktop_size_is_four_bytes_plus_sixteen_per_screen() {
+    let h = header(pseudo::EXT_DESKTOP_SIZE, 1920, 1080);
+    // No screens: the header only.
+    check(&h, &PF32, &[0, 0, 0, 0]);
+    // Two screens.
+    let mut p = vec![2, 0, 0, 0];
+    p.extend_from_slice(&[0; 32]);
+    check(&h, &PF32, &p);
+    // The count is read before anything else can be waited for.
+    assert_eq!(
+        frame(&h, &PF32, &[255]),
+        Err(ProtoError::NeedMore(3 + 255 * 16))
+    );
+}

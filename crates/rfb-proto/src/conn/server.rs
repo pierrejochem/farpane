@@ -260,7 +260,10 @@ impl ServerConn {
                     ctx: "rectangle payload does not match its encoding",
                 });
             }
-            if enc == pseudo::DESKTOP_SIZE {
+            // ExtendedDesktopSize: y is the status; only 0 carries a size.
+            if enc == pseudo::DESKTOP_SIZE
+                || (enc == pseudo::EXT_DESKTOP_SIZE && r.header.rect.y == 0)
+            {
                 let (w, h) = (r.header.rect.width, r.header.rect.height);
                 if w > limits::MAX_FB_DIMENSION || h > limits::MAX_FB_DIMENSION {
                     return Err(ProtoError::LimitExceeded {

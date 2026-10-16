@@ -67,6 +67,9 @@ pub struct ClientConn {
     width: u16,
     height: u16,
     pf: PixelFormat,
+    /// An `ExtendedDesktopSize` rectangle has arrived, so the server supports
+    /// `SetDesktopSize`.
+    ext_desktop_seen: bool,
 }
 
 impl ClientConn {
@@ -78,6 +81,7 @@ impl ClientConn {
             width: 0,
             height: 0,
             pf: PixelFormat::RGB888,
+            ext_desktop_seen: false,
         }
     }
 
@@ -97,6 +101,12 @@ impl ClientConn {
     #[must_use]
     pub fn pixel_format(&self) -> &PixelFormat {
         &self.pf
+    }
+
+    /// Whether the server has shown it supports `SetDesktopSize`.
+    #[must_use]
+    pub fn supports_desktop_resize(&self) -> bool {
+        self.ext_desktop_seen
     }
 
     /// True once `ServerInit` was received.
@@ -168,6 +178,9 @@ impl ClientConn {
             return Err(ProtoError::Malformed {
                 ctx: "message sent before handshake finished",
             });
+        }
+        if matches!(msg, ClientMessage::SetDesktopSize { .. }) && !self.ext_desktop_seen {
+            return Err(ProtoError::ExtensionNotConfirmed("SetDesktopSize"));
         }
         msg.write(out)?;
         if let ClientMessage::SetPixelFormat(pf) = msg {
@@ -275,6 +288,22 @@ impl ClientConn {
                 });
             }
             (self.width, self.height) = (w, h);
+        }
+        if header.encoding == pseudo::EXT_DESKTOP_SIZE {
+            self.ext_desktop_seen = true;
+            // x is the reason, y the status: only status 0 carries a new size
+            // (after a refusal the size fields are undefined).
+            if header.rect.y == 0 {
+                let (w, h) = (header.rect.width, header.rect.height);
+                if w > limits::MAX_FB_DIMENSION || h > limits::MAX_FB_DIMENSION {
+                    return Err(ProtoError::LimitExceeded {
+                        field: "framebuffer dimension",
+                        value: u64::from(w.max(h)),
+                        limit: u64::from(limits::MAX_FB_DIMENSION),
+                    });
+                }
+                (self.width, self.height) = (w, h);
+            }
         }
         self.state = State::Update {
             remaining: remaining - 1,
