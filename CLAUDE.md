@@ -55,10 +55,10 @@ cargo fmt --all
 
 ## Where we are
 
-Milestone M1 (protocol skeleton) is nearly done: `consts`, `version`, `types`, `wire::Reader`, `msg::{client,server}` (core messages, golden + split-input tests) and `handshake` (client and server machines for 3.3/3.7/3.8, None and VNC Auth; VNC Auth is a caller-answered challenge, DES lives in `rfb-security`).
+Milestone M1 (protocol skeleton) is done: `consts`, `version`, `types`, `wire::Reader`, `msg::{client,server}` (core messages, golden + split-input tests) and `handshake` (client and server machines for 3.3/3.7/3.8, None and VNC Auth; VNC Auth is a caller-answered challenge; `rfb-security::vnc_auth` computes and verifies the DES response; proptest round-trips cover the messages).
 
 Next steps, in order:
-1. Finish M1: `wire::Writer` (optional), property tests, DES VNC Auth in `rfb-security`.
+1. M1 is done apart from optional `wire::Writer`.
 2. M2: framers for Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, TRLE; Cursor, DesktopSize, LastRect; `ClientConn`/`ServerConn` message loop; fuzz targets.
 3. Tokio adapter and a minimal viewer that connects to a TigerVNC or QEMU server.
 
