@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use rfb_codec::{
-    PixelPacker, ZrleEncoder,
+    Cursor, PixelPacker, ZrleEncoder,
     clipboard::{ExtClipboard, Role},
-    encode_raw,
+    encode_cursor, encode_raw,
 };
 use rfb_proto::{
     conn::EncodedRect,
@@ -46,6 +46,10 @@ struct State {
     layout_told: bool,
     /// A reply to a `SetDesktopSize`, sent with the next update.
     layout_reply: Option<(u16, u16)>,
+    /// The client asked for the `Cursor` pseudo-encoding.
+    wants_cursor: bool,
+    /// A cursor shape not yet sent.
+    cursor: Option<Arc<Cursor>>,
     announced_clipboard: bool,
     announced_fence: bool,
 }
@@ -110,13 +114,16 @@ where
         clipboard: ExtClipboard::new(Role::Server),
         layout_told: false,
         layout_reply: None,
+        wants_cursor: false,
+        cursor: None,
         announced_clipboard: false,
         announced_fence: false,
     };
     st.dirty.add(whole(size));
     loop {
         if let Some(request) = st.request {
-            let ready = st.dirty.touches(request) || st.layout_reply.is_some();
+            let ready =
+                st.dirty.touches(request) || st.layout_reply.is_some() || st.cursor.is_some();
             if ready && send_update(&mut session, &shared, &mut st, request).await? {
                 st.request = None;
             }
@@ -132,6 +139,11 @@ where
                 Ok(u) => {
                     for r in &u.rects {
                         st.dirty.add(*r);
+                    }
+                    if st.wants_cursor {
+                        if let Some(c) = &u.cursor {
+                            st.cursor = Some(Arc::clone(c));
+                        }
                     }
                 }
                 Err(RecvError::Lagged(_)) => {
@@ -165,6 +177,20 @@ where
             st.dirty.add(whole((fb.width(), fb.height())));
         }
         ClientMessage::SetEncodings(list) => {
+            let wants = list.contains(&pseudo::CURSOR);
+            if wants && !st.wants_cursor {
+                // Tell a client that just asked for it what the pointer looks like.
+                st.cursor.clone_from(
+                    &shared
+                        .cursor
+                        .read()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner),
+                );
+            }
+            st.wants_cursor = wants;
+            if !wants {
+                st.cursor = None;
+            }
             if list.contains(&pseudo::EXT_CLIPBOARD) && !st.announced_clipboard {
                 st.announced_clipboard = true;
                 let (flags, payload) = st.clipboard.announce();
@@ -308,6 +334,22 @@ where
             headers.push(header);
             payloads.push(payload);
             st.layout_told = true;
+        }
+        if let Some(cursor) = st.cursor.take() {
+            if st.wants_cursor {
+                let payload = encode_cursor(&cursor, &packer)
+                    .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                headers.push(RectHeader {
+                    rect: Rect {
+                        x: cursor.hotspot.0,
+                        y: cursor.hotspot.1,
+                        width: cursor.width,
+                        height: cursor.height,
+                    },
+                    encoding: pseudo::CURSOR,
+                });
+                payloads.push(payload);
+            }
         }
         st.dirty.clip(size.0, size.1);
         for rect in st.dirty.take_within(area) {

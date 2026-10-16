@@ -6,7 +6,7 @@
 use flate2::{Compress, Compression, FlushCompress};
 use rfb_proto::types::Rect;
 
-use crate::{DecodeError, Framebuffer, PixelPacker, framebuffer::BYTES_PER_PIXEL};
+use crate::{Cursor, DecodeError, Framebuffer, PixelPacker, framebuffer::BYTES_PER_PIXEL};
 
 /// Raw: the pixels row by row in the wire format.
 ///
@@ -26,6 +26,33 @@ pub fn encode_raw(
             packer.pack([px[0], px[1], px[2], px[3]], &mut out);
         }
     }
+    Ok(out)
+}
+
+/// The payload of a `Cursor` pseudo-rectangle: the pixels in the wire
+/// format, then a 1 bit per pixel mask (rows padded to whole bytes, most
+/// significant bit first) in which a set bit means "opaque". Pixels with an
+/// alpha of 128 or more count as opaque.
+///
+/// # Errors
+/// [`DecodeError::Malformed`] if `cursor.rgba` is not `width * height` pixels.
+pub fn encode_cursor(cursor: &Cursor, packer: &PixelPacker) -> Result<Vec<u8>, DecodeError> {
+    let (w, h) = (usize::from(cursor.width), usize::from(cursor.height));
+    if cursor.rgba.len() != w * h * 4 {
+        return Err(DecodeError::Malformed("cursor pixel data size"));
+    }
+    let mask_row = w.div_ceil(8);
+    let mut out = Vec::with_capacity(w * h * packer.bytes_per_pixel() + mask_row * h);
+    for px in cursor.rgba.chunks_exact(4) {
+        packer.pack([px[2], px[1], px[0], 0xFF], &mut out);
+    }
+    let mut mask = vec![0u8; mask_row * h];
+    for (i, px) in cursor.rgba.chunks_exact(4).enumerate() {
+        if px[3] >= 128 {
+            mask[(i / w) * mask_row + (i % w) / 8] |= 0x80 >> (i % w % 8);
+        }
+    }
+    out.extend_from_slice(&mask);
     Ok(out)
 }
 

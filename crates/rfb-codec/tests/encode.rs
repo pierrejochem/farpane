@@ -325,3 +325,89 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn cursor_round_trips_through_the_decoder_in_every_format() {
+    use rfb_codec::{Cursor, Damage, encode_cursor};
+    // 11 pixels wide so the mask rows need padding; a mix of opaque and clear.
+    let (w, h) = (11u16, 5u16);
+    let mut rgba = Vec::new();
+    for i in 0..usize::from(w) * usize::from(h) {
+        let opaque = i % 3 != 0;
+        rgba.extend_from_slice(&[
+            (i * 20) as u8,
+            (i * 7) as u8,
+            200,
+            if opaque { 255 } else { 0 },
+        ]);
+    }
+    let cursor = Cursor {
+        hotspot: (3, 2),
+        width: w,
+        height: h,
+        rgba,
+    };
+    for (name, pf) in formats() {
+        let packer = PixelPacker::new(&pf).unwrap();
+        let conv = PixelConverter::new(&pf).unwrap();
+        let payload = encode_cursor(&cursor, &packer).unwrap();
+        let rect = Rect {
+            x: 3,
+            y: 2,
+            width: w,
+            height: h,
+        };
+        assert_eq!(
+            frame(
+                &header(rect, rfb_proto::consts::pseudo::CURSOR),
+                &pf,
+                &payload
+            ),
+            Ok(payload.len()),
+            "{name}"
+        );
+        let mut fb = Framebuffer::new(16, 16).unwrap();
+        let Damage::Cursor(got) = Decoder::new(&pf)
+            .unwrap()
+            .decode(
+                &mut fb,
+                &header(rect, rfb_proto::consts::pseudo::CURSOR),
+                &payload,
+            )
+            .unwrap()
+        else {
+            panic!("not a cursor");
+        };
+        assert_eq!(
+            (got.hotspot, got.width, got.height),
+            ((3, 2), w, h),
+            "{name}"
+        );
+        for (i, (want, have)) in cursor
+            .rgba
+            .chunks_exact(4)
+            .zip(got.rgba.chunks_exact(4))
+            .enumerate()
+        {
+            assert_eq!(have[3], want[3], "{name}: opacity of pixel {i}");
+            let mut wire = Vec::new();
+            packer.pack([want[2], want[1], want[0], 0xFF], &mut wire);
+            let [b, g, r, _] = conv.pixel(&wire);
+            assert_eq!(&have[..3], &[r, g, b], "{name}: colour of pixel {i}");
+        }
+    }
+    // A hidden cursor has no payload at all.
+    let none = Cursor {
+        hotspot: (0, 0),
+        width: 0,
+        height: 0,
+        rgba: Vec::new(),
+    };
+    let packer = PixelPacker::new(&PixelFormat::RGB888).unwrap();
+    assert_eq!(encode_cursor(&none, &packer).unwrap(), Vec::<u8>::new());
+    let bad = Cursor {
+        rgba: vec![0; 3],
+        ..cursor
+    };
+    assert!(encode_cursor(&bad, &packer).is_err());
+}

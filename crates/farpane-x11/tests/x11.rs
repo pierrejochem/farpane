@@ -200,6 +200,19 @@ fn capture_sees_a_window_and_reports_its_changes() {
         "the first capture is the whole screen"
     );
     assert_eq!((first.damage[0].width, first.damage[0].height), (w, h));
+    let cursor = first
+        .cursor
+        .as_ref()
+        .expect("the first capture reports the cursor");
+    assert!(cursor.width > 0 && cursor.height > 0);
+    assert_eq!(
+        cursor.rgba.len(),
+        usize::from(cursor.width) * usize::from(cursor.height) * 4
+    );
+    assert!(
+        cursor.rgba.chunks_exact(4).any(|p| p[3] > 0),
+        "some opaque pixels"
+    );
 
     let win = Window::new(&d, (120, 80));
     let root = source.root();
