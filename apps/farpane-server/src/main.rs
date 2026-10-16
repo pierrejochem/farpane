@@ -13,7 +13,7 @@ use std::{
 };
 
 use farpane_server::{
-    backend::{EventLog, Level, LiveBackend},
+    backend::{self, EventLog, Level, LiveBackend, LiveInfo},
     config::{self, TlsChoice},
     dashboard::{Dashboard, Page},
     settings::{ServerSettings, TlsMode},
@@ -97,14 +97,18 @@ struct Args {
     tls_key: Option<PathBuf>,
 }
 
-type Words = std::iter::Peekable<std::iter::Skip<std::env::Args>>;
+type Words = std::iter::Peekable<Box<dyn Iterator<Item = String>>>;
 
 fn value(it: &mut Words, name: &str) -> Result<String, String> {
     it.next().ok_or(format!("{name} needs a value"))
 }
 
-#[allow(clippy::too_many_lines)] // one arm per option
 fn parse() -> Result<Args, String> {
+    parse_from(std::env::args().skip(1))
+}
+
+#[allow(clippy::too_many_lines)] // one arm per option
+fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, String> {
     let mut args = Args {
         listen: "127.0.0.1:5900"
             .parse()
@@ -136,7 +140,7 @@ fn parse() -> Result<Args, String> {
         tls_cert: None,
         tls_key: None,
     };
-    let mut it = std::env::args().skip(1).peekable();
+    let mut it: Words = (Box::new(words) as Box<dyn Iterator<Item = String>>).peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--headless" => args.headless = true,
@@ -227,12 +231,19 @@ fn parse() -> Result<Args, String> {
 
 /// Add what the dashboard saved in `server.toml`; options given on the command
 /// line win.
-fn with_saved_settings(mut args: Args) -> Result<Args, String> {
+fn with_saved_settings(args: Args) -> Result<Args, String> {
     let config_dir = args
         .config_dir
         .clone()
         .unwrap_or_else(config::default_config_dir);
     let saved = ServerSettings::load(&config_dir.join("server.toml")).map_err(|e| e.to_string())?;
+    merge_settings(args, &saved)
+}
+
+/// The command line with the saved settings under it: what the command line
+/// gives wins, the saved settings fill in the rest.
+fn merge_settings(mut args: Args, saved: &ServerSettings) -> Result<Args, String> {
+    let saved = saved.clone();
     if !args.listen_given {
         if let Some(listen) = saved.listen {
             args.listen = listen
@@ -409,15 +420,64 @@ fn note(events: &EventLog, level: Level, text: &str) {
     events.push(level, text);
 }
 
+/// What the dashboard shows about the setup.
+fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveInfo {
+    let mut fingerprints = Vec::new();
+    if let Some(fp) = &access.ra2_fingerprint {
+        fingerprints.push(("RSA-AES key".to_owned(), format_fingerprint(fp)));
+    }
+    if let Some(id) = &access.identity {
+        fingerprints.push((
+            "Certificate".to_owned(),
+            format_fingerprint(&id.fingerprint),
+        ));
+    }
+    let offered = vec![
+        (
+            "VeNCrypt over TLS".to_owned(),
+            "Certificate you pin in the viewer".to_owned(),
+            access.identity.is_some(),
+        ),
+        (
+            "RSA-AES".to_owned(),
+            "Encrypted, needs user accounts".to_owned(),
+            access.ra2_fingerprint.is_some(),
+        ),
+        (
+            "User accounts".to_owned(),
+            "Name and password, Argon2id".to_owned(),
+            access.authenticator.is_some(),
+        ),
+        (
+            "Shared password (VNC Auth)".to_owned(),
+            "Legacy, 8 characters".to_owned(),
+            access.authenticator.is_none() && args.password.is_some(),
+        ),
+        (
+            "Operator approval".to_owned(),
+            "Each new client waits for you".to_owned(),
+            args.require_approval,
+        ),
+        (
+            "No authentication".to_owned(),
+            "Anyone who can connect gets in".to_owned(),
+            !authenticated,
+        ),
+    ];
+    LiveInfo {
+        listen: args.listen.to_string(),
+        access: access.description.clone(),
+        fingerprints,
+        offered,
+    }
+}
+
 /// Everything that is running once start-up is done.
 struct Running {
     server: Arc<Server>,
     listener: TcpListener,
-    listen: String,
     source: String,
-    access: String,
-    fingerprints: Vec<(String, String)>,
-    offered: Vec<(String, String, bool)>,
+    info: LiveInfo,
     events: EventLog,
     config_dir: PathBuf,
 }
@@ -528,78 +588,43 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             access.description
         ),
     );
-    let mut fingerprints = Vec::new();
-    if let Some(fp) = &access.ra2_fingerprint {
-        let text = format_fingerprint(fp);
-        note(&events, Level::Info, &format!("RSA-AES key SHA-256 {text}"));
-        fingerprints.push(("RSA-AES key".to_owned(), text));
+    let info = live_info(args, &access, authenticated);
+    for (label, text) in &info.fingerprints {
+        let what = if label == "Certificate" {
+            "certificate"
+        } else {
+            "RSA-AES key"
+        };
+        note(&events, Level::Info, &format!("{what} SHA-256 {text}"));
     }
-    if let Some(id) = &access.identity {
-        let text = format_fingerprint(&id.fingerprint);
-        note(&events, Level::Info, &format!("certificate SHA-256 {text}"));
-        fingerprints.push(("Certificate".to_owned(), text));
-    }
-    let offered = vec![
-        (
-            "VeNCrypt over TLS".to_owned(),
-            "Certificate you pin in the viewer".to_owned(),
-            access.identity.is_some(),
-        ),
-        (
-            "RSA-AES".to_owned(),
-            "Encrypted, needs user accounts".to_owned(),
-            access.ra2_fingerprint.is_some(),
-        ),
-        (
-            "User accounts".to_owned(),
-            "Name and password, Argon2id".to_owned(),
-            access.authenticator.is_some(),
-        ),
-        (
-            "Shared password (VNC Auth)".to_owned(),
-            "Legacy, 8 characters".to_owned(),
-            access.authenticator.is_none() && args.password.is_some(),
-        ),
-        (
-            "Operator approval".to_owned(),
-            "Each new client waits for you".to_owned(),
-            args.require_approval,
-        ),
-        (
-            "No authentication".to_owned(),
-            "Anyone who can connect gets in".to_owned(),
-            !authenticated,
-        ),
-    ];
     Ok(Running {
         server: Arc::new(server),
         listener,
-        listen: args.listen.to_string(),
         source: what,
-        access: access.description.clone(),
-        fingerprints,
-        offered,
+        info,
         events,
         config_dir,
     })
 }
 
+#[allow(clippy::too_many_lines)] // start-up, headless and window paths
 fn main() -> ExitCode {
     let mut raw = std::env::args().skip(1);
     if raw.next().as_deref() == Some("user") {
         return user_command();
     }
-    let args = match parse().and_then(with_saved_settings) {
-        Ok(a) => a,
-        Err(e) => {
-            if e.is_empty() {
-                println!("{USAGE}");
-                return ExitCode::SUCCESS;
+    let (cli, args) =
+        match parse().and_then(|cli| with_saved_settings(cli.clone()).map(|a| (cli, a))) {
+            Ok(pair) => pair,
+            Err(e) => {
+                if e.is_empty() {
+                    println!("{USAGE}");
+                    return ExitCode::SUCCESS;
+                }
+                eprintln!("farpane-server: {e}\n\n{USAGE}");
+                return ExitCode::from(2);
             }
-            eprintln!("farpane-server: {e}\n\n{USAGE}");
-            return ExitCode::from(2);
-        }
-    };
+        };
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -632,22 +657,39 @@ fn main() -> ExitCode {
     let Running {
         server,
         listener,
-        listen,
         source,
-        access,
-        fingerprints,
+        info,
         events,
         config_dir,
-        offered,
     } = running;
-    rt.spawn(Arc::clone(&server).listen(listener));
+    let listen_task = Arc::new(std::sync::Mutex::new((
+        args.listen,
+        rt.spawn(Arc::clone(&server).listen(listener)),
+    )));
+    let applier: backend::Applier = {
+        let (server, events, config_dir, handle) = (
+            Arc::clone(&server),
+            events.clone(),
+            config_dir.clone(),
+            rt.handle().clone(),
+        );
+        Arc::new(move |saved: &ServerSettings| {
+            apply_live(
+                &cli,
+                saved,
+                &server,
+                &events,
+                &config_dir,
+                &handle,
+                &listen_task,
+            )
+        })
+    };
     let backend = Arc::new(LiveBackend {
         server,
-        listen,
         source,
-        access,
-        fingerprints,
-        offered,
+        info: std::sync::Mutex::new(info),
+        applier: Some(applier),
     });
     let mut dashboard = Dashboard::new(backend, events, config_dir.join("users.toml"), config_dir);
     dashboard.set_screenshot(args.ui_screenshot.clone(), args.page, args.ui_delay);
@@ -679,6 +721,65 @@ fn main() -> ExitCode {
     }
 }
 
+/// Put saved settings to work in the running server: how clients sign in,
+/// view-only, approval, and where it listens. Nothing changes if any step
+/// fails; connections already made are left alone.
+fn apply_live(
+    cli: &Args,
+    saved: &ServerSettings,
+    server: &Arc<Server>,
+    events: &EventLog,
+    config_dir: &std::path::Path,
+    handle: &tokio::runtime::Handle,
+    listen_task: &std::sync::Mutex<(SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>)>,
+) -> Result<LiveInfo, String> {
+    let args = merge_settings(cli.clone(), saved)?;
+    let tls = tls_choice(&args)?;
+    let sink = events.clone();
+    let access = config::choose(
+        config_dir,
+        args.password.clone(),
+        &tls,
+        args.ra2,
+        move |l| {
+            note(&sink, Level::Warning, &l);
+        },
+    )
+    .map_err(|e| e.clone())?;
+    let authenticated = access.authenticator.is_some() || args.password.is_some();
+    if !authenticated && !args.listen.ip().is_loopback() && !args.allow_no_auth {
+        return Err(format!(
+            "listening on {} needs credentials: add a user first.",
+            args.listen
+        ));
+    }
+    // Bind the new address before letting go of the old one.
+    let mut current = listen_task
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if current.0 != args.listen {
+        let listener = handle
+            .block_on(TcpListener::bind(args.listen))
+            .map_err(|e| format!("cannot listen on {}: {e}.", args.listen))?;
+        current.1.abort();
+        current.1 = handle.spawn(Arc::clone(server).listen(listener));
+        current.0 = args.listen;
+        note(
+            events,
+            Level::Info,
+            &format!("now listening on {}", args.listen),
+        );
+    }
+    let policy = access.authenticator.clone().map(|auth| {
+        let policy: rfb_server::Policy = Arc::new(move |user| auth.permission(user));
+        policy
+    });
+    server.replace_options(access.template.clone(), policy);
+    server.set_view_only_for_all(args.view_only);
+    server.set_require_approval(args.require_approval);
+    Ok(live_info(&args, &access, authenticated))
+}
+
 fn user_command() -> ExitCode {
     let mut words: Vec<String> = std::env::args().skip(2).collect();
     let mut take = |flag: &str| -> Option<String> {
@@ -701,5 +802,145 @@ fn user_command() -> ExitCode {
             eprintln!("farpane-server: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use farpane_server::settings::TlsMode;
+
+    fn args(words: &[&str]) -> Args {
+        let words: Vec<String> = words.iter().map(|w| (*w).to_owned()).collect();
+        parse_from(words.into_iter()).unwrap()
+    }
+
+    #[test]
+    fn saved_settings_fill_in_what_the_command_line_leaves_open() {
+        let saved = ServerSettings {
+            listen: Some("127.0.0.1:5999".into()),
+            tls: TlsMode::SelfSigned,
+            ra2: true,
+            view_only: true,
+            require_approval: true,
+            ..ServerSettings::default()
+        };
+        let merged = merge_settings(args(&[]), &saved).unwrap();
+        assert_eq!(merged.listen, "127.0.0.1:5999".parse().unwrap());
+        assert!(merged.self_signed && merged.ra2 && merged.view_only && merged.require_approval);
+        // An address on the command line wins; settings never turn off a flag it sets.
+        let cli = args(&["--listen", "127.0.0.1:5901", "--ra2"]);
+        let merged = merge_settings(cli, &ServerSettings::default()).unwrap();
+        assert_eq!(merged.listen, "127.0.0.1:5901".parse().unwrap());
+        assert!(merged.ra2);
+        assert!(!merged.self_signed && !merged.view_only);
+    }
+
+    #[test]
+    fn applying_settings_live_changes_the_running_server_and_moves_the_listener() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let events = EventLog::new();
+        let server = Arc::new(
+            Server::new(
+                rfb_server::TestPattern::new(64, 64),
+                rfb_server::NoInput,
+                rfb_tokio::ServerOptions::new(rfb_tokio::ServerAuth::None, 64, 64, b"live"),
+                Settings::default(),
+            )
+            .unwrap(),
+        );
+        let first = rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
+        let first_addr = first.local_addr().unwrap();
+        let task = std::sync::Mutex::new((first_addr, rt.spawn(Arc::clone(&server).listen(first))));
+        let mut cli = args(&["--config-dir", dir.path().to_str().unwrap()]);
+        cli.listen = first_addr;
+        cli.listen_given = true;
+        let apply = |saved: &ServerSettings| {
+            apply_live(
+                &cli,
+                saved,
+                &server,
+                &events,
+                dir.path(),
+                rt.handle(),
+                &task,
+            )
+        };
+        // View-only and approval take effect at once.
+        let info = apply(&ServerSettings {
+            view_only: true,
+            require_approval: true,
+            ..ServerSettings::default()
+        })
+        .unwrap();
+        assert!(
+            info.offered
+                .iter()
+                .any(|o| o.0 == "Operator approval" && o.2)
+        );
+        // Self-signed TLS makes a certificate and shows its fingerprint.
+        let info = apply(&ServerSettings {
+            tls: TlsMode::SelfSigned,
+            ..ServerSettings::default()
+        })
+        .unwrap();
+        assert!(
+            info.fingerprints.iter().any(|f| f.0 == "Certificate"),
+            "{info:?}"
+        );
+        // Moving to another address: the new port answers, the old one is closed.
+        let spare = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let spare_addr = spare.local_addr().unwrap();
+        drop(spare);
+        let moved_cli = Args {
+            listen_given: false,
+            ..cli.clone()
+        };
+        apply_live(
+            &moved_cli,
+            &ServerSettings {
+                listen: Some(spare_addr.to_string()),
+                ..ServerSettings::default()
+            },
+            &server,
+            &events,
+            dir.path(),
+            rt.handle(),
+            &task,
+        )
+        .unwrap();
+        assert_eq!(task.lock().unwrap().0, spare_addr);
+        rt.block_on(async {
+            use tokio::io::AsyncReadExt;
+            let mut banner = [0u8; 4];
+            let mut client = tokio::net::TcpStream::connect(spare_addr).await.unwrap();
+            client.read_exact(&mut banner).await.unwrap();
+            assert_eq!(&banner, b"RFB ");
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(
+                tokio::net::TcpStream::connect(first_addr).await.is_err(),
+                "the old address is released"
+            );
+        });
+        // Reachable from other machines without users is refused, and nothing changes.
+        let open_cli = Args {
+            listen_given: false,
+            ..cli.clone()
+        };
+        let refused = apply_live(
+            &open_cli,
+            &ServerSettings {
+                listen: Some("0.0.0.0:0".into()),
+                ..ServerSettings::default()
+            },
+            &server,
+            &events,
+            dir.path(),
+            rt.handle(),
+            &task,
+        );
+        assert!(refused.unwrap_err().contains("credentials"));
+        assert_eq!(task.lock().unwrap().0, spare_addr, "nothing changed");
     }
 }

@@ -81,9 +81,9 @@ impl Default for Settings {
 /// stops capturing; running connections end.
 pub struct Server {
     shared: Arc<Shared>,
-    template: ServerOptions,
-    view_only: bool,
-    policy: Option<Policy>,
+    template: RwLock<ServerOptions>,
+    view_only: AtomicBool,
+    policy: RwLock<Option<Policy>>,
     events: Option<Sink>,
     throttle: Mutex<Throttle>,
     /// Connections being served or still in their handshake.
@@ -91,7 +91,7 @@ pub struct Server {
     max_connections: usize,
     max_per_address: usize,
     /// Hold every signed-in client until the operator allows it.
-    require_approval: bool,
+    require_approval: AtomicBool,
     approval_timeout: Duration,
     waiting: Mutex<Vec<Waiting>>,
     next_waiting: AtomicU64,
@@ -175,7 +175,7 @@ impl Drop for Slot<'_> {
 impl std::fmt::Debug for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Server")
-            .field("view_only", &self.view_only)
+            .field("view_only", &self.view_only.load(Ordering::Relaxed))
             .field("clients", &self.client_count())
             .finish_non_exhaustive()
     }
@@ -183,7 +183,8 @@ impl std::fmt::Debug for Server {
 
 type Sink = Arc<dyn Fn(&Event) + Send + Sync>;
 
-type Policy = Arc<dyn Fn(Option<&str>) -> Permission + Send + Sync>;
+/// What a signed-in user may do, by account name.
+pub type Policy = Arc<dyn Fn(Option<&str>) -> Permission + Send + Sync>;
 
 /// What a signed-in user may do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,15 +263,15 @@ impl Server {
             .spawn(move || capture_loop(source, &weak, interval))?;
         Ok(Self {
             shared,
-            template,
-            view_only: settings.view_only,
-            policy: None,
+            template: RwLock::new(template),
+            view_only: AtomicBool::new(settings.view_only),
+            policy: RwLock::new(None),
             events: None,
             throttle: Mutex::new(Throttle::new()),
             connections: AtomicUsize::new(0),
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_per_address: DEFAULT_MAX_PER_ADDRESS,
-            require_approval: false,
+            require_approval: AtomicBool::new(false),
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             waiting: Mutex::new(Vec::new()),
             next_waiting: AtomicU64::new(1),
@@ -279,11 +280,42 @@ impl Server {
 
     /// Decide per user what a signed-in client may do. Without a policy every
     /// client gets [`Permission::Full`] (unless the server is view-only).
-    pub fn set_policy(
-        &mut self,
-        policy: impl Fn(Option<&str>) -> Permission + Send + Sync + 'static,
-    ) {
-        self.policy = Some(Arc::new(policy));
+    pub fn set_policy(&self, policy: impl Fn(Option<&str>) -> Permission + Send + Sync + 'static) {
+        *self
+            .policy
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(policy));
+    }
+
+    /// Replace how clients sign in (and what each may do) while running. New
+    /// connections use the new options; those already connected are left
+    /// alone. `policy` `None` means every client gets full rights.
+    pub fn replace_options(&self, template: ServerOptions, policy: Option<Policy>) {
+        *self
+            .template
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = template;
+        *self
+            .policy
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
+    }
+
+    /// Ignore keyboard, pointer and clipboard input from every client that
+    /// connects from now on (and, with `true`, from those connected already).
+    pub fn set_view_only_for_all(&self, on: bool) {
+        self.view_only.store(on, Ordering::Relaxed);
+        if on {
+            for client in self
+                .shared
+                .registry
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+            {
+                client.view_only.store(true, Ordering::Relaxed);
+            }
+        }
     }
 
     /// The most connections served at once, handshakes included: further ones
@@ -303,8 +335,8 @@ impl Server {
     /// [`Server::pending`] and [`Server::decide`]). The client sees an open
     /// connection but gets no pictures meanwhile; with no answer in the
     /// timeout it is turned away.
-    pub fn set_require_approval(&mut self, on: bool) {
-        self.require_approval = on;
+    pub fn set_require_approval(&self, on: bool) {
+        self.require_approval.store(on, Ordering::Relaxed);
     }
 
     /// How long a client waits for approval.
@@ -529,7 +561,11 @@ impl Server {
             }
         }
         let (w, h) = self.size();
-        let mut opts = self.template.clone();
+        let mut opts = self
+            .template
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         opts.width = w;
         opts.height = h;
         let session = match ServerSession::accept(stream, opts).await {
@@ -563,10 +599,12 @@ impl Server {
         let user = session
             .username()
             .map(|u| String::from_utf8_lossy(u).into_owned());
-        let permission = if self.view_only {
+        let permission = if self.view_only.load(Ordering::Relaxed) {
             Permission::ViewOnly
         } else {
             self.policy
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
                 .map_or(Permission::Full, |f| f(user.as_deref()))
         };
@@ -578,7 +616,7 @@ impl Server {
             "none"
         };
         let mut permission = permission;
-        if self.require_approval {
+        if self.require_approval.load(Ordering::Relaxed) {
             match self.await_approval(peer, user.clone(), encryption).await {
                 Ok(Decision::Allow) => {}
                 Ok(Decision::ViewOnly) => permission = Permission::ViewOnly,

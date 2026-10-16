@@ -156,30 +156,78 @@ pub trait Backend: Send + Sync {
     fn decide(&self, _id: u64, _decision: rfb_server::Decision) -> bool {
         false
     }
+    /// Put saved settings to work in the running server. `Err` says why that
+    /// could not be done; they then apply at the next start.
+    ///
+    /// # Errors
+    /// A message for the user.
+    fn apply_settings(
+        &self,
+        _settings: &crate::settings::ServerSettings,
+    ) -> Result<Applied, String> {
+        Ok(Applied::Restart)
+    }
 }
 
+/// What [`Backend::apply_settings`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Applied {
+    /// The running server now follows the settings.
+    Live,
+    /// This backend cannot change them while running.
+    Restart,
+}
+
+/// What the dashboard shows about how the server is set up, and what
+/// changes when settings are applied live.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LiveInfo {
+    /// Where it listens, such as `127.0.0.1:5900`.
+    pub listen: String,
+    /// How clients sign in and how the traffic is protected.
+    pub access: String,
+    /// Fingerprints a viewer asks its user to confirm, with a label each.
+    pub fingerprints: Vec<(String, String)>,
+    /// The ways to sign in: name, a note, and whether it is offered.
+    pub offered: Vec<(String, String, bool)>,
+}
+
+/// Puts settings to work in a running server and returns the new [`LiveInfo`].
+pub type Applier =
+    Arc<dyn Fn(&crate::settings::ServerSettings) -> Result<LiveInfo, String> + Send + Sync>;
+
 /// The real thing: a running [`Server`].
-#[derive(Debug)]
 pub struct LiveBackend {
     pub server: Arc<Server>,
-    pub listen: String,
     pub source: String,
-    pub access: String,
-    pub fingerprints: Vec<(String, String)>,
-    pub offered: Vec<(String, String, bool)>,
+    pub info: std::sync::Mutex<LiveInfo>,
+    pub applier: Option<Applier>,
+}
+
+impl std::fmt::Debug for LiveBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LiveBackend")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Backend for LiveBackend {
     fn status(&self) -> Status {
+        let info = self
+            .info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         Status {
-            listen: self.listen.clone(),
+            listen: info.listen,
             source: self.source.clone(),
-            access: self.access.clone(),
-            fingerprints: self.fingerprints.clone(),
+            access: info.access,
+            fingerprints: info.fingerprints,
             failure: self.server.capture_failure(),
             screen: self.server.size(),
             paused: self.server.is_paused(),
-            offered: self.offered.clone(),
+            offered: info.offered,
         }
     }
 
@@ -201,6 +249,21 @@ impl Backend for LiveBackend {
 
     fn set_paused(&self, paused: bool) {
         self.server.set_paused(paused);
+    }
+
+    fn apply_settings(
+        &self,
+        settings: &crate::settings::ServerSettings,
+    ) -> Result<Applied, String> {
+        let Some(apply) = &self.applier else {
+            return Ok(Applied::Restart);
+        };
+        let info = apply(settings)?;
+        *self
+            .info
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = info;
+        Ok(Applied::Live)
     }
 
     fn pending(&self) -> Vec<rfb_server::PendingRequest> {

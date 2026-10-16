@@ -1649,7 +1649,7 @@ async fn connections_beyond_the_limit_are_dropped_at_once_and_slots_come_back() 
 
 /// A server that holds clients for approval.
 fn approving(input: Recording) -> Server {
-    let mut server = Server::new(
+    let server = Server::new(
         TestPattern::new(64, 64),
         input,
         options(),
@@ -1744,4 +1744,43 @@ async fn an_unanswered_client_is_turned_away_after_the_timeout() {
         !server.decide(1, rfb_server::Decision::Allow),
         "nobody left to answer"
     );
+}
+
+#[tokio::test]
+async fn view_only_for_everyone_and_approval_can_be_switched_while_running() {
+    let input = Recording::default();
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(64, 64),
+            input.clone(),
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    v.update().await;
+    v.key(0x61).await;
+    v.quiet(Duration::from_millis(200)).await;
+    assert_eq!(input.seen(), ["key 61 true"]);
+    server.set_view_only_for_all(true);
+    assert!(
+        server.clients()[0].view_only,
+        "already connected clients too"
+    );
+    // The key held down above is let go.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(input.seen(), ["key 61 true", "key 61 false"]);
+    input.0.0.lock().unwrap().clear();
+    v.key(0x62).await;
+    v.quiet(Duration::from_millis(200)).await;
+    assert_eq!(input.seen().len(), 0, "{:?}", input.seen());
+    // New clients start view only as well, and approval applies to the next one.
+    server.set_require_approval(true);
+    let (_waiting, _t) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.pending().len(), 1);
+    server.set_require_approval(false);
+    server.set_view_only_for_all(false);
 }

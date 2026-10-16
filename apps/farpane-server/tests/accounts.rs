@@ -64,7 +64,7 @@ fn setup(tls: bool) -> Setup {
         Err(e) => panic!("{e}"),
     };
     let input = Recording::default();
-    let mut server = Server::new(
+    let server = Server::new(
         TestPattern::new(64, 64),
         input.clone(),
         access.template.clone(),
@@ -229,7 +229,7 @@ async fn users_can_sign_in_over_rsa_aes_without_tls_and_roles_still_apply() {
     assert_eq!(again.ra2_fingerprint, Some(fingerprint));
 
     let input = Recording::default();
-    let mut server = Server::new(
+    let server = Server::new(
         TestPattern::new(64, 64),
         input.clone(),
         access.template.clone(),

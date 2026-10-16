@@ -29,6 +29,7 @@ struct Fake {
     calls: Mutex<Calls>,
     failure: Mutex<Option<String>>,
     pending: Mutex<Vec<rfb_server::PendingRequest>>,
+    apply: Mutex<Option<Result<farpane_server::backend::Applied, String>>>,
 }
 
 impl Backend for Fake {
@@ -63,6 +64,17 @@ impl Backend for Fake {
         self.calls.lock().unwrap().decided.push((id, decision));
         self.pending.lock().unwrap().retain(|p| p.id != id);
         true
+    }
+
+    fn apply_settings(
+        &self,
+        _settings: &farpane_server::settings::ServerSettings,
+    ) -> Result<farpane_server::backend::Applied, String> {
+        self.apply
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(Ok(farpane_server::backend::Applied::Restart))
     }
 
     fn set_paused(&self, paused: bool) {
@@ -124,6 +136,7 @@ fn rig(clients: Vec<ClientInfo>) -> (Rig, Harness<'static, Dashboard>) {
         calls: Mutex::default(),
         failure: Mutex::new(None),
         pending: Mutex::new(Vec::new()),
+        apply: Mutex::new(None),
     });
     let log = EventLog::new();
     let dashboard = Dashboard::new(
@@ -571,4 +584,28 @@ fn a_waiting_client_gets_an_approval_card_and_the_answer_goes_to_the_server() {
             .any(|l| l.contains("anna") && l.contains("view only")),
         "{lines:?}"
     );
+}
+
+#[test]
+fn saving_security_settings_says_whether_they_were_applied_live() {
+    use farpane_server::backend::Applied;
+    let (rig, mut h) = rig(vec![]);
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    *rig.fake.apply.lock().unwrap() = Some(Ok(Applied::Live));
+    h.get_by_label("Offer RSA-AES (needs users)").click();
+    h.get_by_label("Save settings").click();
+    settle(&mut h);
+    h.get_by_label("Saved and applied.");
+    *rig.fake.apply.lock().unwrap() =
+        Some(Err("listening on 0.0.0.0:5900 needs credentials.".into()));
+    h.get_by_label("Save settings").click();
+    settle(&mut h);
+    h.get_by_label_contains("Saved, but not applied: listening on 0.0.0.0:5900 needs credentials.");
+    let lines: Vec<String> = rig.log.lines().into_iter().map(|l| l.text).collect();
+    assert!(
+        lines.iter().any(|l| l.contains("saved and applied")),
+        "{lines:?}"
+    );
+    assert!(lines.iter().any(|l| l.contains("not applied")), "{lines:?}");
 }

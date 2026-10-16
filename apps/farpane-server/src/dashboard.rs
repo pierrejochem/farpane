@@ -490,7 +490,7 @@ impl Dashboard {
         }
     }
 
-    /// Save the Security page's settings (they apply at the next start).
+    /// Save the Security page's settings and apply them to the running server.
     pub fn save_security(&mut self) {
         let listen = self.security.listen_text.trim().to_owned();
         if !listen.is_empty() && listen.parse::<std::net::SocketAddr>().is_err() {
@@ -504,12 +504,32 @@ impl Dashboard {
         s.listen = (!listen.is_empty()).then_some(listen);
         self.security.message = Some(match s.save(&self.settings_path()) {
             Ok(()) => {
-                self.log.push(
-                    Level::Info,
-                    "security settings saved (they apply at the next start)",
-                );
-                self.security.edit = s;
-                (true, "Saved. Restart the server to apply.".to_owned())
+                self.security.edit = s.clone();
+                match self.backend.apply_settings(&s) {
+                    Ok(crate::backend::Applied::Live) => {
+                        self.log
+                            .push(Level::Info, "security settings saved and applied");
+                        self.status = self.backend.status();
+                        (true, "Saved and applied.".to_owned())
+                    }
+                    Ok(crate::backend::Applied::Restart) => {
+                        self.log.push(
+                            Level::Info,
+                            "security settings saved (they apply at the next start)",
+                        );
+                        (true, "Saved. Restart the server to apply.".to_owned())
+                    }
+                    Err(why) => {
+                        self.log.push(
+                            Level::Warning,
+                            format!("security settings saved but not applied: {why}"),
+                        );
+                        (
+                            false,
+                            format!("Saved, but not applied: {why} It applies at the next start."),
+                        )
+                    }
+                }
             }
             Err(e) => (false, e.to_string()),
         });
@@ -1244,8 +1264,8 @@ impl Dashboard {
         });
     }
 
-    /// The ways to sign in, as read-only switches; they change on the
-    /// Security page and take effect at the next start.
+    /// The ways to sign in, as read-only badges; they change on the Security
+    /// page.
     fn security_card(&self, ui: &mut Ui, tokens: &Tokens, change: &std::cell::Cell<bool>) {
         Self::card(ui, tokens, |ui| {
             ui.label(heading(ui, "Security"));
@@ -1604,7 +1624,12 @@ impl Dashboard {
             }
         });
         Self::card(ui, tokens, |ui| {
-            ui.label(heading(ui, "Settings (applied at the next start)"));
+            ui.label(heading(ui, "Settings"));
+            ui.label(
+                RichText::new("Saved settings are applied to the running server at once; a command-line option still wins.")
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
             let mut tls = self.security.edit.tls == TlsMode::SelfSigned;
             if ui
                 .checkbox(&mut tls, "Encrypt with a self-signed certificate (TLS)")

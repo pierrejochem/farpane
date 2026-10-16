@@ -45,7 +45,7 @@ With `--require-approval` (or **Ask before a client gets in** on the Security pa
 
 ![The Users page listing three accounts with roles and an Add a user form](screenshots/server-users.png){: width="1100" height="760" loading="lazy"}
 
-- **Security**: listen address, TLS, RSA-AES and view-only, saved to `server.toml`; also forgets the TLS certificate or RSA key. Changes apply at the next start.
+- **Security**: listen address, TLS, RSA-AES and view-only, saved to `server.toml` and applied to the running server at once (a command-line option still wins; clients already connected keep their connection); also forgets the TLS certificate or RSA key, which a new one replaces at the next start.
 
 ![The Security page in the Light theme with settings and key management](screenshots/server-security.png){: width="1100" height="760" loading="lazy"}
 

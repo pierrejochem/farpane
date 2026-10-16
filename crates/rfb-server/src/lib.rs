@@ -18,7 +18,7 @@ pub use registry::{ClientInfo, Preview};
 pub use scroll::{Copy, find_copy, find_copy_sideways};
 pub use server::{
     DEFAULT_APPROVAL_TIMEOUT, DEFAULT_MAX_CONNECTIONS, Decision, Event, PendingRequest, Permission,
-    Server, Settings,
+    Policy, Server, Settings,
 };
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
 pub use throttle::Throttle;
