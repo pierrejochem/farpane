@@ -532,3 +532,217 @@ async fn oversized_clipboard_text_is_not_sent_and_the_session_survives() {
         }
     }
 }
+
+/// Run a frame at egui time `time` (seconds) with the pointer at `pointer`.
+fn frame_at(
+    ctx: &Context,
+    app: &mut ViewerApp,
+    time: f64,
+    pointer: Option<Pos2>,
+    events: Vec<Event>,
+) -> egui::FullOutput {
+    let mut events = events;
+    if let Some(p) = pointer {
+        events.push(Event::PointerMoved(p));
+    } else {
+        events.push(Event::PointerGone);
+    }
+    let input = RawInput {
+        screen_rect: Some(UiRect::from_min_size(Pos2::ZERO, SCREEN)),
+        time: Some(time),
+        events,
+        focused: true,
+        ..RawInput::default()
+    };
+    ctx.run(input, |ctx| app.ui(ctx))
+}
+
+fn fullscreen_commands(output: &egui::FullOutput) -> Vec<bool> {
+    output.viewport_output[&egui::ViewportId::ROOT]
+        .commands
+        .iter()
+        .filter_map(|c| match c {
+            egui::ViewportCommand::Fullscreen(on) => Some(*on),
+            _ => None,
+        })
+        .collect()
+}
+
+fn f11(pressed: bool) -> Event {
+    key(Key::F11, pressed, Modifiers::NONE)
+}
+
+#[tokio::test]
+async fn f11_toggles_full_screen_and_is_not_sent_to_the_remote() {
+    let (ctx, mut app, mut server) = connected().await;
+    assert!(!app.is_fullscreen());
+    let out = frame_at(&ctx, &mut app, 10.0, None, vec![f11(true), f11(false)]);
+    assert_eq!(fullscreen_commands(&out), [true]);
+    assert!(app.is_fullscreen());
+    let out = frame_at(&ctx, &mut app, 11.0, None, vec![f11(true), f11(false)]);
+    assert_eq!(fullscreen_commands(&out), [false]);
+    assert!(!app.is_fullscreen());
+    // F11 never reached the server: the next input it sees is the 'a'.
+    frame(&ctx, &mut app, vec![Event::Text("a".into())]);
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0x61
+        }
+    );
+}
+
+#[tokio::test]
+async fn the_toolbar_opens_at_the_top_edge_and_closes_after_two_seconds() {
+    let (ctx, mut app, _server) = connected().await;
+    frame_at(&ctx, &mut app, 100.0, None, vec![f11(true)]);
+    assert!(app.is_fullscreen());
+    assert!(!app.toolbar_open(), "closed when full screen starts");
+
+    // The pointer in the middle of the screen does nothing.
+    frame_at(&ctx, &mut app, 100.5, Some(Pos2::new(500.0, 300.0)), vec![]);
+    assert!(!app.toolbar_open());
+    // The top edge opens it.
+    frame_at(&ctx, &mut app, 101.0, Some(Pos2::new(500.0, 1.0)), vec![]);
+    assert!(app.toolbar_open());
+    // Staying open for the next two seconds, even with the pointer elsewhere...
+    frame_at(&ctx, &mut app, 102.5, Some(Pos2::new(500.0, 400.0)), vec![]);
+    assert!(app.toolbar_open());
+    // ...and gone after that.
+    frame_at(&ctx, &mut app, 103.5, Some(Pos2::new(500.0, 400.0)), vec![]);
+    assert!(!app.toolbar_open());
+}
+
+#[tokio::test]
+async fn a_pinned_toolbar_stays_open() {
+    let (ctx, mut app, _server) = connected().await;
+    frame_at(&ctx, &mut app, 200.0, None, vec![f11(true)]);
+    frame_at(&ctx, &mut app, 200.5, Some(Pos2::new(500.0, 1.0)), vec![]);
+    assert!(app.toolbar_open());
+    app.set_toolbar_pinned(true);
+    frame_at(&ctx, &mut app, 260.0, Some(Pos2::new(500.0, 400.0)), vec![]);
+    assert!(app.toolbar_open(), "pinned: no auto-hide");
+    app.set_toolbar_pinned(false);
+    frame_at(&ctx, &mut app, 261.0, Some(Pos2::new(500.0, 400.0)), vec![]);
+    frame_at(&ctx, &mut app, 264.0, Some(Pos2::new(500.0, 400.0)), vec![]);
+    assert!(!app.toolbar_open(), "unpinned: hides again");
+}
+
+#[tokio::test]
+async fn the_toolbar_does_not_exist_outside_full_screen() {
+    let (ctx, mut app, _server) = connected().await;
+    // At the top edge in a normal window: nothing opens.
+    frame_at(&ctx, &mut app, 300.0, Some(Pos2::new(500.0, 1.0)), vec![]);
+    assert!(!app.toolbar_open());
+}
+
+#[tokio::test]
+async fn ctrl_alt_del_is_sent_as_one_sequence() {
+    let (_ctx, app, mut server) = connected().await;
+    app.send_ctrl_alt_del();
+    for (keysym, down) in [
+        (0xFFE3, true),
+        (0xFFE9, true),
+        (0xFFFF, true),
+        (0xFFFF, false),
+        (0xFFE9, false),
+        (0xFFE3, false),
+    ] {
+        assert_eq!(
+            next_input(&mut server).await,
+            ClientMessage::KeyEvent { down, keysym }
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_lost_connection_leaves_full_screen() {
+    let (ctx, mut app, server) = connected().await;
+    frame_at(&ctx, &mut app, 400.0, None, vec![f11(true)]);
+    assert!(app.is_fullscreen());
+    drop(server);
+    let mut left = false;
+    for i in 0..600 {
+        let out = frame_at(&ctx, &mut app, 401.0 + f64::from(i) * 0.01, None, vec![]);
+        if fullscreen_commands(&out).contains(&false) {
+            left = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        left,
+        "the window should leave full screen when the server goes away"
+    );
+    assert!(!app.is_fullscreen());
+    assert!(!app.is_connected());
+}
+
+#[tokio::test]
+async fn clicks_on_the_toolbar_do_not_reach_the_remote_machine() {
+    let (ctx, mut app, mut server) = connected().await;
+    frame_at(&ctx, &mut app, 500.0, None, vec![f11(true)]);
+    app.set_toolbar_pinned(true);
+    // Open the pill and let it finish sliding.
+    for i in 0..10 {
+        frame_at(
+            &ctx,
+            &mut app,
+            500.5 + f64::from(i) * 0.1,
+            Some(Pos2::new(500.0, 1.0)),
+            vec![],
+        );
+    }
+    assert!(app.toolbar_open());
+    // The pill is centred near the top; click on its left part (the title).
+    let on_pill = Pos2::new(SCREEN.x / 2.0 - 150.0, 26.0);
+    let click = |pressed| Event::PointerButton {
+        pos: on_pill,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    frame_at(&ctx, &mut app, 502.0, Some(on_pill), vec![click(true)]);
+    frame_at(&ctx, &mut app, 502.1, Some(on_pill), vec![click(false)]);
+    // Now click on the picture itself: that one must arrive.
+    let on_picture = Pos2::new(SCREEN.x / 2.0, SCREEN.y / 2.0);
+    let pic_click = |pressed| Event::PointerButton {
+        pos: on_picture,
+        button: PointerButton::Primary,
+        pressed,
+        modifiers: Modifiers::NONE,
+    };
+    frame_at(
+        &ctx,
+        &mut app,
+        503.0,
+        Some(on_picture),
+        vec![pic_click(true)],
+    );
+    frame_at(
+        &ctx,
+        &mut app,
+        503.1,
+        Some(on_picture),
+        vec![pic_click(false)],
+    );
+    // The first button event the server sees is the one on the picture.
+    loop {
+        match next_input(&mut server).await {
+            ClientMessage::PointerEvent { buttons: 1, x, y } => {
+                assert!(
+                    (350..=450).contains(&x) && (150..=250).contains(&y),
+                    "({x}, {y})"
+                );
+                break;
+            }
+            // Plain moves (the opening hover at the top edge, the approach to
+            // the picture) are fine, and so is the effect of the toolbar
+            // button the click on the pill hit (Ctrl+Alt+Del); only pointer
+            // clicks must not leak.
+            ClientMessage::PointerEvent { buttons: 0, .. } | ClientMessage::KeyEvent { .. } => {}
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
