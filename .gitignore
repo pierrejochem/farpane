@@ -8,3 +8,4 @@
 /crates/rfb-proto/fuzz/target
 /crates/rfb-proto/fuzz/corpus
 /crates/rfb-proto/fuzz/artifacts
+/_site

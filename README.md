@@ -10,6 +10,8 @@ A VNC-compatible remote desktop viewer and server, written in Rust.
 
 > Status: early development, not released. Viewer and server work against each other and against real servers (QEMU and a kiosk VNC server); see `CLAUDE.md` for what is verified and what is not.
 
+Documentation: the [handbook](https://pierrejochem.github.io/farpane/handbook/) (source in `docs/handbook/`, built by `site/build.py` and published to GitHub Pages).
+
 ## Build
 
 Requires Rust 1.85 or newer.
@@ -33,6 +35,8 @@ cargo test --workspace
 | `crates/farpane-ui` | Shared dashboard UI and themes |
 | `apps/` | `farpane-viewer` and `farpane-server` binaries |
 | `packaging/` | Installers and packages for Windows, macOS and Linux |
+| `docs/handbook/` | The handbook (Markdown), published as the project site |
+| `site/` | Landing page generator, styles and social preview for the site |
 | `docs/design/` | Design reference and UI mockups |
 | `docs/brand/` | Icon and brand assets |
 | `tools/interop/` | Independent RSA-AES implementation in Python, used to cross-check the Rust one |
@@ -43,6 +47,6 @@ Pushing a tag `vX.Y.Z` builds packages for Windows (MSI, zip), macOS (DMG) and L
 
 ## Licence
 
-To be decided (planned: MIT OR Apache-2.0).
+Dual-licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT licence](LICENSE-MIT), at your option. The embedded fonts (Inter, IBM Plex Sans) are under the SIL Open Font License; their licences are in `crates/farpane-ui/assets/fonts/`.
 
 "VNC" is a trademark of RealVNC Ltd. Farpane is an independent project and not affiliated with RealVNC.

@@ -8,13 +8,13 @@ version_schema: semver
 release: "1"
 section: net
 priority: optional
-maintainer: "Farpane maintainers <maintainers@example.org>"   # TODO: set before first release
+maintainer: "Pierre Jochem <pierrejochem@msn.com>"
 description: |
   Remote desktop viewer for the VNC/RFB protocol, written in Rust,
   with a dashboard UI for connections and live session statistics.
 vendor: Farpane
-homepage: https://github.com/OWNER/REPO                       # TODO
-license: MIT OR Apache-2.0                                    # TODO: match Cargo.toml
+homepage: https://pierrejochem.github.io/farpane/
+license: MIT OR Apache-2.0
 
 contents:
   - src: target/release/farpane-viewer
