@@ -81,6 +81,7 @@ pub fn sparkline(
 }
 
 #[cfg(test)]
+#[allow(clippy::float_cmp)] // the expected values are exact by construction
 mod tests {
     use super::*;
 
