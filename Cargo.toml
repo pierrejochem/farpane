@@ -6,6 +6,7 @@ members = [
     "crates/rfb-security",
     "crates/rfb-tokio",
     "crates/farpane-ui",
+    "crates/farpane-grab",
     "apps/farpane-viewer",
     "apps/farpane-server",
 ]
@@ -25,6 +26,7 @@ rfb-codec = { path = "crates/rfb-codec" }
 rfb-security = { path = "crates/rfb-security" }
 rfb-tokio = { path = "crates/rfb-tokio" }
 farpane-ui = { path = "crates/farpane-ui" }
+farpane-grab = { path = "crates/farpane-grab" }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
