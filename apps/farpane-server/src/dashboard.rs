@@ -15,7 +15,10 @@ use egui::{
     Align, Color32, ColorImage, Context, Frame, Layout, Margin, RichText, ScrollArea,
     TextureHandle, TextureOptions, Ui, vec2,
 };
-use farpane_ui::{Accent, ThemePreference, Tokens, style, widgets};
+use farpane_ui::{
+    Accent, ThemePreference, Tokens, style,
+    widgets::{self, badge, brand_mark, inset, nav_item, selected},
+};
 use rfb_proto::consts::enc;
 use rfb_server::ClientInfo;
 
@@ -1346,36 +1349,6 @@ fn eyebrow(text: &str, tokens: &Tokens) -> RichText {
         .size(10.5)
 }
 
-/// Fill of an inset control (segmented control, bars).
-fn inset(tokens: &Tokens) -> Color32 {
-    if tokens.dark {
-        Color32::from_white_alpha(13)
-    } else {
-        Color32::from_black_alpha(10)
-    }
-}
-
-/// Fill of the chosen segment or the current page.
-fn selected(tokens: &Tokens) -> Color32 {
-    if tokens.dark {
-        Color32::from_white_alpha(34)
-    } else {
-        Color32::WHITE
-    }
-}
-
-/// A small pill with `text` in the colour `tone`.
-fn badge(ui: &mut Ui, text: &str, tone: Color32) {
-    Frame::NONE
-        .fill(tone.gamma_multiply(0.13))
-        .stroke(egui::Stroke::new(1.0_f32, tone.gamma_multiply(0.38)))
-        .corner_radius(style::radius(99.0))
-        .inner_margin(Margin::symmetric(9, 2))
-        .show(ui, |ui| {
-            ui.label(RichText::new(text).color(tone).size(11.5).strong());
-        });
-}
-
 /// A rounded square with a dot in `tone`.
 fn chip(ui: &mut Ui, tokens: &Tokens, tone: Color32, size: f32) {
     let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
@@ -1438,79 +1411,6 @@ fn avatar(ui: &mut Ui, tokens: &Tokens, c: &ClientInfo) {
         egui::FontId::proportional(11.5),
         Color32::from(tokens.bg),
     );
-}
-
-/// The brand tile: receding panes on the accent colour.
-fn brand_mark(ui: &mut Ui, tokens: &Tokens, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
-    let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        style::radius(size * 0.29),
-        Color32::from(tokens.accent),
-    );
-    for (inset, alpha) in [(0.2_f32, 255_u8), (0.32, 170), (0.44, 100)] {
-        painter.rect_stroke(
-            rect.shrink(size * inset),
-            style::radius(size * 0.06),
-            egui::Stroke::new(1.8_f32, Color32::from_white_alpha(alpha)),
-            egui::StrokeKind::Inside,
-        );
-    }
-}
-
-/// A row of the side bar. Returns whether it was clicked.
-fn nav_item(ui: &mut Ui, tokens: &Tokens, active: bool, title: &str, count: Option<usize>) -> bool {
-    let (rect, response) =
-        ui.allocate_exact_size(vec2(ui.available_width(), 38.0), egui::Sense::click());
-    let label = count.map_or_else(|| title.to_owned(), |n| format!("{title} ({n})"));
-    response
-        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
-    let painter = ui.painter();
-    if active || response.hovered() {
-        painter.rect(
-            rect,
-            style::radius(12.0),
-            if active {
-                selected(tokens)
-            } else {
-                inset(tokens)
-            },
-            egui::Stroke::new(
-                1.0_f32,
-                if active {
-                    Color32::from(tokens.line)
-                } else {
-                    Color32::TRANSPARENT
-                },
-            ),
-            egui::StrokeKind::Inside,
-        );
-    }
-    if active {
-        let mark = egui::Rect::from_min_size(rect.left_center() + vec2(0.0, -8.0), vec2(3.0, 16.0));
-        painter.rect_filled(mark, style::radius(2.0), Color32::from(tokens.accent));
-    }
-    let colour = if active { tokens.text } else { tokens.muted };
-    painter.text(
-        rect.left_center() + vec2(16.0, 0.0),
-        egui::Align2::LEFT_CENTER,
-        title,
-        egui::FontId::proportional(14.0),
-        Color32::from(colour),
-    );
-    if let Some(n) = count {
-        painter.text(
-            rect.right_center() - vec2(14.0, 0.0),
-            egui::Align2::RIGHT_CENTER,
-            n.to_string(),
-            egui::FontId::proportional(12.0),
-            Color32::from(tokens.muted),
-        );
-    }
-    response
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
-        .clicked()
 }
 
 /// `1.5 MB/s` as `("1.5", "MB/s")`.
