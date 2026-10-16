@@ -24,6 +24,9 @@ jobs:
       - name: Toolchain
         run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
+      - name: X server for the X11 backend tests
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Format
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check

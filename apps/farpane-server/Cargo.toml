@@ -18,6 +18,7 @@ rfb-codec.workspace = true
 rfb-security.workspace = true
 rfb-tokio.workspace = true
 rfb-server.workspace = true
+farpane-x11.workspace = true
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal"] }
 farpane-ui.workspace = true
 

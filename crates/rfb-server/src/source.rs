@@ -133,3 +133,27 @@ impl Source for TestPattern {
         })
     }
 }
+
+impl Source for Box<dyn Source> {
+    fn size(&self) -> (u16, u16) {
+        (**self).size()
+    }
+
+    fn capture(&mut self, fb: &mut Framebuffer) -> io::Result<Capture> {
+        (**self).capture(fb)
+    }
+}
+
+impl Input for Box<dyn Input> {
+    fn key(&self, keysym: u32, down: bool) {
+        (**self).key(keysym, down);
+    }
+
+    fn pointer(&self, x: u16, y: u16, buttons: u8) {
+        (**self).pointer(x, y, buttons);
+    }
+
+    fn clipboard(&self, text: &str) {
+        (**self).clipboard(text);
+    }
+}
