@@ -146,7 +146,7 @@ async fn typing_reaches_the_server_once_connected() {
 #[tokio::test]
 async fn mouse_maps_into_the_remote_screen_and_the_wheel_scrolls() {
     let (ctx, mut app, mut server) = connected().await;
-    let centre = Pos2::new(SCREEN.x / 2.0, SCREEN.y / 2.0 + 15.0);
+    let centre = Pos2::new(SCREEN.x / 2.0, SCREEN.y / 2.0 + 26.0);
     frame(
         &ctx,
         &mut app,

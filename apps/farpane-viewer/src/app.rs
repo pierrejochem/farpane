@@ -11,7 +11,7 @@ use egui::{
     RichText, Sense, TextEdit, TextureHandle, TextureOptions, UserData, ViewportCommand, vec2,
 };
 use farpane_grab::GrabState;
-use farpane_ui::{Accent, ThemePreference, Tokens, style};
+use farpane_ui::{Accent, ThemePreference, Tokens, style, widgets};
 use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
 use rfb_security::tls::{CertProblem, Fingerprint, format_fingerprint};
@@ -54,9 +54,6 @@ const RESIZE_SETTLE: f64 = 0.4;
 
 /// Smallest remote size we ask for.
 const MIN_REMOTE_SIZE: u16 = 64;
-
-/// Width of an address book card, in points.
-const CARD_WIDTH: f32 = 220.0;
 
 /// Cursors wider or taller than this are not drawn (the server still thinks
 /// we show them, so we hide ours rather than the local one).
@@ -935,15 +932,35 @@ impl ViewerApp {
         }
     }
 
+    #[allow(clippy::too_many_lines)] // one bar, easier to read whole
     fn top_bar(&mut self, ctx: &Context, tokens: &Tokens) {
         egui::TopBottomPanel::top("top-bar")
-            .frame(
+            .show_separator_line(false)
+            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
+                left: 14,
+                right: 14,
+                top: 12,
+                bottom: 2,
+            }))
+            .show(ctx, |ui| {
                 Frame::NONE
                     .fill(tokens.card.into())
-                    .inner_margin(Margin::symmetric(14, 8)),
-            )
-            .show(ctx, |ui| {
+                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                    .corner_radius(style::radius(tokens.radius * 0.7))
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        self.top_bar_contents(ctx, ui, tokens);
+                    });
+            });
+    }
+
+    #[allow(clippy::too_many_lines)] // one bar, easier to read whole
+    fn top_bar_contents(&mut self, ctx: &Context, ui: &mut egui::Ui, tokens: &Tokens) {
+        {
+            {
                 ui.horizontal(|ui| {
+                    widgets::brand_mark(ui, tokens, 26.0);
                     ui.label(RichText::new("Farpane").strong().size(16.0));
                     ui.add_space(8.0);
                     let (text, colour) = match &self.phase {
@@ -955,6 +972,25 @@ impl ViewerApp {
                     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, colour);
                     ui.label(RichText::new(text).color(colour));
+                    // The controls fill the bar in a narrow window.
+                    let roomy = ctx.screen_rect().width() > 1280.0;
+                    if let (true, Phase::Connected { name }, Some(since)) =
+                        (roomy, &self.phase, self.connected_at)
+                    {
+                        ui.label(RichText::new(name).strong());
+                        let secs = since.elapsed().as_secs();
+                        widgets::badge(
+                            ui,
+                            &format!(
+                                "Live · {}:{:02}:{:02}",
+                                secs / 3600,
+                                secs / 60 % 60,
+                                secs % 60
+                            ),
+                            tokens.green.into(),
+                        );
+                        ctx.request_repaint_after(Duration::from_secs(1));
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
                             .selected_text(appearance::theme_label(self.theme))
@@ -1023,7 +1059,8 @@ impl ViewerApp {
                         }
                     });
                 });
-            });
+            }
+        }
     }
 
     /// The slim tab and the pill of controls, drawn over the picture.
@@ -1240,88 +1277,133 @@ impl ViewerApp {
             });
     }
 
-    fn home(&mut self, ctx: &Context, tokens: &Tokens) {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space((ui.available_height() * 0.22).max(24.0));
-                Frame::NONE
-                    .fill(tokens.card.into())
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
-                    .corner_radius(style::radius(tokens.radius))
-                    .inner_margin(Margin::same(28))
-                    .show(ui, |ui| {
-                        ui.set_width(380.0);
-                        ui.label(
-                            RichText::new("Connect to a remote desktop")
-                                .size(22.0)
-                                .strong(),
-                        );
-                        ui.add_space(4.0);
-                        ui.label(RichText::new("Any VNC-compatible server").color(tokens.muted));
-                        ui.add_space(18.0);
-                        let connecting = matches!(self.phase, Phase::Connecting);
-                        ui.label(RichText::new("Address").color(tokens.muted));
-                        let addr = ui.add_enabled(
-                            !connecting,
-                            TextEdit::singleline(&mut self.addr)
-                                .hint_text("host:5900")
-                                .desired_width(f32::INFINITY),
-                        );
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("Username (only if the server asks)").color(tokens.muted),
-                        );
-                        ui.add_enabled(
-                            !connecting,
-                            TextEdit::singleline(&mut self.username).desired_width(f32::INFINITY),
-                        );
-                        ui.add_space(8.0);
-                        ui.label(
-                            RichText::new("Password (if the server asks)").color(tokens.muted),
-                        );
-                        let password = ui.add_enabled(
-                            !connecting,
-                            TextEdit::singleline(&mut self.password)
-                                .password(true)
-                                .desired_width(f32::INFINITY),
-                        );
-                        ui.add_space(16.0);
-                        let submit = (addr.lost_focus() || password.lost_focus())
-                            && ui.input(|i| i.key_pressed(Key::Enter));
-                        ui.horizontal(|ui| {
-                            let label = if connecting {
-                                "Connecting…"
-                            } else {
-                                "Connect"
-                            };
-                            let button = egui::Button::new(
-                                RichText::new(label).color(Color32::WHITE).strong(),
-                            )
-                            .fill(Color32::from(tokens.accent))
-                            .min_size(vec2(120.0, 32.0));
-                            let can = !connecting && !self.addr.trim().is_empty();
-                            let clicked = ui.add_enabled(can, button).clicked();
-                            if can && (clicked || submit) {
-                                self.connect();
-                            }
-                            if connecting && ui.button("Cancel").clicked() {
-                                self.core.send(Command::Disconnect);
-                            }
-                        });
-                        if let Some(error) = &self.error {
-                            ui.add_space(12.0);
-                            ui.label(RichText::new(error).color(tokens.red));
-                        }
-                    });
-                if !self.store.settings.connections.is_empty() {
-                    ui.add_space(24.0);
-                    self.address_book(ui, tokens);
-                }
-            });
-        });
+    fn card_frame(tokens: &Tokens, x: i8, y: i8) -> Frame {
+        Frame::NONE
+            .fill(tokens.card.into())
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+            .corner_radius(style::radius(tokens.radius))
+            .inner_margin(Margin::symmetric(x, y))
     }
 
-    /// The saved connections as cards: click one to connect, × to forget it.
+    #[allow(clippy::too_many_lines)] // side bar and the form, easier to read whole
+    fn home(&mut self, ctx: &Context, tokens: &Tokens) {
+        egui::SidePanel::left("home-nav")
+            .exact_width(264.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
+                left: 14,
+                right: 0,
+                top: 12,
+                bottom: 14,
+            }))
+            .show(ctx, |ui| {
+                Self::card_frame(tokens, 14, 22).show(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
+                    ui.horizontal(|ui| {
+                        widgets::brand_mark(ui, tokens, 38.0);
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.label(RichText::new("Farpane Viewer").strong().size(15.0));
+                            ui.label(RichText::new("Remote desktop").color(tokens.muted).small());
+                        });
+                    });
+                    ui.add_space(14.0);
+                    ui.spacing_mut().item_spacing.y = 4.0;
+                    let saved = self.store.settings.connections.len();
+                    widgets::nav_item(ui, tokens, true, "Connections", Some(saved));
+                    if widgets::nav_item(ui, tokens, false, "Appearance", None) {
+                        self.settings_open = true;
+                    }
+                });
+            });
+        egui::CentralPanel::default()
+            .frame(
+                Frame::NONE
+                    .fill(tokens.bg.into())
+                    .inner_margin(Margin::same(18)),
+            )
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 18.0;
+                        Self::card_frame(tokens, 24, 20).show(ui, |ui| {
+                            ui.set_min_width(ui.available_width());
+                            ui.scope(|ui| {
+                                ui.set_max_width(460.0);
+                                ui.label(RichText::new("Quick connect").size(18.0).strong());
+                                ui.add_space(4.0);
+                                ui.label(
+                                    RichText::new("Any VNC-compatible server").color(tokens.muted),
+                                );
+                                ui.add_space(18.0);
+                                let connecting = matches!(self.phase, Phase::Connecting);
+                                ui.label(RichText::new("Address").color(tokens.muted));
+                                let addr = ui.add_enabled(
+                                    !connecting,
+                                    TextEdit::singleline(&mut self.addr)
+                                        .hint_text("host:5900")
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("Username (only if the server asks)")
+                                        .color(tokens.muted),
+                                );
+                                ui.add_enabled(
+                                    !connecting,
+                                    TextEdit::singleline(&mut self.username)
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.add_space(8.0);
+                                ui.label(
+                                    RichText::new("Password (if the server asks)")
+                                        .color(tokens.muted),
+                                );
+                                let password = ui.add_enabled(
+                                    !connecting,
+                                    TextEdit::singleline(&mut self.password)
+                                        .password(true)
+                                        .desired_width(f32::INFINITY),
+                                );
+                                ui.add_space(16.0);
+                                let submit = (addr.lost_focus() || password.lost_focus())
+                                    && ui.input(|i| i.key_pressed(Key::Enter));
+                                ui.horizontal(|ui| {
+                                    let label = if connecting {
+                                        "Connecting…"
+                                    } else {
+                                        "Connect"
+                                    };
+                                    let button = egui::Button::new(
+                                        RichText::new(label).color(Color32::WHITE).strong(),
+                                    )
+                                    .fill(Color32::from(tokens.accent))
+                                    .min_size(vec2(120.0, 32.0));
+                                    let can = !connecting && !self.addr.trim().is_empty();
+                                    let clicked = ui.add_enabled(can, button).clicked();
+                                    if can && (clicked || submit) {
+                                        self.connect();
+                                    }
+                                    if connecting && ui.button("Cancel").clicked() {
+                                        self.core.send(Command::Disconnect);
+                                    }
+                                });
+                                if let Some(error) = &self.error {
+                                    ui.add_space(12.0);
+                                    ui.label(RichText::new(error).color(tokens.red));
+                                }
+                            });
+                        });
+                        if !self.store.settings.connections.is_empty() {
+                            self.address_book(ui, tokens);
+                        }
+                    });
+            });
+    }
+
+    /// The saved connections as rows: Connect to use one, × to forget it.
     fn address_book(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
         let now = unix_now();
         let connecting = matches!(self.phase, Phase::Connecting);
@@ -1330,69 +1412,76 @@ impl ViewerApp {
             .settings
             .recent()
             .into_iter()
-            .take(8)
+            .take(50)
             .cloned()
             .collect();
-        ui.label(RichText::new("Recent connections").color(tokens.muted));
-        ui.add_space(8.0);
         let mut connect = None;
         let mut forget = None;
-        // Explicit rows of equal cards: as many columns as fit, at most four,
-        // in a block centred under the connect card.
-        let gap = 12.0;
-        let card_outer = CARD_WIDTH + 2.0 * 14.0 + 2.0;
-        let fits = ((ui.available_width() - 24.0 + gap) / (card_outer + gap)).floor();
-        // Clamped to 1..=4 first, so the conversion is exact.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let columns = fits.clamp(1.0, 4.0) as usize;
-        #[allow(clippy::cast_precision_loss)] // at most four columns
-        let block = columns as f32 * card_outer + (columns - 1) as f32 * gap;
-        ui.allocate_ui(vec2(block, 0.0), |ui| {
-            ui.spacing_mut().item_spacing = vec2(gap, gap);
-            for row in entries.chunks(columns) {
+        Self::card_frame(tokens, 24, 18).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(RichText::new("Saved connections").strong().size(16.0));
+            ui.label(
+                RichText::new("Sorted by last use")
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
+            ui.add_space(8.0);
+            for entry in &entries {
+                ui.separator();
                 ui.horizontal(|ui| {
-                    for entry in row {
-                        Frame::NONE
-                            .fill(tokens.card.into())
-                            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
-                            .corner_radius(style::radius(tokens.radius / 1.5))
-                            .inner_margin(Margin::same(14))
-                            .show(ui, |ui| {
-                                ui.set_width(CARD_WIDTH);
-                                ui.set_min_height(92.0);
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(RichText::new(&entry.name).strong());
-                                        ui.with_layout(
-                                            Layout::right_to_left(Align::Center),
-                                            |ui| {
-                                                if ui
-                                                    .small_button("×")
-                                                    .on_hover_text("Forget this connection")
-                                                    .clicked()
-                                                {
-                                                    forget = Some(entry.addr.clone());
-                                                }
-                                            },
-                                        );
-                                    });
-                                    ui.label(RichText::new(&entry.addr).color(tokens.muted));
-                                    ui.label(
-                                        RichText::new(settings::ago(now, entry.last_connected))
-                                            .color(tokens.muted)
-                                            .size(11.0),
-                                    );
-                                    ui.add_space(6.0);
-                                    let button = egui::Button::new(
-                                        RichText::new("Connect").color(Color32::WHITE),
-                                    )
-                                    .fill(Color32::from(tokens.accent));
-                                    if ui.add_enabled(!connecting, button).clicked() {
-                                        connect = Some(entry.addr.clone());
-                                    }
-                                });
-                            });
-                    }
+                    let (rect, _) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::hover());
+                    ui.painter().rect_filled(
+                        rect,
+                        style::radius(9.0),
+                        Color32::from(tokens.accent).gamma_multiply(0.85),
+                    );
+                    let initial: String = entry
+                        .name
+                        .chars()
+                        .take(1)
+                        .flat_map(char::to_uppercase)
+                        .collect();
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        initial,
+                        egui::FontId::proportional(13.0),
+                        Color32::from(tokens.bg),
+                    );
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(&entry.name).strong());
+                        ui.label(RichText::new(&entry.addr).color(tokens.muted).size(12.0));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui
+                            .small_button("×")
+                            .on_hover_text("Forget this connection")
+                            .clicked()
+                        {
+                            forget = Some(entry.addr.clone());
+                        }
+                        let button =
+                            egui::Button::new(RichText::new("Connect").color(Color32::WHITE))
+                                .fill(Color32::from(tokens.accent));
+                        if ui.add_enabled(!connecting, button).clicked() {
+                            connect = Some(entry.addr.clone());
+                        }
+                        ui.label(
+                            RichText::new(settings::ago(now, entry.last_connected))
+                                .color(tokens.muted)
+                                .size(12.0),
+                        );
+                        if self
+                            .store
+                            .settings
+                            .known_hosts
+                            .iter()
+                            .any(|k| k.host == entry.addr)
+                        {
+                            widgets::badge(ui, "Verified", tokens.green.into());
+                        }
+                    });
                 });
             }
         });
