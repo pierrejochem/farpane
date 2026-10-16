@@ -207,7 +207,7 @@ impl Viewer {
         let mut rects = Vec::new();
         let mut inside = false;
         loop {
-            match timeout(Duration::from_secs(5), self.session.next_event())
+            match timeout(Duration::from_secs(10), self.session.next_event())
                 .await
                 .expect("the server answered")
                 .unwrap()
@@ -1164,4 +1164,280 @@ async fn the_preview_is_a_scaled_copy_of_the_screen() {
         (20, 10)
     );
     assert!(small.preview(0).width >= 1);
+}
+
+/// Answer every fence the server has asked for so far (taken from `other`).
+async fn answer_fences(v: &mut Viewer) {
+    v.quiet(Duration::from_millis(100)).await;
+    let asked: Vec<_> = v
+        .other
+        .drain(..)
+        .filter_map(|e| match e {
+            ClientConnEvent::Fence { flags, payload } if flags & fence::REQUEST != 0 => {
+                Some((flags & !fence::REQUEST, payload))
+            }
+            _ => None,
+        })
+        .collect();
+    for (flags, payload) in asked {
+        v.session
+            .send(&ClientMessage::Fence { flags, payload })
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_client_that_has_not_confirmed_earlier_updates_is_not_sent_more() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, pseudo::FENCE]).await;
+    v.request(false).await;
+    v.update().await; // the first update: one fence in flight
+    let change = |n: u8| {
+        let mut p = plan.0.lock().unwrap();
+        p.shade = n;
+        p.damage = vec![Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        }];
+    };
+    change(10);
+    v.request(true).await;
+    v.update().await; // the second: two in flight
+    change(20);
+    v.request(true).await;
+    assert!(
+        timeout(Duration::from_millis(400), v.update())
+            .await
+            .is_err(),
+        "two updates are unconfirmed, so the third waits"
+    );
+    // Confirm them: the waiting update arrives, carrying everything since.
+    answer_fences(&mut v).await;
+    let rects = v.update().await;
+    assert_eq!(rects.len(), 1);
+    v.matches(
+        Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        },
+        |_, _| [20, 20, 20, 0],
+    );
+    // The round trip was measured.
+    assert!(server.clients()[0].rtt.is_some(), "{:?}", server.clients());
+}
+
+#[tokio::test]
+async fn updates_are_not_paced_for_clients_without_fence() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    v.update().await;
+    for n in 1..=4u8 {
+        {
+            let mut p = plan.0.lock().unwrap();
+            p.shade = n * 10;
+            p.damage = vec![Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            }];
+        }
+        v.request(true).await;
+        v.update().await;
+    }
+    assert_eq!(server.clients()[0].rtt, None);
+}
+
+#[tokio::test]
+async fn a_client_that_never_answers_fences_is_not_stalled_for_ever() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, pseudo::FENCE]).await;
+    for n in 0..3u8 {
+        {
+            let mut p = plan.0.lock().unwrap();
+            p.shade = n;
+            p.damage = vec![Rect {
+                x: 0,
+                y: 0,
+                width: 4,
+                height: 4,
+            }];
+        }
+        v.request(n == 0).await;
+        // The third waits until the first fence is given up on (5 s).
+        timeout(Duration::from_secs(9), v.update())
+            .await
+            .expect("the server stopped sending");
+    }
+}
+
+/// A screen of 160 x 120 showing lines of text-like content that scrolls: the
+/// line shown at row `r` is `top + r`.
+#[derive(Debug, Clone, Default)]
+struct Scroll(Arc<Mutex<usize>>);
+
+struct Scroller {
+    state: Scroll,
+    painted: Option<usize>,
+}
+
+#[allow(clippy::cast_possible_truncation)] // a pattern: wrapping is the point
+fn line_pixel(line: usize, x: u16) -> [u8; 4] {
+    let v = line * 37 + usize::from(x) * 5;
+    [v as u8, (v >> 8) as u8 ^ 0x33, (v / 7) as u8, 0]
+}
+
+impl Source for Scroller {
+    fn size(&self) -> (u16, u16) {
+        (160, 120)
+    }
+
+    fn capture(&mut self, fb: &mut Framebuffer) -> io::Result<Capture> {
+        let top = *self.state.0.lock().unwrap();
+        if self.painted == Some(top) {
+            return Ok(Capture::default());
+        }
+        let mut data = Vec::new();
+        for r in 0..120usize {
+            for x in 0..160u16 {
+                data.extend_from_slice(&line_pixel(top + r, x));
+            }
+        }
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 120,
+        };
+        fb.write_bgrx(whole, &data).unwrap();
+        self.painted = Some(top);
+        Ok(Capture {
+            damage: vec![whole],
+            ..Capture::default()
+        })
+    }
+}
+
+fn scrolling_server() -> (Arc<Server>, Scroll) {
+    let state = Scroll::default();
+    let source = Scroller {
+        state: state.clone(),
+        painted: None,
+    };
+    let server = Server::new(
+        source,
+        NoInput,
+        options(),
+        Settings {
+            fps: 100,
+            view_only: false,
+        },
+    )
+    .unwrap();
+    (Arc::new(server), state)
+}
+
+fn shows_top(v: &Viewer, top: usize) {
+    v.matches(whole(160, 120), |x, y| line_pixel(top + usize::from(y), x));
+}
+
+#[tokio::test]
+async fn scrolling_is_sent_as_a_copy_to_clients_that_can_use_it() {
+    let (server, scroll) = scrolling_server();
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, enc::COPY_RECT]).await;
+    v.request(false).await;
+    v.update().await;
+    shows_top(&v, 0);
+    *scroll.0.lock().unwrap() = 20;
+    v.request(true).await;
+    let rects = v.update().await;
+    let copies: Vec<_> = rects.iter().filter(|r| r.1 == enc::COPY_RECT).collect();
+    assert_eq!(copies.len(), 1, "{rects:?}");
+    assert_eq!((copies[0].0.y, copies[0].0.height), (0, 100));
+    // Only the 20 new rows cost pixels.
+    let pixel_area: u32 = rects
+        .iter()
+        .filter(|r| r.1 != enc::COPY_RECT)
+        .map(|r| u32::from(r.0.width) * u32::from(r.0.height))
+        .sum();
+    assert_eq!(pixel_area, 160 * 20, "{rects:?}");
+    shows_top(&v, 20);
+}
+
+#[tokio::test]
+async fn clients_without_copy_rect_get_pixels_and_the_picture_is_right_either_way() {
+    let (server, scroll) = scrolling_server();
+    let (mut plain, _t1) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    plain.request(false).await;
+    plain.update().await;
+    *scroll.0.lock().unwrap() = 25;
+    plain.request(true).await;
+    let rects = plain.update().await;
+    assert!(rects.iter().all(|r| r.1 != enc::COPY_RECT), "{rects:?}");
+    shows_top(&plain, 25);
+}
+
+#[tokio::test]
+async fn several_scrolls_before_the_client_asks_still_give_the_right_picture() {
+    let (server, scroll) = scrolling_server();
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, enc::COPY_RECT]).await;
+    v.request(false).await;
+    v.update().await;
+    // Scroll three times while the client has no request outstanding. Some of
+    // these copies cannot be used (their source is still waiting for pixels),
+    // and the result has to be right anyway.
+    for top in [15, 40, 41, 90] {
+        *scroll.0.lock().unwrap() = top;
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+    v.request(true).await;
+    v.update().await;
+    // More may be pending; ask until the picture settles.
+    for _ in 0..3 {
+        v.request(true).await;
+        let _ = timeout(Duration::from_millis(300), v.update()).await;
+    }
+    shows_top(&v, 90);
 }

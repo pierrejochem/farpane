@@ -28,6 +28,11 @@ use crate::{
     server::Shared,
 };
 
+/// Updates that may be unconfirmed before the next one waits.
+const MAX_IN_FLIGHT: usize = 2;
+/// How long an unanswered fence counts before it is given up.
+const FENCE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// `ExtendedDesktopSize` reasons and results (rfbproto.rst).
 const REASON_SERVER: u16 = 0;
 const REASON_CLIENT: u16 = 1;
@@ -50,10 +55,18 @@ struct State {
     layout_reply: Option<(u16, u16)>,
     /// The client asked for the `Cursor` pseudo-encoding.
     wants_cursor: bool,
+    /// The client asked for `CopyRect`.
+    wants_copy: bool,
+    /// Scrolls to send as copies with the next update, in order.
+    copies: Vec<crate::scroll::Copy>,
     /// A cursor shape not yet sent.
     cursor: Option<Arc<Cursor>>,
     announced_clipboard: bool,
     announced_fence: bool,
+    /// Fence requests sent after updates and not yet answered: the number
+    /// carried in the payload and when it was sent. They pace the updates.
+    in_flight: std::collections::VecDeque<(u32, std::time::Instant)>,
+    next_fence: u32,
 }
 
 fn whole(size: (u16, u16)) -> Rect {
@@ -92,6 +105,7 @@ fn layout_rect(size: (u16, u16), reason: u16, status: u16) -> (RectHeader, Vec<u
     )
 }
 
+#[allow(clippy::too_many_lines)] // the client's event loop
 pub(crate) async fn run<S>(
     mut session: ServerSession<S>,
     shared: Arc<Shared>,
@@ -118,16 +132,38 @@ where
         layout_told: false,
         layout_reply: None,
         wants_cursor: false,
+        wants_copy: false,
+        copies: Vec::new(),
         cursor: None,
         announced_clipboard: false,
         announced_fence: false,
+        in_flight: std::collections::VecDeque::new(),
+        next_fence: 0,
     };
     st.dirty.add(whole(size));
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        // A client that never answers a fence must not stall for ever.
+        let now = std::time::Instant::now();
+        while st
+            .in_flight
+            .front()
+            .is_some_and(|&(_, at)| now.duration_since(at) > FENCE_PATIENCE)
+        {
+            st.in_flight.pop_front();
+        }
         if let Some(request) = st.request {
-            let ready =
-                st.dirty.touches(request) || st.layout_reply.is_some() || st.cursor.is_some();
-            if ready && send_update(&mut session, &shared, &mut st, request).await? {
+            let ready = st.dirty.touches(request)
+                || st.layout_reply.is_some()
+                || st.cursor.is_some()
+                || !st.copies.is_empty();
+            // With fences, send the next update only once the client has
+            // caught up with the earlier ones: a slow link then skips
+            // intermediate frames (the changes pile up in `dirty`) instead of
+            // queueing them.
+            let paced = st.in_flight.len() < MAX_IN_FLIGHT;
+            if ready && paced && send_update(&mut session, &shared, &mut st, request).await? {
                 st.request = None;
             }
         }
@@ -139,6 +175,7 @@ where
             .store(session.bytes_sent(), Ordering::Relaxed);
         tokio::select! {
             () = handle.kick.notified() => return Err(Error::Closed),
+            _ = tick.tick() => {}
             message = session.next_message() => {
                 handle_message(&mut session, &shared, &mut st, message?).await?;
             }
@@ -150,8 +187,29 @@ where
                     if let Some(text) = &u.clipboard {
                         send_clipboard(&mut session, &mut st, text).await?;
                     }
+                    // Copies are only right if the client's own picture has the
+                    // old content at the source: it must not be waiting for
+                    // changes there.
+                    let accepted: Vec<_> = u
+                        .copies
+                        .iter()
+                        .filter(|c| {
+                            st.wants_copy
+                                && !st.dirty.touches(Rect {
+                                    x: c.src_x,
+                                    y: c.src_y,
+                                    ..c.dst
+                                })
+                        })
+                        .copied()
+                        .collect();
                     for r in &u.rects {
                         st.dirty.add(*r);
+                    }
+                    for c in accepted {
+                        // The copy fills the destination: no pixels needed.
+                        let _ = st.dirty.take_within(c.dst);
+                        st.copies.push(c);
                     }
                     if st.wants_cursor {
                         if let Some(c) = &u.cursor {
@@ -169,6 +227,7 @@ where
     }
 }
 
+#[allow(clippy::too_many_lines)] // one arm per client message
 async fn handle_message<S>(
     session: &mut ServerSession<S>,
     shared: &Shared,
@@ -190,6 +249,10 @@ where
             st.dirty.add(whole((fb.width(), fb.height())));
         }
         ClientMessage::SetEncodings(list) => {
+            st.wants_copy = list.contains(&enc::COPY_RECT);
+            if !st.wants_copy {
+                st.copies.clear();
+            }
             let wants = list.contains(&pseudo::CURSOR);
             if wants && !st.wants_cursor {
                 // Tell a client that just asked for it what the pointer looks like.
@@ -271,6 +334,17 @@ where
                         payload,
                     })
                     .await?;
+            } else if let Ok(seq) = <[u8; 4]>::try_from(payload.as_slice()) {
+                // The answer to one of ours: the client has everything sent
+                // before it. Older unanswered ones are covered too.
+                let seq = u32::from_be_bytes(seq);
+                while let Some((n, at)) = st.in_flight.pop_front() {
+                    if n == seq {
+                        let micros = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        st.handle.rtt_micros.store(micros.max(1), Ordering::Relaxed);
+                        break;
+                    }
+                }
             }
         }
         ClientMessage::SetDesktopSize { .. } => {
@@ -333,6 +407,7 @@ where
             area = whole(size);
             st.dirty.clear();
             st.dirty.add(area);
+            st.copies.clear();
             let (header, payload) = if wants_ext {
                 layout_rect(size, REASON_SERVER, STATUS_OK)
             } else {
@@ -376,6 +451,15 @@ where
                 payloads.push(payload);
             }
         }
+        // Scrolls first: they act on the picture as the client has it now.
+        for copy in st.copies.drain(..) {
+            headers.push(RectHeader {
+                rect: copy.dst,
+                encoding: enc::COPY_RECT,
+            });
+            let [sx, sy] = [copy.src_x.to_be_bytes(), copy.src_y.to_be_bytes()];
+            payloads.push(vec![sx[0], sx[1], sy[0], sy[1]]);
+        }
         st.dirty.clip(size.0, size.1);
         for piece in st.dirty.take_within(area) {
             // Tight rectangles are at most 2048 wide.
@@ -415,6 +499,18 @@ where
         .collect();
     session.send_update(&rects).await?;
     st.handle.updates.fetch_add(1, Ordering::Relaxed);
+    if st.announced_fence {
+        // Ask the client to confirm it got everything so far.
+        let seq = st.next_fence;
+        st.next_fence = st.next_fence.wrapping_add(1);
+        session
+            .send(&ServerMessage::Fence {
+                flags: fence::REQUEST | fence::BLOCK_BEFORE,
+                payload: seq.to_be_bytes().to_vec(),
+            })
+            .await?;
+        st.in_flight.push_back((seq, std::time::Instant::now()));
+    }
     st.handle.encoding.store(chosen, Ordering::Relaxed);
     Ok(true)
 }
