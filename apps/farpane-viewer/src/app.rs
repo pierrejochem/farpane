@@ -732,6 +732,17 @@ impl ViewerApp {
         self.was_capturing
     }
 
+    /// One short phrase for the overlay.
+    fn capture_summary(&self) -> String {
+        match (&self.grab, &self.grab_state) {
+            (None, _) => "capture unavailable".to_owned(),
+            (Some(g), GrabState::Active) => format!("captured ({})", g.backend()),
+            (Some(_), GrabState::Requested) => "capture requested, not confirmed".to_owned(),
+            (Some(_), GrabState::Failed(_)) => "capture failed".to_owned(),
+            (Some(_), GrabState::Released) => "not captured".to_owned(),
+        }
+    }
+
     /// A short status for the controls: what the keyboard is doing.
     fn capture_status(&self) -> String {
         match (&self.grab, &self.grab_state) {
@@ -1054,6 +1065,11 @@ impl ViewerApp {
                             HISTORY_LEN,
                             None,
                             Color32::from(tokens.accent_text),
+                        );
+                        ui.label(
+                            RichText::new(format!("keyboard: {}", self.capture_summary()))
+                                .color(tokens.muted)
+                                .size(11.0),
                         );
                         ui.label(
                             RichText::new(format!(

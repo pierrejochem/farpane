@@ -9,7 +9,9 @@
 //!   (`zwp_keyboard_shortcuts_inhibit_manager_v1`). The compositor may still
 //!   reserve a way out for the user and tells the client when the inhibition
 //!   is really active.
-//! - **X11**: `XGrabKeyboard` on the window.
+//! - **X11**: `XGrabKeyboard` on the window, through Xlib on winit's own
+//!   display (a grab is delivered to the grabbing client, so it must be the
+//!   window's own).
 //!
 //! Windows (a low-level keyboard hook) and macOS (an event tap that needs the
 //! Accessibility permission) are not implemented: they cannot be developed
@@ -26,10 +28,14 @@
 //!    protocol objects live on the same connection as the window's surface;
 //! 2. `ObjectId::from_ptr` turns winit's `wl_surface` pointer into a proxy.
 //!
-//! Both are only sound while the window is alive, which is why the unsafe
-//! constructor documents that contract and [`KeyboardGrab`] must be dropped
-//! before the window. Each `unsafe` block has a `SAFETY` comment. Nothing
-//! else in the crate uses `unsafe`.
+//! and the X11 backend calls Xlib on winit's `Display*` (`XGrabKeyboard`,
+//! `XUngrabKeyboard`, `XSync`, `XFlush`) because the grab must be made by the
+//! window's own client.
+//!
+//! All of it is only sound while the window is alive, which is why the unsafe
+//! constructors document that contract and [`KeyboardGrab`] must be dropped
+//! before the window, and used from the event loop thread. Each `unsafe`
+//! block has a `SAFETY` comment. Nothing else in the crate uses `unsafe`.
 
 mod wayland;
 mod x11;
@@ -127,11 +133,16 @@ impl KeyboardGrab {
                 // function is that the result is dropped before the window.
                 unsafe { Self::wayland(d.display.as_ptr(), w.surface.as_ptr()) }
             }
-            (RawWindowHandle::Xlib(w), _) => Self::x11(
-                u32::try_from(w.window)
-                    .map_err(|_| GrabError::Unsupported("X11 window id out of range".into()))?,
-            ),
-            (RawWindowHandle::Xcb(w), _) => Self::x11(w.window.get()),
+            (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => {
+                let display = d
+                    .display
+                    .ok_or_else(|| GrabError::Connection("no X display".into()))?;
+                // SAFETY: as above: live window, result dropped before it.
+                unsafe { Self::x11(display.as_ptr(), w.window) }
+            }
+            (RawWindowHandle::Xcb(_), _) => Err(GrabError::Unsupported(
+                "windows on an xcb connection are not supported (winit uses Xlib)".into(),
+            )),
             (other, _) => Err(GrabError::Unsupported(format!(
                 "no backend for this window system ({other:?})"
             ))),
@@ -153,13 +164,19 @@ impl KeyboardGrab {
         Ok(Self::with(Box::new(backend)))
     }
 
-    /// An X11 capture for the window with id `window`, on a connection of its
-    /// own to the default display.
+    /// An X11 capture for `window` on the Xlib display `display`.
     ///
     /// # Errors
-    /// [`GrabError::Connection`] if the X server cannot be reached.
-    pub fn x11(window: u32) -> Result<Self, GrabError> {
-        Ok(Self::with(Box::new(x11::X11Grab::new(window)?)))
+    /// [`GrabError::Connection`] if libX11 cannot be loaded.
+    ///
+    /// # Safety
+    /// `display` must be a valid `Display*` and `window` a window of it, both
+    /// valid for as long as the returned value lives, and the value must be
+    /// used only from the thread that owns the display.
+    pub unsafe fn x11(display: *mut c_void, window: std::ffi::c_ulong) -> Result<Self, GrabError> {
+        // SAFETY: forwarded from this function's contract.
+        let backend = unsafe { x11::X11Grab::new(display, window)? };
+        Ok(Self::with(Box::new(backend)))
     }
 
     fn with(backend: Box<dyn Backend>) -> Self {
