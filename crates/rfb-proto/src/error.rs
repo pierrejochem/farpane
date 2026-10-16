@@ -26,6 +26,9 @@ pub enum ProtoError {
     /// A rectangle uses an encoding we cannot frame. The stream cannot be
     /// resynchronised, so this is fatal.
     UnsupportedEncoding(i32),
+    /// We tried to send an encoding the peer never asked for in
+    /// `SetEncodings`.
+    EncodingNotRequested(i32),
 }
 
 impl fmt::Display for ProtoError {
@@ -47,6 +50,7 @@ impl fmt::Display for ProtoError {
             Self::SecurityFailed(None) => write!(f, "security failed"),
             Self::NoAcceptableSecurity => write!(f, "no acceptable security type"),
             Self::UnsupportedEncoding(e) => write!(f, "unsupported encoding {e}"),
+            Self::EncodingNotRequested(e) => write!(f, "encoding {e} was not requested"),
         }
     }
 }
