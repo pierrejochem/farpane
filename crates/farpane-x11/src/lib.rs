@@ -5,7 +5,10 @@
 //! Under `XWayland` this sees only X11 clients, not the Wayland desktop; the
 //! Wayland backend is a separate piece of work (design doc, section 19).
 //!
-//! Clipboard is not handled yet: [`rfb_server::Input::clipboard`] does nothing.
+//! Clipboard: text other programs copy (the `CLIPBOARD` selection, as
+//! `UTF8_STRING`) is reported by the source, and text clients copy is served
+//! to pasting programs. `PRIMARY` (middle-click) and chunked `INCR` transfers
+//! are not handled.
 
 mod input;
 mod source;
@@ -29,9 +32,10 @@ pub(crate) fn io_err(e: impl std::error::Error + Send + Sync + 'static) -> io::E
 pub fn open(display: Option<&str>) -> io::Result<(X11Source, X11Input)> {
     let (capture, screen) = connect(display).map_err(io_err)?;
     let (input, _) = connect(display).map_err(io_err)?;
+    let (to_source, from_input) = std::sync::mpsc::channel();
     Ok((
-        X11Source::new(capture, screen)?,
-        X11Input::new(input, screen)?,
+        X11Source::new(capture, screen, from_input)?,
+        X11Input::new(input, screen, to_source)?,
     ))
 }
 

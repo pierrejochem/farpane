@@ -374,3 +374,220 @@ fn keys_reach_a_focused_window_including_symbols_the_layout_lacks() {
     sleep(Duration::from_millis(100));
     assert_eq!(keysym_of(borrowed), 0, "given back");
 }
+
+mod clipboard {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+    use x11rb::{
+        CURRENT_TIME, NONE,
+        protocol::{
+            Event,
+            xproto::{Atom, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, Window as XWindow},
+        },
+    };
+
+    fn atom(conn: &RustConnection, name: &[u8]) -> Atom {
+        conn.intern_atom(false, name).unwrap().reply().unwrap().atom
+    }
+
+    /// Another program that owns the clipboard and serves `text` (UTF-8 only).
+    struct Owner {
+        stop: Arc<AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl Owner {
+        fn start(display: &str, text: &str) -> Self {
+            let (conn, num) = RustConnection::connect(Some(display)).unwrap();
+            let root = conn.setup().roots[num].root;
+            let win = conn.generate_id().unwrap();
+            conn.create_window(
+                0,
+                win,
+                root,
+                0,
+                0,
+                1,
+                1,
+                0,
+                WindowClass::INPUT_ONLY,
+                0,
+                &CreateWindowAux::new(),
+            )
+            .unwrap();
+            let (clipboard, utf8, targets) = (
+                atom(&conn, b"CLIPBOARD"),
+                atom(&conn, b"UTF8_STRING"),
+                atom(&conn, b"TARGETS"),
+            );
+            conn.set_selection_owner(win, clipboard, CURRENT_TIME)
+                .unwrap();
+            conn.flush().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let flag = Arc::clone(&stop);
+            let text = text.to_owned();
+            let thread = std::thread::spawn(move || {
+                while !flag.load(Ordering::Relaxed) {
+                    while let Some(event) = conn.poll_for_event().unwrap() {
+                        if let Event::SelectionRequest(r) = event {
+                            let ok = if r.target == targets {
+                                conn.change_property32(
+                                    PropMode::REPLACE,
+                                    r.requestor,
+                                    r.property,
+                                    AtomEnum::ATOM,
+                                    &[targets, utf8],
+                                )
+                                .unwrap();
+                                true
+                            } else if r.target == utf8 {
+                                conn.change_property8(
+                                    PropMode::REPLACE,
+                                    r.requestor,
+                                    r.property,
+                                    utf8,
+                                    text.as_bytes(),
+                                )
+                                .unwrap();
+                                true
+                            } else {
+                                false
+                            };
+                            conn.send_event(
+                                false,
+                                r.requestor,
+                                EventMask::NO_EVENT,
+                                SelectionNotifyEvent {
+                                    response_type: SELECTION_NOTIFY_EVENT,
+                                    sequence: 0,
+                                    time: r.time,
+                                    requestor: r.requestor,
+                                    selection: r.selection,
+                                    target: r.target,
+                                    property: if ok { r.property } else { NONE },
+                                },
+                            )
+                            .unwrap();
+                            conn.flush().unwrap();
+                        }
+                    }
+                    sleep(Duration::from_millis(10));
+                }
+            });
+            Self {
+                stop,
+                thread: Some(thread),
+            }
+        }
+    }
+
+    impl Drop for Owner {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+        }
+    }
+
+    #[test]
+    fn text_another_program_copies_is_reported() {
+        let Some(server) = start_server() else {
+            eprintln!("no X display: skipped");
+            return;
+        };
+        let (mut source, _input) = farpane_x11::open(Some(&server.display)).unwrap();
+        let (w, h) = source.size();
+        let mut fb = Framebuffer::new(w, h).unwrap();
+        source.capture(&mut fb).unwrap();
+        let _owner = Owner::start(
+            &server.display,
+            "copied: caf\u{e9} 5\u{20ac}\n\u{4f60}\u{597d}",
+        );
+        let mut got = None;
+        for _ in 0..100 {
+            if let Some(text) = source.capture(&mut fb).unwrap().clipboard {
+                got = Some(text);
+                break;
+            }
+            sleep(Duration::from_millis(30));
+        }
+        assert_eq!(
+            got.as_deref(),
+            Some("copied: caf\u{e9} 5\u{20ac}\n\u{4f60}\u{597d}")
+        );
+    }
+
+    #[test]
+    fn text_a_client_copies_is_served_to_pasting_programs_and_not_echoed_back() {
+        let Some(server) = start_server() else {
+            eprintln!("no X display: skipped");
+            return;
+        };
+        let (mut source, input) = farpane_x11::open(Some(&server.display)).unwrap();
+        let (w, h) = source.size();
+        let mut fb = Framebuffer::new(w, h).unwrap();
+        source.capture(&mut fb).unwrap();
+
+        input.clipboard("from the viewer: 5\u{20ac}\r\nok");
+        let (conn, num) = RustConnection::connect(Some(&server.display)).unwrap();
+        let root = conn.setup().roots[num].root;
+        let win = conn.generate_id().unwrap();
+        conn.create_window(
+            0,
+            win,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )
+        .unwrap();
+        let (clipboard, utf8, prop) = (
+            atom(&conn, b"CLIPBOARD"),
+            atom(&conn, b"UTF8_STRING"),
+            atom(&conn, b"PASTE"),
+        );
+        // The source takes ownership at its next capture.
+        let mut echoed = Vec::new();
+        for _ in 0..5 {
+            echoed.extend(source.capture(&mut fb).unwrap().clipboard);
+            sleep(Duration::from_millis(30));
+        }
+        conn.convert_selection(win, clipboard, utf8, prop, CURRENT_TIME)
+            .unwrap();
+        conn.flush().unwrap();
+        let mut pasted = None;
+        'wait: for _ in 0..100 {
+            echoed.extend(source.capture(&mut fb).unwrap().clipboard);
+            while let Some(event) = conn.poll_for_event().unwrap() {
+                if let Event::SelectionNotify(e) = event {
+                    assert_ne!(e.property, NONE, "the selection was refused");
+                    let reply = conn
+                        .get_property(true, win, prop, AtomEnum::ANY, 0, 1 << 16)
+                        .unwrap()
+                        .reply()
+                        .unwrap();
+                    pasted = Some(String::from_utf8(reply.value).unwrap());
+                    break 'wait;
+                }
+            }
+            sleep(Duration::from_millis(30));
+        }
+        assert_eq!(pasted.as_deref(), Some("from the viewer: 5\u{20ac}\r\nok"));
+        assert_eq!(
+            echoed,
+            Vec::<String>::new(),
+            "our own copy is not reported back"
+        );
+        let _: XWindow = win;
+    }
+}

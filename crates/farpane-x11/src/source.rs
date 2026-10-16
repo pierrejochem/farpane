@@ -3,14 +3,22 @@ use std::io;
 use rfb_codec::{Cursor, Framebuffer};
 use rfb_proto::types::Rect;
 use rfb_server::{Capture, Source};
+use std::sync::mpsc::Receiver;
+
 use x11rb::{
+    CURRENT_TIME, NONE,
     connection::Connection,
     protocol::{
         Event,
         damage::{self, ConnectionExt as _},
         xfixes::{self, ConnectionExt as _},
-        xproto::{ConnectionExt as _, ImageFormat, ImageOrder, Window},
+        xproto::{
+            Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat,
+            ImageOrder, PropMode, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent, Window,
+            WindowClass,
+        },
     },
+    wrapper::ConnectionExt as _,
 };
 
 use crate::{Conn, io_err};
@@ -31,7 +39,35 @@ pub struct X11Source {
     /// `XFixes` said the cursor changed since it was last read.
     cursor_changed: bool,
     xfixes: bool,
+    clip: Clipboard,
 }
+
+/// The clipboard side of the connection: an invisible window that owns the
+/// selection for text clients copied, and reads the selection other programs
+/// own.
+struct Clipboard {
+    win: Window,
+    atoms: Atoms,
+    /// Text clients copied, which this window now serves.
+    owned: Option<String>,
+    /// Text another program copied, not yet reported.
+    outgoing: Option<String>,
+    /// Text to take ownership of, from [`crate::X11Input`].
+    incoming: Receiver<String>,
+}
+
+#[derive(Clone, Copy)]
+struct Atoms {
+    clipboard: Atom,
+    utf8: Atom,
+    targets: Atom,
+    text: Atom,
+    property: Atom,
+    incr: Atom,
+}
+
+/// The most clipboard text read from another program.
+const MAX_CLIPBOARD_BYTES: u32 = 4 * 1024 * 1024;
 
 impl std::fmt::Debug for X11Source {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -42,7 +78,11 @@ impl std::fmt::Debug for X11Source {
 }
 
 impl X11Source {
-    pub(crate) fn new(conn: Conn, screen_num: usize) -> io::Result<Self> {
+    pub(crate) fn new(
+        conn: Conn,
+        screen_num: usize,
+        incoming: Receiver<String>,
+    ) -> io::Result<Self> {
         let setup = conn.setup();
         let screen = &setup.roots[screen_num];
         let root = screen.root;
@@ -83,6 +123,45 @@ impl X11Source {
             && conn
                 .xfixes_select_cursor_input(root, xfixes::CursorNotifyMask::DISPLAY_CURSOR)
                 .is_ok();
+        let intern = |name: &[u8]| -> io::Result<Atom> {
+            Ok(conn
+                .intern_atom(false, name)
+                .map_err(io_err)?
+                .reply()
+                .map_err(io_err)?
+                .atom)
+        };
+        let atoms = Atoms {
+            clipboard: intern(b"CLIPBOARD")?,
+            utf8: intern(b"UTF8_STRING")?,
+            targets: intern(b"TARGETS")?,
+            text: intern(b"TEXT")?,
+            property: intern(b"FARPANE_SELECTION")?,
+            incr: intern(b"INCR")?,
+        };
+        let win = conn.generate_id().map_err(io_err)?;
+        conn.create_window(
+            0,
+            win,
+            root,
+            0,
+            0,
+            1,
+            1,
+            0,
+            WindowClass::INPUT_ONLY,
+            0,
+            &CreateWindowAux::new(),
+        )
+        .map_err(io_err)?;
+        if xfixes {
+            conn.xfixes_select_selection_input(
+                win,
+                atoms.clipboard,
+                xfixes::SelectionEventMask::SET_SELECTION_OWNER,
+            )
+            .map_err(io_err)?;
+        }
         conn.flush().map_err(io_err)?;
         let size = (screen.width_in_pixels, screen.height_in_pixels);
         Ok(Self {
@@ -92,6 +171,13 @@ impl X11Source {
             first: true,
             cursor_changed: false,
             xfixes,
+            clip: Clipboard {
+                win,
+                atoms,
+                owned: None,
+                outgoing: None,
+                incoming,
+            },
         })
     }
 
@@ -132,6 +218,124 @@ impl X11Source {
             height: image.height,
             rgba,
         }))
+    }
+
+    fn clipboard_event(&mut self, event: &Event) -> io::Result<()> {
+        let a = self.clip.atoms;
+        let win = self.clip.win;
+        match event {
+            // Somebody else copied: ask for the text.
+            Event::XfixesSelectionNotify(e)
+                if e.selection == a.clipboard && e.owner != win && e.owner != NONE =>
+            {
+                self.conn
+                    .convert_selection(win, a.clipboard, a.utf8, a.property, e.selection_timestamp)
+                    .map_err(io_err)?;
+                self.conn.flush().map_err(io_err)?;
+            }
+            // The answer to that request.
+            Event::SelectionNotify(e)
+                if e.requestor == win && e.selection == a.clipboard && e.property != NONE =>
+            {
+                let reply = self
+                    .conn
+                    .get_property(
+                        true,
+                        win,
+                        e.property,
+                        AtomEnum::ANY,
+                        0,
+                        MAX_CLIPBOARD_BYTES / 4,
+                    )
+                    .map_err(io_err)?
+                    .reply()
+                    .map_err(io_err)?;
+                // INCR (chunked) transfers and over-long text are not supported.
+                if reply.type_ != a.incr && reply.format == 8 && reply.bytes_after == 0 {
+                    let text = if reply.type_ == a.utf8 {
+                        String::from_utf8_lossy(&reply.value).into_owned()
+                    } else {
+                        reply.value.iter().map(|&b| char::from(b)).collect()
+                    };
+                    self.clip.outgoing = Some(text);
+                }
+            }
+            Event::SelectionRequest(r) => self.answer_request(r)?,
+            Event::SelectionClear(_) => self.clip.owned = None,
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Hand the text clients copied to a program that pastes it.
+    fn answer_request(&self, r: &x11rb::protocol::xproto::SelectionRequestEvent) -> io::Result<()> {
+        let a = self.clip.atoms;
+        let property = if r.property == NONE {
+            r.target
+        } else {
+            r.property
+        };
+        let served = match (&self.clip.owned, r.selection == a.clipboard) {
+            (Some(text), true) if r.target == a.targets => {
+                self.conn
+                    .change_property32(
+                        PropMode::REPLACE,
+                        r.requestor,
+                        property,
+                        AtomEnum::ATOM,
+                        &[a.targets, a.utf8, AtomEnum::STRING.into(), a.text],
+                    )
+                    .map_err(io_err)?;
+                let _ = text;
+                true
+            }
+            (Some(text), true) if r.target == a.utf8 || r.target == a.text => {
+                self.conn
+                    .change_property8(
+                        PropMode::REPLACE,
+                        r.requestor,
+                        property,
+                        a.utf8,
+                        text.as_bytes(),
+                    )
+                    .map_err(io_err)?;
+                true
+            }
+            (Some(text), true) if r.target == Atom::from(AtomEnum::STRING) => {
+                let latin1: Vec<u8> = text
+                    .chars()
+                    .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+                    .collect();
+                self.conn
+                    .change_property8(
+                        PropMode::REPLACE,
+                        r.requestor,
+                        property,
+                        AtomEnum::STRING,
+                        &latin1,
+                    )
+                    .map_err(io_err)?;
+                true
+            }
+            _ => false,
+        };
+        self.conn
+            .send_event(
+                false,
+                r.requestor,
+                EventMask::NO_EVENT,
+                SelectionNotifyEvent {
+                    response_type: SELECTION_NOTIFY_EVENT,
+                    sequence: 0,
+                    time: r.time,
+                    requestor: r.requestor,
+                    selection: r.selection,
+                    target: r.target,
+                    property: if served { property } else { NONE },
+                },
+            )
+            .map_err(io_err)?;
+        self.conn.flush().map_err(io_err)
     }
 
     fn geometry(&self) -> io::Result<(u16, u16)> {
@@ -188,6 +392,13 @@ impl Source for X11Source {
             width: w,
             height: h,
         };
+        // Text clients copied: take the selection before looking at events.
+        while let Ok(text) = self.clip.incoming.try_recv() {
+            self.conn
+                .set_selection_owner(self.clip.win, self.clip.atoms.clipboard, CURRENT_TIME)
+                .map_err(io_err)?;
+            self.clip.owned = Some(text);
+        }
         let mut damaged: Vec<Rect> = Vec::new();
         // Drain the damage events (raw rectangles need no re-arming).
         let mut everything = self.first;
@@ -195,6 +406,7 @@ impl Source for X11Source {
             if let Event::XfixesCursorNotify(_) = event {
                 self.cursor_changed = true;
             }
+            self.clipboard_event(&event)?;
             if let Event::DamageNotify(d) = event {
                 if damaged.len() < MAX_RECTS {
                     damaged.push(Rect {
@@ -219,6 +431,7 @@ impl Source for X11Source {
             return Ok(Capture {
                 damage: vec![whole],
                 cursor: self.cursor_if_changed(true)?,
+                clipboard: self.clip.outgoing.take(),
             });
         }
         // Keep what lies inside the screen.
@@ -234,6 +447,7 @@ impl Source for X11Source {
         Ok(Capture {
             damage,
             cursor: self.cursor_if_changed(false)?,
+            clipboard: self.clip.outgoing.take(),
         })
     }
 }

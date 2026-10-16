@@ -1,4 +1,8 @@
-use std::{collections::HashMap, io, sync::Mutex};
+use std::{
+    collections::HashMap,
+    io,
+    sync::{Mutex, mpsc::Sender},
+};
 
 use rfb_server::Input;
 use x11rb::{
@@ -27,6 +31,8 @@ pub struct X11Input {
     conn: Conn,
     root: Window,
     state: Mutex<State>,
+    /// Text clients copied, for the capture side to put on the clipboard.
+    clipboard: Mutex<Sender<String>>,
 }
 
 impl std::fmt::Debug for X11Input {
@@ -50,7 +56,11 @@ struct State {
 }
 
 impl X11Input {
-    pub(crate) fn new(conn: Conn, screen_num: usize) -> io::Result<Self> {
+    pub(crate) fn new(
+        conn: Conn,
+        screen_num: usize,
+        clipboard: Sender<String>,
+    ) -> io::Result<Self> {
         let root = conn.setup().roots[screen_num].root;
         conn.xtest_get_version(2, 2)
             .map_err(io_err)?
@@ -60,6 +70,7 @@ impl X11Input {
             conn,
             root,
             state: Mutex::new(State::default()),
+            clipboard: Mutex::new(clipboard),
         };
         {
             let mut st = input
@@ -232,5 +243,13 @@ impl Input for X11Input {
         let _ = self.pointer_event(&mut st, x, y, buttons);
     }
 
-    fn clipboard(&self, _text: &str) {}
+    fn clipboard(&self, text: &str) {
+        // The capture side owns the selection and answers pastes; if it is
+        // gone the server is ending anyway.
+        let _ = self
+            .clipboard
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .send(text.to_owned());
+    }
 }

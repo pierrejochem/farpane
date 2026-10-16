@@ -137,6 +137,9 @@ where
                     return Err(Error::Io(std::io::Error::other("screen capture stopped")));
                 }
                 Ok(u) => {
+                    if let Some(text) = &u.clipboard {
+                        send_clipboard(&mut session, &mut st, text).await?;
+                    }
                     for r in &u.rects {
                         st.dirty.add(*r);
                     }
@@ -377,4 +380,33 @@ where
         .collect();
     session.send_update(&rects).await?;
     Ok(true)
+}
+
+/// Tell the client the server's clipboard changed: through Extended Clipboard
+/// (UTF-8) when the client has announced it, else as Latin-1 `ServerCutText`.
+async fn send_clipboard<S>(
+    session: &mut ServerSession<S>,
+    st: &mut State,
+    text: &str,
+) -> Result<(), Error>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    if st.clipboard.is_active() {
+        for (flags, payload) in st.clipboard.local_changed(text) {
+            session
+                .send(&ServerMessage::ExtendedClipboard { flags, payload })
+                .await?;
+        }
+        return Ok(());
+    }
+    let latin1: Vec<u8> = text
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    // Longer text cannot be sent the old way: better nothing than half of it.
+    if latin1.len() <= rfb_proto::consts::limits::MAX_CUT_TEXT_LEN as usize {
+        session.send(&ServerMessage::ServerCutText(latin1)).await?;
+    }
+    Ok(())
 }
