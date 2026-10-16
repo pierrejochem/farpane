@@ -6,7 +6,7 @@ use rfb_proto::{
     wire::Reader,
 };
 
-use crate::{DecodeError, Framebuffer, PixelConverter};
+use crate::{DecodeError, Framebuffer, PixelConverter, inflate::Inflater};
 
 /// What a decoded rectangle changed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,9 +21,15 @@ pub enum Damage {
 
 /// Per-connection decoding state. Create one per connection and call
 /// [`Decoder::set_pixel_format`] whenever a `SetPixelFormat` is sent.
+///
+/// The zlib and ZRLE encodings each keep one inflate stream for the life of
+/// the connection, so rectangles must be decoded strictly in the order the
+/// server sent them.
 #[derive(Debug)]
 pub struct Decoder {
     converter: PixelConverter,
+    zlib: Inflater,
+    zrle: Inflater,
 }
 
 impl Decoder {
@@ -32,6 +38,8 @@ impl Decoder {
     pub fn new(pf: &PixelFormat) -> Result<Self, DecodeError> {
         Ok(Self {
             converter: PixelConverter::new(pf)?,
+            zlib: Inflater::default(),
+            zrle: Inflater::default(),
         })
     }
 
@@ -73,6 +81,14 @@ impl Decoder {
                 crate::rre::decode(fb, &self.converter, rect, payload, true)?;
                 Ok(Damage::Rect(rect))
             }
+            enc::ZLIB => {
+                self.zlib_rect(fb, rect, payload)?;
+                Ok(Damage::Rect(rect))
+            }
+            enc::ZRLE => {
+                crate::zrle::decode(fb, &self.converter, rect, payload, &mut self.zrle)?;
+                Ok(Damage::Rect(rect))
+            }
             enc::HEXTILE => {
                 crate::hextile::decode(fb, &self.converter, rect, payload)?;
                 Ok(Damage::Rect(rect))
@@ -84,6 +100,28 @@ impl Decoder {
             pseudo::LAST_RECT | pseudo::CURSOR => Ok(Damage::None),
             other => Err(DecodeError::UnsupportedEncoding(other)),
         }
+    }
+
+    /// zlib encoding: `U32` length, then zlib data that inflates to Raw pixels.
+    fn zlib_rect(
+        &mut self,
+        fb: &mut Framebuffer,
+        rect: Rect,
+        payload: &[u8],
+    ) -> Result<(), DecodeError> {
+        fb.check(rect)?;
+        let mut r = Reader::new(payload);
+        let len = r
+            .u32()
+            .map_err(|_| DecodeError::Malformed("truncated zlib payload"))?
+            as usize;
+        if len != payload.len() - 4 {
+            return Err(DecodeError::Malformed("zlib length prefix"));
+        }
+        let expected =
+            usize::from(rect.width) * usize::from(rect.height) * self.converter.bytes_per_pixel();
+        let pixels = self.zlib.inflate(&payload[4..], expected)?;
+        self.raw(fb, rect, &pixels)
     }
 
     fn raw(&self, fb: &mut Framebuffer, rect: Rect, payload: &[u8]) -> Result<(), DecodeError> {
