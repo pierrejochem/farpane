@@ -1,6 +1,5 @@
 //! Extended Clipboard: message layout and the exchange between two machines.
 
-#![allow(clippy::assert_is_empty)] // "nothing is sent" reads better than comparing with []
 use std::io::{Read, Write};
 
 use flate2::{Compression, read::ZlibDecoder, write::ZlibEncoder};
@@ -241,8 +240,9 @@ fn ready(server_text_max: u32) -> (ExtClipboard, ExtClipboard) {
         [caps(0)],
         "the client answers once with its own capabilities"
     );
-    assert!(
-        deliver(&mut server, &reply.send).send.is_empty(),
+    assert_eq!(
+        deliver(&mut server, &reply.send).send.len(),
+        0,
         "the server does not answer an answer"
     );
     assert!(server.is_active() && client.is_active());
@@ -255,7 +255,7 @@ fn the_client_answers_capabilities_only_once() {
     let first = client.on_message(caps(0).0, &caps(0).1).unwrap();
     assert_eq!(first.send.len(), 1);
     let second = client.on_message(caps(0).0, &caps(0).1).unwrap();
-    assert!(second.send.is_empty());
+    assert_eq!(second.send.len(), 0);
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn a_small_change_can_be_provided_unsolicited_when_the_peer_allows_it() {
 #[test]
 fn a_request_for_text_we_do_not_have_gets_no_answer() {
     let (_server, mut client) = ready(0);
-    assert!(deliver(&mut client, &[request_text()]).send.is_empty());
+    assert_eq!(deliver(&mut client, &[request_text()]).send.len(), 0);
     // After a change it does.
     client.local_changed("now there is some");
     assert_eq!(deliver(&mut client, &[request_text()]).send.len(), 1);
@@ -314,8 +314,9 @@ fn peek_is_answered_with_what_is_available() {
 #[test]
 fn nothing_is_sent_before_the_peer_has_announced_text() {
     let mut client = ExtClipboard::new(Role::Client);
-    assert!(
-        client.local_changed("hello").is_empty(),
+    assert_eq!(
+        client.local_changed("hello").len(),
+        0,
         "the caller falls back to Latin-1"
     );
     // A peer that announces only HTML never gets asked for text.
@@ -325,17 +326,18 @@ fn nothing_is_sent_before_the_peer_has_announced_text() {
     );
     deliver(&mut client, &[html_caps]);
     assert!(!client.is_active());
-    assert!(client.local_changed("hello").is_empty());
-    assert!(deliver(&mut client, &[notify(true)]).send.is_empty());
+    assert_eq!(client.local_changed("hello").len(), 0);
+    assert_eq!(deliver(&mut client, &[notify(true)]).send.len(), 0);
 }
 
 #[test]
 fn a_notify_without_text_asks_for_nothing() {
     let (_server, mut client) = ready(0);
-    assert!(deliver(&mut client, &[notify(false)]).send.is_empty());
-    assert!(
+    assert_eq!(deliver(&mut client, &[notify(false)]).send.len(), 0);
+    assert_eq!(
         deliver(&mut client, &[(flags::NOTIFY | flags::HTML, vec![])])
             .send
-            .is_empty()
+            .len(),
+        0
     );
 }
