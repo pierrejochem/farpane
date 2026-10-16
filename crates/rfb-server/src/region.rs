@@ -7,7 +7,7 @@ use rfb_proto::types::Rect;
 const MAX_RECTS: usize = 16;
 
 /// Pending changes of one client. Cheap to merge: overlapping rectangles
-/// unite, and past [`MAX_RECTS`] pieces the region becomes its bounding box.
+/// unite, and past 16 pieces the region becomes its bounding box.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Region {
     rects: Vec<Rect>,

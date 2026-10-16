@@ -1441,3 +1441,43 @@ async fn several_scrolls_before_the_client_asks_still_give_the_right_picture() {
     }
     shows_top(&v, 90);
 }
+
+#[tokio::test]
+async fn connections_beyond_the_limit_are_dropped_at_once_and_slots_come_back() {
+    let mut server = Server::new(
+        TestPattern::new(64, 64),
+        NoInput,
+        options(),
+        Settings::default(),
+    )
+    .unwrap();
+    server.set_max_connections(2);
+    let server = Arc::new(server);
+    // Two connections that never speak occupy the two slots (handshake pending).
+    let mut idle = Vec::new();
+    let mut tasks = Vec::new();
+    for _ in 0..2 {
+        let (near, far) = duplex(1 << 16);
+        let s = Arc::clone(&server);
+        tasks.push(tokio::spawn(async move { s.serve_connection(far).await }));
+        idle.push(near);
+    }
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The third is refused without any handshake.
+    let (_near, far) = duplex(1 << 16);
+    let err = timeout(Duration::from_secs(1), server.serve_connection(far))
+        .await
+        .expect("refused at once")
+        .unwrap_err();
+    assert!(err.to_string().contains("too many connections"), "{err}");
+    // Closing one frees its slot.
+    drop(idle.pop());
+    assert!(
+        timeout(Duration::from_secs(2), tasks.pop().unwrap())
+            .await
+            .is_ok()
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    v.update().await;
+}
