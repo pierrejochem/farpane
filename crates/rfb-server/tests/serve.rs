@@ -38,6 +38,7 @@ struct Plan {
     resize: Option<(u16, u16)>,
     fail: bool,
     shade: u8,
+    cursor: Option<rfb_codec::Cursor>,
 }
 
 struct Scripted {
@@ -71,13 +72,17 @@ impl Source for Scripted {
             fb.resize(w, h).unwrap();
             let r = whole(fb);
             paint(fb, r);
-            return Ok(Capture { damage: vec![r] });
+            return Ok(Capture {
+                damage: vec![r],
+                cursor: None,
+            });
         }
+        let cursor = plan.cursor.take();
         let damage = std::mem::take(&mut plan.damage);
         for r in &damage {
             paint(fb, *r);
         }
-        Ok(Capture { damage })
+        Ok(Capture { damage, cursor })
     }
 }
 
@@ -134,6 +139,7 @@ struct Viewer {
     /// What the server sent outside updates.
     other: Vec<ClientConnEvent>,
     layouts: Vec<rfb_codec::DesktopLayout>,
+    cursors: Vec<rfb_codec::Cursor>,
 }
 
 async fn connect(
@@ -170,6 +176,7 @@ async fn connect_with(
         info,
         other: Vec::new(),
         layouts: Vec::new(),
+        cursors: Vec::new(),
     };
     (viewer, task)
 }
@@ -206,6 +213,7 @@ impl Viewer {
                         .unwrap()
                     {
                         Damage::Layout(l) => self.layouts.push(l),
+                        Damage::Cursor(c) => self.cursors.push(c),
                         _ => rects.push((header.rect, header.encoding)),
                     }
                 }
@@ -847,4 +855,84 @@ async fn a_peer_that_failed_to_sign_in_waits_before_the_next_attempt() {
     assert!(ok && fourth >= Duration::from_secs(4), "{fourth:?}");
     let (fifth, ok, _t5) = attempt(b"secret").await;
     assert!(ok && fifth < Duration::from_millis(500), "{fifth:?}");
+}
+
+#[tokio::test]
+async fn the_cursor_shape_is_sent_to_clients_that_ask_and_updated_when_it_changes() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    // Nothing known yet: the first update has no cursor rectangle.
+    let (mut v, _t1) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, pseudo::CURSOR]).await;
+    v.request(false).await;
+    let rects = v.update().await;
+    assert!(rects.iter().all(|&(_, e)| e != pseudo::CURSOR));
+    assert_eq!(v.cursors.len(), 0);
+
+    let shape = rfb_codec::Cursor {
+        hotspot: (2, 3),
+        width: 4,
+        height: 2,
+        rgba: [[255, 0, 0, 255], [0, 255, 0, 0]].concat().repeat(4),
+    };
+    plan.0.lock().unwrap().cursor = Some(shape.clone());
+    v.request(true).await;
+    v.update().await;
+    assert_eq!(v.cursors.as_slice(), std::slice::from_ref(&shape));
+
+    // A client that did not ask never gets one; one that joins later gets the current shape at once.
+    let (mut other, _other_task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    other.request(false).await;
+    other.update().await;
+    assert_eq!(other.cursors.len(), 0);
+    let (mut late, _t3) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, pseudo::CURSOR]).await;
+    late.request(false).await;
+    late.update().await;
+    assert_eq!(late.cursors, [shape]);
+
+    // A hidden cursor (no pixels) arrives as an empty shape.
+    plan.0.lock().unwrap().cursor = Some(rfb_codec::Cursor {
+        hotspot: (0, 0),
+        width: 0,
+        height: 0,
+        rgba: Vec::new(),
+    });
+    v.request(true).await;
+    v.update().await;
+    assert_eq!(v.cursors.last().map(|c| (c.width, c.height)), Some((0, 0)));
+}
+
+#[tokio::test]
+async fn the_test_pattern_shows_an_arrow_in_every_pixel_format() {
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(64, 64),
+            NoInput,
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    for pf in [PixelFormat::RGB888, rgb565()] {
+        let (mut v, _t) = connect(&server, pf, &[enc::ZRLE, pseudo::CURSOR]).await;
+        v.request(false).await;
+        v.update().await;
+        let arrow = TestPattern::arrow();
+        assert_eq!(v.cursors.len(), 1);
+        let got = &v.cursors[0];
+        assert_eq!((got.width, got.height, got.hotspot), (12, 12, (0, 0)));
+        let alphas =
+            |c: &rfb_codec::Cursor| c.rgba.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
+        assert_eq!(alphas(got), alphas(&arrow));
+    }
 }

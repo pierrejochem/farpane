@@ -1,6 +1,6 @@
 use std::io;
 
-use rfb_codec::Framebuffer;
+use rfb_codec::{Cursor, Framebuffer};
 use rfb_proto::types::Rect;
 use rfb_server::{Capture, Source};
 use x11rb::{
@@ -8,6 +8,7 @@ use x11rb::{
     protocol::{
         Event,
         damage::{self, ConnectionExt as _},
+        xfixes::{self, ConnectionExt as _},
         xproto::{ConnectionExt as _, ImageFormat, ImageOrder, Window},
     },
 };
@@ -27,6 +28,9 @@ pub struct X11Source {
     root: Window,
     size: (u16, u16),
     first: bool,
+    /// `XFixes` said the cursor changed since it was last read.
+    cursor_changed: bool,
+    xfixes: bool,
 }
 
 impl std::fmt::Debug for X11Source {
@@ -70,6 +74,15 @@ impl X11Source {
         let id = conn.generate_id().map_err(io_err)?;
         conn.damage_create(id, root, damage::ReportLevel::RAW_RECTANGLES)
             .map_err(io_err)?;
+        // The cursor shape comes from XFixes; without it clients draw their own.
+        let xfixes = conn
+            .xfixes_query_version(4, 0)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .is_some()
+            && conn
+                .xfixes_select_cursor_input(root, xfixes::CursorNotifyMask::DISPLAY_CURSOR)
+                .is_ok();
         conn.flush().map_err(io_err)?;
         let size = (screen.width_in_pixels, screen.height_in_pixels);
         Ok(Self {
@@ -77,6 +90,8 @@ impl X11Source {
             root,
             size,
             first: true,
+            cursor_changed: false,
+            xfixes,
         })
     }
 
@@ -84,6 +99,39 @@ impl X11Source {
     #[must_use]
     pub fn root(&self) -> u32 {
         self.root
+    }
+
+    /// The pointer's shape if it changed since the last call (or `force`).
+    fn cursor_if_changed(&mut self, force: bool) -> io::Result<Option<Cursor>> {
+        if !self.xfixes || !(self.cursor_changed || force) {
+            return Ok(None);
+        }
+        self.cursor_changed = false;
+        let image = self
+            .conn
+            .xfixes_get_cursor_image()
+            .map_err(io_err)?
+            .reply()
+            .map_err(io_err)?;
+        let mut rgba = Vec::with_capacity(image.cursor_image.len() * 4);
+        for argb in &image.cursor_image {
+            // XFixes gives premultiplied ARGB; clients want straight colour.
+            let [b, g, r, a] = argb.to_le_bytes();
+            let un = |c: u8| {
+                if a == 0 {
+                    0
+                } else {
+                    u8::try_from((u32::from(c) * 255 / u32::from(a)).min(255)).unwrap_or(255)
+                }
+            };
+            rgba.extend_from_slice(&[un(r), un(g), un(b), a]);
+        }
+        Ok(Some(Cursor {
+            hotspot: (image.xhot, image.yhot),
+            width: image.width,
+            height: image.height,
+            rgba,
+        }))
     }
 
     fn geometry(&self) -> io::Result<(u16, u16)> {
@@ -144,6 +192,9 @@ impl Source for X11Source {
         // Drain the damage events (raw rectangles need no re-arming).
         let mut everything = self.first;
         while let Some(event) = self.conn.poll_for_event().map_err(io_err)? {
+            if let Event::XfixesCursorNotify(_) = event {
+                self.cursor_changed = true;
+            }
             if let Event::DamageNotify(d) = event {
                 if damaged.len() < MAX_RECTS {
                     damaged.push(Rect {
@@ -167,6 +218,7 @@ impl Source for X11Source {
             self.read(fb, whole)?;
             return Ok(Capture {
                 damage: vec![whole],
+                cursor: self.cursor_if_changed(true)?,
             });
         }
         // Keep what lies inside the screen.
@@ -179,6 +231,9 @@ impl Source for X11Source {
                 damage.push(r);
             }
         }
-        Ok(Capture { damage })
+        Ok(Capture {
+            damage,
+            cursor: self.cursor_if_changed(false)?,
+        })
     }
 }

@@ -4,7 +4,7 @@
 
 use std::io;
 
-use rfb_codec::Framebuffer;
+use rfb_codec::{Cursor, Framebuffer};
 use rfb_proto::types::Rect;
 
 /// What one call to [`Source::capture`] found.
@@ -13,6 +13,9 @@ pub struct Capture {
     /// The parts of the picture that changed since the previous call.
     /// Empty means nothing changed.
     pub damage: Vec<Rect>,
+    /// The pointer's shape, if it changed since the previous call. The
+    /// first call should report it. A cursor with no pixels hides it.
+    pub cursor: Option<Cursor>,
 }
 
 /// A screen that can be captured. Called from one dedicated thread, a few
@@ -92,6 +95,29 @@ impl TestPattern {
         [(x / 2) as u8, (y / 2) as u8, ((x + y) / 4) as u8, 0]
     }
 
+    /// The test cursor: a 12 x 12 white arrow-ish triangle with a clear
+    /// background, hotspot at its tip.
+    #[must_use]
+    pub fn arrow() -> Cursor {
+        let mut rgba = Vec::with_capacity(12 * 12 * 4);
+        for y in 0..12u8 {
+            for x in 0..12u8 {
+                let inside = x <= y && y < 12 && x < 8;
+                rgba.extend_from_slice(&if inside {
+                    [255, 255, 255, 255]
+                } else {
+                    [0, 0, 0, 0]
+                });
+            }
+        }
+        Cursor {
+            hotspot: (0, 0),
+            width: 12,
+            height: 12,
+            rgba,
+        }
+    }
+
     fn paint(fb: &mut Framebuffer, rect: Rect, f: impl Fn(u16, u16) -> [u8; 4]) {
         let mut data = Vec::with_capacity(usize::from(rect.width) * usize::from(rect.height) * 4);
         for y in rect.y..rect.y + rect.height {
@@ -121,6 +147,7 @@ impl Source for TestPattern {
             self.frame = 1;
             return Ok(Capture {
                 damage: vec![whole],
+                cursor: Some(Self::arrow()),
             });
         }
         let old = self.square(self.frame - 1);
@@ -130,6 +157,7 @@ impl Source for TestPattern {
         Self::paint(fb, new, |_, _| [255, 255, 255, 0]);
         Ok(Capture {
             damage: vec![old, new],
+            cursor: None,
         })
     }
 }

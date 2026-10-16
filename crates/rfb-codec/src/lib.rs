@@ -26,7 +26,7 @@ mod tight;
 mod zrle;
 
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
-pub use encode::{ZrleEncoder, encode_raw};
+pub use encode::{ZrleEncoder, encode_cursor, encode_raw};
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;
 pub use pixel::{PixelConverter, PixelPacker};

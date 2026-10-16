@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rfb_codec::Framebuffer;
+use rfb_codec::{Cursor, Framebuffer};
 use rfb_proto::types::Rect;
 use rfb_tokio::{Error, ServerOptions, ServerSession};
 use tokio::{
@@ -28,6 +28,8 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct Update {
     pub rects: Vec<Rect>,
+    /// The pointer has a new shape.
+    pub cursor: Option<Arc<Cursor>>,
     /// Capturing has stopped for good; clients should disconnect.
     pub ended: bool,
 }
@@ -36,6 +38,8 @@ pub(crate) struct Update {
 pub(crate) struct Shared {
     pub fb: RwLock<Framebuffer>,
     pub updates: broadcast::Sender<Arc<Update>>,
+    /// The pointer's current shape, for clients that join later.
+    pub cursor: RwLock<Option<Arc<Cursor>>>,
     pub input: Arc<dyn Input>,
     stop: AtomicBool,
     /// Why capturing stopped, if it did.
@@ -135,11 +139,12 @@ impl Server {
     ) -> io::Result<Self> {
         let (w, h) = source.size();
         let mut fb = Framebuffer::new(w, h).map_err(io::Error::other)?;
-        source.capture(&mut fb)?;
+        let first = source.capture(&mut fb)?;
         let (updates, _) = broadcast::channel(64);
         let shared = Arc::new(Shared {
             fb: RwLock::new(fb),
             updates,
+            cursor: RwLock::new(first.cursor.map(Arc::new)),
             input: Arc::new(input),
             stop: AtomicBool::new(false),
             failure: Mutex::new(None),
@@ -366,11 +371,19 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
             })
         };
         match result {
-            Ok(capture) if capture.damage.is_empty() => {}
+            Ok(capture) if capture.damage.is_empty() && capture.cursor.is_none() => {}
             Ok(capture) => {
+                let cursor = capture.cursor.map(Arc::new);
+                if let Some(c) = &cursor {
+                    *shared
+                        .cursor
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::clone(c));
+                }
                 // No receivers just means nobody is connected.
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: capture.damage,
+                    cursor,
                     ended: false,
                 }));
             }
@@ -381,6 +394,7 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.to_string());
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: Vec::new(),
+                    cursor: None,
                     ended: true,
                 }));
                 return;
