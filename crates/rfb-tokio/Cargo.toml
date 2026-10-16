@@ -1,0 +1,22 @@
+[package]
+name = "rfb-tokio"
+description = "Tokio adapter for rfb-proto: async client and server sessions over any AsyncRead + AsyncWrite stream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-proto.workspace = true
+rfb-security.workspace = true
+bytes = { workspace = true, features = ["std"] }
+tokio = { version = "1.53.3", features = ["io-util", "time"] }
+getrandom = "0.4.3"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "io-util", "time", "test-util"] }

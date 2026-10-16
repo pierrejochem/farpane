@@ -15,6 +15,7 @@ changing a subsystem; section numbers below refer to it.
 | `crates/rfb-proto` | Sans-IO RFB core, `no_std + alloc`, depends only on `bytes`. Parsing, serialising, rectangle framing, handshake state machines. No sockets, async, crypto or pixel decoding here (§15). |
 | `crates/rfb-codec` | Pixel encoders/decoders (Raw, CopyRect, Hextile, ZRLE, Tight, H.264). Gets complete rect payloads from `rfb-proto` (§7, §15, §22). |
 | `crates/rfb-security` | Security handshakes behind the `SecurityStep` trait: None, VNC Auth, VeNCrypt (rustls), RA2/RA2-256, Apple DH (§4, §20). |
+| `crates/rfb-tokio` | Tokio adapter: `ClientSession` / `ServerSession` over any `AsyncRead + AsyncWrite`. I/O, 30 s handshake timeout, VNC Auth via `rfb-security`; no policy. The richer `rfb-client` / `rfb-server` layers of §11 will sit on top. |
 | `crates/farpane-ui` | Shared egui UI: design tokens, themes, widgets, charts (§16). Widgets read tokens only, never raw colours. |
 | `apps/farpane-viewer`, `apps/farpane-server` | Thin binaries over the crates. |
 | `packaging/` | nfpm (deb/rpm/Arch), WiX MSI, macOS plists, icons. See `packaging/README.md`. |
@@ -60,7 +61,7 @@ Milestone M1 (protocol skeleton) is done: `consts`, `version`, `types`, `wire::R
 Next steps, in order:
 1. M1 is done apart from optional `wire::Writer`.
 2. M2: `framing::frame` is done for Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, Cursor, DesktopSize, LastRect. `conn::ClientConn`/`ClientConnEvent` (handshake + server-message loop, bounds checks, DesktopSize, LastRect, zero-copy `Bytes` rect payloads) is done. `conn::ServerConn` is done too (client-message loop; `send_update` checks encoding was requested, bounds and that the payload frames to its own length). Fuzz targets live in `crates/rfb-proto/fuzz` (`client_conn`, `server_conn`, `framing`, `messages`; own workspace, need nightly + `cargo install cargo-fuzz`, run with `cargo +nightly fuzz run <target>` from `crates/rfb-proto`); each ran 60 s on 2026-10-16 with no findings (7.6M, 9.4M, 0.4M and 0.65M execs for messages, framing, client_conn, server_conn). Stable robustness proptests in `conn/tests.rs` cover the same ground. Still open: TRLE (no section in rfbproto.rst, needs a verified source first), a fuzz job in CI. `limits::MAX_RECT_PAYLOAD` (128 MiB) is our own bound, not from the spec.
-3. Tokio adapter and a minimal viewer that connects to a TigerVNC or QEMU server.
+3. Tokio adapter is done (`rfb-tokio`, loopback + TCP tests). Next: a minimal viewer that connects to a TigerVNC or QEMU server, which also needs decoders in `rfb-codec` (Raw and CopyRect first).
 
 ## Open items
 
