@@ -33,6 +33,8 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --x11 [DISPLAY]        share an X11 display (default $DISPLAY) instead of the
                          test pattern; under XWayland only X11 windows are
                          visible, not the Wayland desktop
+  --desktop              share the desktop of the session this runs in: the Wayland one
+                         if $WAYLAND_DISPLAY is set, else the X11 one ($DISPLAY)
   --wayland              share the Wayland desktop through the portal (the desktop
                          asks for approval; remembered in the config folder)
   --size WxH             test pattern size (default 1024x768)
@@ -68,6 +70,8 @@ struct Args {
     allow_no_auth: bool,
     x11: bool,
     wayland: bool,
+    /// Share the desktop of the session this runs in.
+    desktop: bool,
     x11_display: Option<String>,
     config_dir: Option<PathBuf>,
     self_signed: bool,
@@ -102,6 +106,7 @@ fn parse() -> Result<Args, String> {
         allow_no_auth: false,
         x11: false,
         wayland: false,
+        desktop: false,
         x11_display: None,
         config_dir: None,
         self_signed: false,
@@ -166,6 +171,7 @@ fn parse() -> Result<Args, String> {
                 args.x11_display = display;
             }
             "--wayland" => args.wayland = true,
+            "--desktop" => args.desktop = true,
             "--config-dir" => args.config_dir = Some(value(&mut it, "--config-dir")?.into()),
             "--tls-self-signed" => args.self_signed = true,
             "--ra2" => args.ra2 = true,
@@ -296,6 +302,16 @@ fn open_wayland(_config_dir: &std::path::Path) -> Result<SourceAndInput, String>
 }
 
 fn open_source(args: &Args, config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
+    let mut args = args.clone();
+    if args.desktop && !args.wayland && !args.x11 {
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            args.wayland = true;
+        } else if std::env::var_os("DISPLAY").is_some() {
+            args.x11 = true;
+        } else {
+            return Err("--desktop: neither $WAYLAND_DISPLAY nor $DISPLAY is set".to_owned());
+        }
+    }
     if args.wayland {
         open_wayland(config_dir)
     } else if args.x11 {

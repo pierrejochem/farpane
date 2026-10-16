@@ -31,8 +31,10 @@ Linux binaries are built in an AlmaLinux 9 container, so the glibc floor is 2.34
    Still to do in code: embed `icons/farpane-*.ico` into the Windows `.exe` files with a `build.rs`
    (e.g. the `winresource` crate), so Explorer and the taskbar show the icon.
 3. Keep the `UpgradeCode` GUID in `farpane.wxs` forever once v1 ships.
-4. The server's `--headless` flag in `farpane-server.service` is a placeholder for the
-   no-dashboard mode; align it with the real CLI.
+4. `farpane-server.service` runs `--headless --desktop` (no window; share the session's desktop).
+   Without a user account or password the server listens on loopback only: add users with
+   `farpane-server user add NAME` and enable `--tls-self-signed` / `--ra2` (edit `ExecStart`)
+   before exposing it. On Wayland the desktop asks for approval the first time.
 
 ## Signing (optional — steps are skipped when secrets are missing)
 
