@@ -144,6 +144,8 @@ pub struct ViewerApp {
     resize_remote: bool,
     /// The server announced a layout, so it understands resize requests.
     server_can_resize: bool,
+    /// Protocol version and security of the current session.
+    session_info: Option<(String, String)>,
     /// The server refused a request: stop asking for this connection.
     resize_refused: bool,
     /// A size we want to ask for, and when the window first had it.
@@ -230,6 +232,7 @@ impl ViewerApp {
             was_capturing: false,
             resize_remote: input.resize_remote,
             server_can_resize: false,
+            session_info: None,
             resize_refused: false,
             resize_wanted: None,
             last_requested: None,
@@ -443,6 +446,9 @@ impl ViewerApp {
         if !immersive {
             self.top_bar(ctx, &tokens);
         }
+        if !immersive && self.is_connected() {
+            self.session_footer(ctx, &tokens);
+        }
         match self.phase {
             Phase::Connected { .. } => self.session(ctx),
             Phase::Home | Phase::Connecting => self.home(ctx, &tokens),
@@ -579,7 +585,10 @@ impl ViewerApp {
                     name,
                     width,
                     height,
+                    protocol,
+                    security,
                 } => {
+                    self.session_info = Some((protocol, security));
                     self.reset_resize();
                     self.remember_connection(&name);
                     self.phase = Phase::Connected { name };
@@ -1072,6 +1081,80 @@ impl ViewerApp {
                 });
             }
         }
+    }
+
+    /// The bar under the picture: protocol, security, size, what the server
+    /// showed it can do, and the pinned server key.
+    fn session_footer(&self, ctx: &Context, tokens: &Tokens) {
+        egui::TopBottomPanel::bottom("session-footer")
+            .show_separator_line(false)
+            .frame(
+                Frame::NONE
+                    .fill(style::page_fill(tokens))
+                    .inner_margin(Margin {
+                        left: 14,
+                        right: 14,
+                        top: 2,
+                        bottom: 12,
+                    }),
+            )
+            .show(ctx, |ui| {
+                Self::card_frame(tokens, 16, 8)
+                    .corner_radius(style::radius(14.0))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        let text =
+                            |t: String| RichText::new(t).monospace().color(tokens.muted).size(12.0);
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 18.0;
+                            if let Some((protocol, security)) = &self.session_info {
+                                ui.label(text(protocol.clone()));
+                                ui.label(text(security.clone()));
+                            }
+                            let (w, h) = self.remote_size;
+                            let fit = if self.one_to_one { "1:1" } else { "fit" };
+                            ui.label(text(format!("{w}×{h} → {fit}")));
+                            let mut seen = Vec::new();
+                            if self.server_can_resize {
+                                seen.push("ExtendedDesktopSize");
+                            }
+                            if self.stats.as_ref().is_some_and(|s| s.rtt.is_some()) {
+                                seen.push("Fence");
+                            }
+                            if !seen.is_empty() && ui.available_width() > 420.0 {
+                                ui.label(text(seen.join(" · ")));
+                            }
+                            if let Some(key) = self.pinned_key_summary() {
+                                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                    ui.label(text(format!("Server key SHA-256 {key}")));
+                                });
+                            }
+                        });
+                    });
+            });
+    }
+
+    /// The pinned certificate or key fingerprint of the current server, as
+    /// `3F:9A:…:C4:12`.
+    fn pinned_key_summary(&self) -> Option<String> {
+        let pin = &self
+            .store
+            .settings
+            .known_hosts
+            .iter()
+            .find(|k| k.host == self.addr.trim())?
+            .sha256;
+        let parts: Vec<&str> = pin.split(':').collect();
+        if parts.len() < 5 {
+            return Some(pin.clone());
+        }
+        Some(format!(
+            "{}:{}:…:{}:{}",
+            parts[0],
+            parts[1],
+            parts[parts.len() - 2],
+            parts[parts.len() - 1]
+        ))
     }
 
     /// The slim tab and the pill of controls, drawn over the picture.

@@ -98,7 +98,9 @@ async fn connect_frames_input_and_incremental_requests() {
         UiEvent::Connected {
             name: "core test".into(),
             width: 6,
-            height: 4
+            height: 4,
+            protocol: "RFB 3.8".into(),
+            security: "None".into(),
         }
     );
 

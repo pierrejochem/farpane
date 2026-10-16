@@ -103,6 +103,8 @@ pub struct ClientHandshake {
     cfg: ClientConfig,
     state: State,
     version: ProtocolVersion,
+    /// The security type chosen, once there is one.
+    security: Option<u8>,
     /// The `VeNCrypt` subtype chosen, once there is one.
     subtype: Option<u32>,
     /// The RSA-AES security type chosen.
@@ -125,6 +127,7 @@ impl ClientHandshake {
             cfg,
             state: State::AwaitVersion,
             version,
+            security: None,
             subtype: None,
             ra2: None,
             credentials_asked: false,
@@ -135,6 +138,12 @@ impl ClientHandshake {
     #[must_use]
     pub fn version(&self) -> ProtocolVersion {
         self.version
+    }
+
+    /// The security type in use, once one was chosen.
+    #[must_use]
+    pub fn security_type(&self) -> Option<u8> {
+        self.security
     }
 
     #[must_use]
@@ -410,6 +419,7 @@ impl ClientHandshake {
     /// State change after a security type was settled. `None` skips the
     /// `SecurityResult` on 3.3 and 3.7, so `ClientInit` goes out right away.
     fn after_choice(&mut self, chosen: u8, out: &mut Vec<u8>) -> Result<(), ProtoError> {
+        self.security = Some(chosen);
         match chosen {
             security::NONE if self.version == ProtocolVersion::V3_8 => {
                 self.state = State::AwaitSecurityResult;

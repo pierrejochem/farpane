@@ -207,8 +207,8 @@ async fn the_remote_follows_the_window_once_it_settles_and_does_not_loop() {
     let (w, h) = wait_request(&mut server).await;
     assert_eq!(w, 1100, "the window's width in pixels");
     assert!(
-        (650..=720).contains(&h),
-        "the height below the top bar: {h}"
+        (580..=660).contains(&h),
+        "the height between the top bar and the footer: {h}"
     );
 
     // The server granted it, the picture followed, and nothing more is asked.
