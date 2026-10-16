@@ -317,7 +317,7 @@ fn hidden_and_malformed_cursors() {
     else {
         panic!("expected a cursor");
     };
-    assert!(c.rgba.is_empty());
+    assert_eq!(c.rgba.len(), 0);
     // Wrong payload size: pixels but no mask.
     assert_eq!(
         dec.decode(&mut fb, &header(pseudo::CURSOR, 0, 0, 2, 2), &[0; 16]),

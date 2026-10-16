@@ -112,7 +112,7 @@ impl Decoder {
                 fb.resize(rect.width, rect.height)?;
                 Ok(Damage::Resized)
             }
-            pseudo::CURSOR => Ok(Damage::Cursor(self.cursor(&header.rect, payload)?)),
+            pseudo::CURSOR => Ok(Damage::Cursor(self.cursor(header.rect, payload)?)),
             pseudo::LAST_RECT => Ok(Damage::None),
             other => Err(DecodeError::UnsupportedEncoding(other)),
         }
@@ -144,7 +144,7 @@ impl Decoder {
     /// `width` x `height` the cursor size. The payload is the pixels in the
     /// session format, then a 1-bit-per-pixel mask in rows padded to whole
     /// bytes, most significant bit first; a set bit means "opaque".
-    fn cursor(&self, rect: &Rect, payload: &[u8]) -> Result<Cursor, DecodeError> {
+    fn cursor(&self, rect: Rect, payload: &[u8]) -> Result<Cursor, DecodeError> {
         let (w, h) = (usize::from(rect.width), usize::from(rect.height));
         let pixel_bytes = w * h * self.converter.bytes_per_pixel();
         let mask_row = w.div_ceil(8);
