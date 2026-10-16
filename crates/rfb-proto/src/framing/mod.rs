@@ -5,7 +5,7 @@
 //! scans just enough of the bytes after a [`RectHeader`] to learn the payload
 //! length. Decoding is `rfb-codec`'s job and sees only complete payloads.
 //!
-//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE and the
+//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, Tight and the
 //! `Cursor`, `DesktopSize`, `ExtendedDesktopSize` and `LastRect`
 //! pseudo-encodings. `ZRLE` and zlib are
 //! length-prefixed, so their tiles are walked only after inflating, in the
@@ -50,6 +50,12 @@ pub fn frame(header: &RectHeader, pf: &PixelFormat, input: &[u8]) -> Result<usiz
         enc::RRE => rre(input, bpp as u64, 8),
         enc::CO_RRE => rre(input, bpp as u64, 4),
         enc::HEXTILE => hextile(input, header.rect.width, header.rect.height, bpp),
+        enc::TIGHT => tight(
+            input,
+            header.rect.width,
+            header.rect.height,
+            pf.tight_pixel_len(),
+        ),
         enc::ZLIB | enc::ZRLE => length_prefixed(input),
         pseudo::CURSOR => fixed(
             width * height * bpp as u64 + width.div_ceil(8) * height,
@@ -140,6 +146,81 @@ fn hextile(input: &[u8], width: u16, height: u16, bpp: usize) -> Result<usize, P
 }
 
 /// Skip `n` payload bytes, keeping a running total under the payload limit.
+/// Tight (spec, "Tight Encoding"). The control byte says which of fill, JPEG
+/// and basic compression follows; for basic compression the size of the
+/// filtered data is known from the filter, and data under 12 bytes is sent
+/// without zlib.
+fn tight(input: &[u8], width: u16, height: u16, tpixel: usize) -> Result<usize, ProtoError> {
+    const MIN_COMPRESSED: usize = 12;
+    let bad = |ctx| ProtoError::Malformed { ctx };
+    let mut r = Reader::new(input);
+    let control = r.u8()?;
+    let (w, h, tp) = (u64::from(width), u64::from(height), tpixel as u64);
+    let (zlib, filter) = if control & 0x80 == 0 {
+        (true, control & 0x40 != 0)
+    } else {
+        match control >> 4 {
+            0b1000 => {
+                let mut total = 1;
+                skip_bounded(&mut r, &mut total, tpixel)?;
+                return Ok(r.position());
+            }
+            0b1001 => {
+                let len = compact_length(&mut r)?;
+                let mut total = r.position() as u64;
+                skip_bounded(&mut r, &mut total, len)?;
+                return Ok(r.position());
+            }
+            0b1010 => (false, false),
+            0b1110 => (false, true),
+            _ => return Err(bad("Tight compression control")),
+        }
+    };
+    let filter_id = if filter { r.u8()? } else { 0 };
+    let mut total = r.position() as u64;
+    let data = match filter_id {
+        0 | 2 => w * h * tp,
+        1 => {
+            let colours = u16::from(r.u8()?) + 1;
+            if colours < 2 {
+                return Err(bad("Tight palette of one colour"));
+            }
+            total = r.position() as u64;
+            skip_bounded(&mut r, &mut total, usize::from(colours) * tpixel)?;
+            if colours == 2 {
+                w.div_ceil(8) * h
+            } else {
+                w * h
+            }
+        }
+        _ => return Err(bad("Tight filter")),
+    };
+    let data = check_limit(data, "Tight payload")?;
+    if zlib && data >= MIN_COMPRESSED {
+        let len = compact_length(&mut r)?;
+        total = r.position() as u64;
+        skip_bounded(&mut r, &mut total, len)?;
+    } else {
+        skip_bounded(&mut r, &mut total, data)?;
+    }
+    Ok(r.position())
+}
+
+/// Tight's 1 to 3 byte length: 7 bits per byte, least significant first, the
+/// top bit says another byte follows (the third byte has all 8 bits).
+fn compact_length(r: &mut Reader<'_>) -> Result<usize, ProtoError> {
+    let b0 = usize::from(r.u8()?);
+    let mut len = b0 & 0x7F;
+    if b0 & 0x80 != 0 {
+        let b1 = usize::from(r.u8()?);
+        len |= (b1 & 0x7F) << 7;
+        if b1 & 0x80 != 0 {
+            len |= usize::from(r.u8()?) << 14;
+        }
+    }
+    Ok(len)
+}
+
 fn skip_bounded(r: &mut Reader<'_>, total: &mut u64, n: usize) -> Result<(), ProtoError> {
     *total += n as u64;
     check_limit(*total, "Hextile payload")?;

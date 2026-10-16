@@ -181,8 +181,8 @@ fn desktop_size_resizes_and_clears_and_other_pseudo_rects_are_quiet() {
         Ok(Damage::None)
     );
     assert_eq!(
-        dec.decode(&mut fb, &header(enc::TIGHT, 0, 0, 1, 1), &[]),
-        Err(DecodeError::UnsupportedEncoding(enc::TIGHT))
+        dec.decode(&mut fb, &header(enc::TRLE, 0, 0, 1, 1), &[]),
+        Err(DecodeError::UnsupportedEncoding(enc::TRLE))
     );
     assert!(Framebuffer::new(20_000, 1).is_err());
 }

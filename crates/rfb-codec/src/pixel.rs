@@ -12,6 +12,8 @@ pub struct PixelConverter {
     /// The wire format already is the framebuffer layout.
     identity: bool,
     cpixel: CPixel,
+    /// Tight `TPIXEL`s are 3 bytes (R, G, B).
+    tight3: bool,
 }
 
 /// How a compressed pixel (`CPIXEL`, used by ZRLE) is cut from a wire pixel.
@@ -71,6 +73,7 @@ impl PixelConverter {
             channels,
             identity,
             cpixel,
+            tight3: pf.tight_pixel_len() == 3,
         })
     }
 
@@ -87,6 +90,49 @@ impl PixelConverter {
             CPixel::Full => self.bytes_per_pixel,
             CPixel::Low3 | CPixel::High3 => 3,
         }
+    }
+
+    /// Bytes per Tight `TPIXEL`.
+    #[must_use]
+    pub fn tpixel_len(&self) -> usize {
+        if self.tight3 { 3 } else { self.bytes_per_pixel }
+    }
+
+    /// Convert one Tight `TPIXEL` (`src` holds at least
+    /// [`PixelConverter::tpixel_len`] bytes).
+    #[must_use]
+    pub fn tpixel(&self, src: &[u8]) -> [u8; 4] {
+        if self.tight3 {
+            [src[2], src[1], src[0], 0xFF]
+        } else {
+            self.pixel(src)
+        }
+    }
+
+    /// The three colour components of a `TPIXEL` as the wire holds them.
+    pub(crate) fn tpixel_channels(&self, src: &[u8]) -> [u32; 3] {
+        if self.tight3 {
+            [src[0], src[1], src[2]].map(u32::from)
+        } else {
+            let raw = self.raw(src);
+            self.channels.map(|(shift, max)| (raw >> shift) & max)
+        }
+    }
+
+    /// Largest value of each component of a `TPIXEL`.
+    pub(crate) fn tpixel_max(&self) -> [u32; 3] {
+        if self.tight3 {
+            [255; 3]
+        } else {
+            self.channels.map(|(_, max)| max)
+        }
+    }
+
+    /// Framebuffer pixel from component values (as in
+    /// [`PixelConverter::tpixel_channels`]).
+    pub(crate) fn pixel_from_channels(&self, c: [u32; 3]) -> [u8; 4] {
+        let [mr, mg, mb] = self.tpixel_max();
+        [scale(c[2], mb), scale(c[1], mg), scale(c[0], mr), 0xFF]
     }
 
     /// Convert one `CPIXEL`. `src` must hold at least
