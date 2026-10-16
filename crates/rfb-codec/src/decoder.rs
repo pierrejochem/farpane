@@ -2,7 +2,7 @@ use rfb_proto::{
     PixelFormat,
     consts::{enc, pseudo},
     msg::server::RectHeader,
-    types::Rect,
+    types::{Rect, Screen},
     wire::Reader,
 };
 
@@ -21,6 +21,25 @@ pub struct Cursor {
     pub rgba: Vec<u8>,
 }
 
+/// A screen layout from an `ExtendedDesktopSize` rectangle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DesktopLayout {
+    /// 0 changed on the server, 1 requested by us, 2 requested by another
+    /// client; unknown values should be treated as 0.
+    pub reason: u16,
+    /// 0 for success. For a request of ours (`reason` 1) anything else is a
+    /// refusal: 1 prohibited, 2 out of resources, 3 invalid layout,
+    /// 4 forwarded (may complete later).
+    pub status: u16,
+    pub width: u16,
+    pub height: u16,
+    pub screens: Vec<Screen>,
+    /// The framebuffer changed size and was cleared (never for a refusal, and
+    /// not when the size is unchanged: servers repeat the layout on every
+    /// full refresh).
+    pub resized: bool,
+}
+
 /// What a decoded rectangle changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Damage {
@@ -32,6 +51,8 @@ pub enum Damage {
     Resized,
     /// The cursor shape changed. The picture is untouched.
     Cursor(Cursor),
+    /// The screen layout was announced; see [`DesktopLayout::resized`].
+    Layout(DesktopLayout),
 }
 
 /// Per-connection decoding state. Create one per connection and call
@@ -113,6 +134,7 @@ impl Decoder {
                 Ok(Damage::Resized)
             }
             pseudo::CURSOR => Ok(Damage::Cursor(self.cursor(header.rect, payload)?)),
+            pseudo::EXT_DESKTOP_SIZE => Ok(Damage::Layout(layout(fb, header.rect, payload)?)),
             pseudo::LAST_RECT => Ok(Damage::None),
             other => Err(DecodeError::UnsupportedEncoding(other)),
         }
@@ -204,4 +226,35 @@ fn copy_rect(fb: &mut Framebuffer, rect: Rect, payload: &[u8]) -> Result<(), Dec
     })?;
     fb.copy_within(sx, sy, rect);
     Ok(())
+}
+
+/// `ExtendedDesktopSize`: the rectangle's `x` is the reason, `y` the status and
+/// `width` x `height` the framebuffer size; the payload lists the screens.
+fn layout(fb: &mut Framebuffer, rect: Rect, payload: &[u8]) -> Result<DesktopLayout, DecodeError> {
+    let malformed = |_| DecodeError::Malformed("ExtendedDesktopSize payload");
+    let mut r = Reader::new(payload);
+    let count = r.u8().map_err(malformed)?;
+    r.skip(3).map_err(malformed)?;
+    let mut screens = Vec::with_capacity(usize::from(count));
+    for _ in 0..count {
+        screens.push(Screen::read(&mut r).map_err(malformed)?);
+    }
+    if r.remaining() != 0 {
+        return Err(DecodeError::Malformed("ExtendedDesktopSize payload size"));
+    }
+    let (reason, status) = (rect.x, rect.y);
+    let (width, height) = (rect.width, rect.height);
+    let mut resized = false;
+    if status == 0 && (width, height) != (fb.width(), fb.height()) {
+        fb.resize(width, height)?;
+        resized = true;
+    }
+    Ok(DesktopLayout {
+        reason,
+        status,
+        width,
+        height,
+        screens,
+        resized,
+    })
 }
