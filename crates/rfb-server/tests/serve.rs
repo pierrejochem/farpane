@@ -217,7 +217,7 @@ impl Viewer {
                     match self
                         .decoder
                         .decode(&mut self.fb, &header, &payload)
-                        .unwrap()
+                        .unwrap_or_else(|e| panic!("{e:?} for {header:?}"))
                     {
                         Damage::Layout(l) => self.layouts.push(l),
                         Damage::Cursor(c) => self.cursors.push(c),
@@ -261,6 +261,8 @@ impl Viewer {
 const ZRLE: &[i32] = &[enc::ZRLE, enc::RAW, pseudo::DESKTOP_SIZE];
 const RAW: &[i32] = &[enc::RAW];
 const TRLE: &[i32] = &[enc::TRLE, enc::RAW];
+const HEXTILE: &[i32] = &[enc::HEXTILE, enc::RAW];
+const TIGHT: &[i32] = &[enc::TIGHT, enc::ZRLE, enc::RAW];
 
 fn rgb565() -> PixelFormat {
     PixelFormat {
@@ -303,6 +305,10 @@ async fn the_first_request_gets_the_whole_picture_in_the_clients_format_and_enco
         (rgb565(), RAW),
         (PixelFormat::RGB888, TRLE),
         (rgb565(), TRLE),
+        (PixelFormat::RGB888, HEXTILE),
+        (rgb565(), HEXTILE),
+        (PixelFormat::RGB888, TIGHT),
+        (rgb565(), TIGHT),
     ] {
         let (mut v, _task) = connect(&server, pf, encodings).await;
         assert_eq!((v.info.width, v.info.height), (150, 90));
@@ -1020,4 +1026,51 @@ async fn the_servers_clipboard_reaches_clients_in_latin1_or_as_utf8() {
         }
     }
     assert_eq!(text.as_deref(), Some("caf\u{e9} 5\u{20ac}\r\n\u{4f60}"));
+}
+
+#[tokio::test]
+async fn the_clients_order_of_preference_decides_and_wide_tight_rectangles_are_split() {
+    // 3000 pixels wide: Tight has to cut it in two.
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(3000, 40),
+            NoInput,
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    let (mut v, _t1) = connect(
+        &server,
+        PixelFormat::RGB888,
+        &[enc::TIGHT, enc::ZRLE, enc::RAW],
+    )
+    .await;
+    v.request(false).await;
+    let rects = v.update().await;
+    assert!(rects.iter().all(|&(_, e)| e == enc::TIGHT), "{rects:?}");
+    assert!(rects.iter().all(|&(r, _)| r.width <= 2048), "{rects:?}");
+    let area: u32 = rects
+        .iter()
+        .map(|&(r, _)| u32::from(r.width) * u32::from(r.height))
+        .sum();
+    assert_eq!(area, 3000 * 40, "the pieces cover the screen exactly");
+    v.matches(
+        Rect {
+            x: 2990,
+            y: 30,
+            width: 10,
+            height: 10,
+        },
+        TestPattern::background,
+    );
+    // The same client listing ZRLE first gets ZRLE.
+    let (mut z, _t2) = connect(
+        &server,
+        PixelFormat::RGB888,
+        &[enc::ZRLE, enc::TIGHT, enc::RAW],
+    )
+    .await;
+    z.request(false).await;
+    assert!(z.update().await.iter().all(|&(_, e)| e == enc::ZRLE));
 }

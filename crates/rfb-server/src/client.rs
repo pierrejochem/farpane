@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use rfb_codec::{
-    Cursor, PixelPacker, ZrleEncoder,
+    Cursor, PixelPacker, TIGHT_MAX_WIDTH, TightEncoder, ZrleEncoder,
     clipboard::{ExtClipboard, Role},
-    encode_cursor, encode_raw, encode_trle,
+    encode_cursor, encode_hextile, encode_raw, encode_trle,
 };
 use rfb_proto::{
     conn::EncodedRect,
@@ -41,6 +41,7 @@ struct State {
     /// The area of the outstanding update request, if any.
     request: Option<Rect>,
     zrle: ZrleEncoder,
+    tight: TightEncoder,
     clipboard: ExtClipboard,
     /// Whether the client has been told the layout (`ExtendedDesktopSize`).
     layout_told: bool,
@@ -111,6 +112,7 @@ where
         dirty: Region::new(),
         request: None,
         zrle: ZrleEncoder::new(),
+        tight: TightEncoder::new(),
         clipboard: ExtClipboard::new(Role::Server),
         layout_told: false,
         layout_reply: None,
@@ -274,6 +276,7 @@ where
 
 /// Send what changed inside `request`. Returns `false` if nothing could be
 /// sent after all (so the request stays).
+#[allow(clippy::too_many_lines)] // one pass: choose, encode under the lock, send
 async fn send_update<S>(
     session: &mut ServerSession<S>,
     shared: &Shared,
@@ -289,8 +292,18 @@ where
     let packer = PixelPacker::new(&pf).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     let wants_ext = encodings.contains(&pseudo::EXT_DESKTOP_SIZE);
     let wants_size = wants_ext || encodings.contains(&pseudo::DESKTOP_SIZE);
-    let zrle_wanted = encodings.contains(&enc::ZRLE);
-    let tiles_wanted = !zrle_wanted && encodings.contains(&enc::TRLE);
+    // The client lists its encodings by preference: take the first one we
+    // can produce. Raw is understood by every client.
+    let chosen = encodings
+        .iter()
+        .copied()
+        .find(|e| {
+            matches!(
+                *e,
+                enc::ZRLE | enc::TIGHT | enc::TRLE | enc::HEXTILE | enc::RAW
+            )
+        })
+        .unwrap_or(enc::RAW);
 
     // Encode under the read lock, send after releasing it.
     let (headers, payloads) = {
@@ -356,17 +369,28 @@ where
             }
         }
         st.dirty.clip(size.0, size.1);
-        for rect in st.dirty.take_within(area) {
-            let (encoding, payload) = if zrle_wanted {
-                (enc::ZRLE, st.zrle.encode(&fb, rect, &packer))
-            } else if tiles_wanted {
-                (enc::TRLE, encode_trle(&fb, rect, &packer))
+        for piece in st.dirty.take_within(area) {
+            // Tight rectangles are at most 2048 wide.
+            let width_limit = if chosen == enc::TIGHT {
+                TIGHT_MAX_WIDTH
             } else {
-                (enc::RAW, encode_raw(&fb, rect, &packer))
+                u16::MAX
             };
-            let payload = payload.map_err(|e| Error::Io(std::io::Error::other(e)))?;
-            headers.push(RectHeader { rect, encoding });
-            payloads.push(payload);
+            for rect in split_width(piece, width_limit) {
+                let payload = match chosen {
+                    enc::ZRLE => st.zrle.encode(&fb, rect, &packer),
+                    enc::TIGHT => st.tight.encode(&fb, rect, &packer),
+                    enc::TRLE => encode_trle(&fb, rect, &packer),
+                    enc::HEXTILE => encode_hextile(&fb, rect, &packer),
+                    _ => encode_raw(&fb, rect, &packer),
+                }
+                .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                headers.push(RectHeader {
+                    rect,
+                    encoding: chosen,
+                });
+                payloads.push(payload);
+            }
         }
         (headers, payloads)
     };
@@ -412,4 +436,21 @@ where
         session.send(&ServerMessage::ServerCutText(latin1)).await?;
     }
     Ok(())
+}
+
+/// `rect` cut into pieces at most `limit` wide.
+fn split_width(rect: Rect, limit: u16) -> Vec<Rect> {
+    let limit = limit.max(1);
+    let mut pieces = Vec::new();
+    let mut x = 0;
+    while x < rect.width {
+        let width = (rect.width - x).min(limit);
+        pieces.push(Rect {
+            x: rect.x + x,
+            width,
+            ..rect
+        });
+        x += width;
+    }
+    pieces
 }

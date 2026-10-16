@@ -49,7 +49,10 @@ impl Inflater {
                 return Err(DecodeError::Malformed("zlib stream ended early"));
             }
             let consumed = advanced(z, start);
-            if consumed == input.len() && out.len() < out.capacity() {
+            // Done when everything was read and a call produced nothing more:
+            // stopping at the first call that left spare room can lose the
+            // tail of a large chunk.
+            if consumed == input.len() && out.len() == before.1 {
                 return Ok(out);
             }
             if (consumed, out.len()) == before {
