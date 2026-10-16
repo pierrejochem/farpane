@@ -7,5 +7,6 @@
 
 pub mod style;
 pub mod theme;
+pub mod widgets;
 
 pub use theme::{Accent, Theme, ThemePreference, Tokens};
