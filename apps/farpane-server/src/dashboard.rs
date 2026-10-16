@@ -619,7 +619,7 @@ impl Dashboard {
         let mut kick = None;
         egui::Grid::new("clients")
             .striped(true)
-            .num_columns(8)
+            .num_columns(9)
             .spacing([16.0, 8.0])
             .show(ui, |ui| {
                 for head in [
@@ -628,6 +628,7 @@ impl Dashboard {
                     "Encoding",
                     "In",
                     "Out",
+                    "RTT",
                     "Connected",
                     "Input",
                     "",
@@ -655,6 +656,10 @@ impl Dashboard {
                             c.bytes_out as f64
                         },
                     ));
+                    ui.label(
+                        c.rtt
+                            .map_or_else(|| "-".to_owned(), |d| format!("{} ms", d.as_millis())),
+                    );
                     ui.label(format_duration(c.connected_for));
                     let mut view_only = c.view_only;
                     if ui.checkbox(&mut view_only, "View only").changed() {

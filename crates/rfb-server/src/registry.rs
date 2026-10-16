@@ -26,6 +26,8 @@ pub(crate) struct ClientHandle {
     pub updates: AtomicU64,
     /// The encoding of the last rectangle sent.
     pub encoding: AtomicI32,
+    /// Round trip of the last fence, in microseconds (0 until one came back).
+    pub rtt_micros: AtomicU64,
 }
 
 impl ClientHandle {
@@ -41,6 +43,10 @@ impl ClientHandle {
             bytes_out: self.bytes_out.load(Ordering::Relaxed),
             updates: self.updates.load(Ordering::Relaxed),
             encoding: self.encoding.load(Ordering::Relaxed),
+            rtt: match self.rtt_micros.load(Ordering::Relaxed) {
+                0 => None,
+                us => Some(Duration::from_micros(us)),
+            },
         }
     }
 }
@@ -63,6 +69,9 @@ pub struct ClientInfo {
     pub updates: u64,
     /// Encoding number of the last rectangle sent (0 until one was).
     pub encoding: i32,
+    /// Round trip to the client from the last fence (clients that support
+    /// Fence only).
+    pub rtt: Option<Duration>,
 }
 
 /// A small copy of the shared screen.

@@ -29,6 +29,9 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct Update {
     pub rects: Vec<Rect>,
+    /// Parts of the picture that moved (scrolling), found by comparing with
+    /// the previous one. Each is also inside `rects`.
+    pub copies: Vec<crate::scroll::Copy>,
     /// The pointer has a new shape.
     pub cursor: Option<Arc<Cursor>>,
     /// New text on the server's clipboard.
@@ -311,6 +314,7 @@ impl Server {
     ///
     /// # Errors
     /// Handshake and protocol errors; [`Error::Closed`] when the client hangs up.
+    #[allow(clippy::too_many_lines)] // handshake, registration, session, cleanup
     pub async fn serve<S>(&self, stream: S, peer: Option<SocketAddr>) -> Result<(), Error>
     where
         S: AsyncRead + AsyncWrite + Unpin,
@@ -391,6 +395,7 @@ impl Server {
             bytes_out: AtomicU64::new(0),
             updates: AtomicU64::new(0),
             encoding: AtomicI32::new(0),
+            rtt_micros: AtomicU64::new(0),
         });
         self.shared
             .registry
@@ -450,11 +455,36 @@ impl Drop for Server {
     }
 }
 
+/// The scrolled part of what changed, if any: tried on every damaged
+/// rectangle and on their bounding box (an application usually reports a
+/// scroll as several rectangles).
+fn find_scroll(old: &[u8], new: &[u8], stride: usize, damage: &[Rect]) -> Vec<crate::scroll::Copy> {
+    let mut candidates: Vec<Rect> = damage.to_vec();
+    if damage.len() > 1 {
+        if let Some(all) = damage.iter().copied().reduce(crate::region::union) {
+            candidates.push(all);
+        }
+    }
+    candidates
+        .into_iter()
+        .find_map(|r| crate::scroll::find_copy(old, new, stride, r))
+        .into_iter()
+        .collect()
+}
+
 fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duration) {
     // The only strong holders besides this thread are the `Server` and its
     // connections; `stop` is set when the `Server` goes away.
+    // The picture as it was after the previous capture, to spot scrolling.
+    let mut previous: Vec<u8> = shared
+        .fb
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .pixels()
+        .to_vec();
     while !shared.stop.load(Ordering::Relaxed) {
         thread::sleep(interval);
+        let mut copies = Vec::new();
         let result = {
             let mut fb = shared
                 .fb
@@ -465,6 +495,22 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
             let after = (fb.width(), fb.height());
             // A resize damages the whole picture whatever the source said.
             result.map(|mut c| {
+                if before == after && previous.len() == fb.pixels().len() {
+                    copies = find_scroll(&previous, fb.pixels(), fb.stride(), &c.damage);
+                }
+                // Remember the new picture where it changed.
+                if before != after || previous.len() != fb.pixels().len() {
+                    previous = fb.pixels().to_vec();
+                } else {
+                    let stride = fb.stride();
+                    for r in &c.damage {
+                        for row in usize::from(r.y)..usize::from(r.y) + usize::from(r.height) {
+                            let at = row * stride + usize::from(r.x) * 4;
+                            let len = usize::from(r.width) * 4;
+                            previous[at..at + len].copy_from_slice(&fb.pixels()[at..at + len]);
+                        }
+                    }
+                }
                 if before != after {
                     c.damage = vec![Rect {
                         x: 0,
@@ -492,6 +538,7 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
                 // No receivers just means nobody is connected.
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: capture.damage,
+                    copies,
                     cursor,
                     clipboard: capture.clipboard.map(Arc::from),
                     ended: false,
@@ -504,6 +551,7 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
                     .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(e.to_string());
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: Vec::new(),
+                    copies: Vec::new(),
                     cursor: None,
                     clipboard: None,
                     ended: true,

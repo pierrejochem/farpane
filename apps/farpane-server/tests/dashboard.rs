@@ -78,6 +78,7 @@ fn client(id: u64, user: Option<&str>) -> ClientInfo {
         bytes_out: 3_500_000,
         updates: 4,
         encoding: 16,
+        rtt: Some(Duration::from_millis(42)),
     }
 }
 
@@ -146,6 +147,7 @@ fn the_clients_page_lists_clients_and_can_disconnect_or_restrict_them() {
     h.get_by_label("192.0.2.7:40002");
     assert_eq!(h.get_all_by_label("ZRLE").count(), 2);
     assert_eq!(h.get_all_by_label("2 min").count(), 2);
+    assert_eq!(h.get_all_by_label("42 ms").count(), 2);
     h.get_all_by_label("Disconnect").next().unwrap().click();
     settle(&mut h);
     assert_eq!(rig.fake.calls.lock().unwrap().disconnected, [1]);
