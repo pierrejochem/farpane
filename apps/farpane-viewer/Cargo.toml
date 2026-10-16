@@ -16,7 +16,14 @@ path = "src/main.rs"
 rfb-proto.workspace = true
 rfb-codec.workspace = true
 rfb-security.workspace = true
+rfb-tokio.workspace = true
 farpane-ui.workspace = true
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time"] }
+png = "0.18.1"
 
 [lints]
 workspace = true
+
+[lib]
+name = "farpane_viewer"
+path = "src/lib.rs"
