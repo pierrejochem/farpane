@@ -5,6 +5,7 @@
 //! never raw colours. Values match the mockups on the "Farpane Dashboards"
 //! canvas (see `docs/design/mockups/`).
 
+pub mod icons;
 pub mod style;
 pub mod theme;
 pub mod widgets;

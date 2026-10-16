@@ -1328,8 +1328,22 @@ impl ViewerApp {
                     ui.add_space(14.0);
                     ui.spacing_mut().item_spacing.y = 4.0;
                     let saved = self.store.settings.connections.len();
-                    widgets::nav_item(ui, tokens, true, "Connections", Some(saved));
-                    if widgets::nav_item(ui, tokens, false, "Appearance", None) {
+                    widgets::nav_item(
+                        ui,
+                        tokens,
+                        true,
+                        farpane_ui::icons::Icon::Displays,
+                        "Connections",
+                        Some(saved),
+                    );
+                    if widgets::nav_item(
+                        ui,
+                        tokens,
+                        false,
+                        farpane_ui::icons::Icon::Appearance,
+                        "Appearance",
+                        None,
+                    ) {
                         self.settings_open = true;
                     }
                 });
