@@ -65,9 +65,40 @@ pub fn from_remote(latin1: &[u8]) -> String {
         .collect()
 }
 
+/// Convert UTF-8 text from the server for the local clipboard: line ends
+/// become LF and control characters other than tab and newline are dropped,
+/// for the reason given at [`from_remote`].
+#[must_use]
+pub fn from_remote_utf8(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let c = if c == '\r' {
+            if chars.peek() == Some(&'\n') {
+                chars.next();
+            }
+            '\n'
+        } else {
+            c
+        };
+        if !c.is_control() || matches!(c, '\t' | '\n') {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn utf8_from_the_server_keeps_text_and_loses_controls() {
+        assert_eq!(
+            from_remote_utf8("a\r\nb\rc\u{1b}[31m \u{20ac}\u{4f60}\ttab\u{7}"),
+            "a\nb\nc[31m \u{20ac}\u{4f60}\ttab"
+        );
+    }
 
     #[test]
     fn latin1_text_round_trips() {

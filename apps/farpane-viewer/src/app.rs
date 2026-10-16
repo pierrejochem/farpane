@@ -19,7 +19,7 @@ use rfb_security::tls::{CertProblem, Fingerprint, format_fingerprint};
 use crate::{
     appearance,
     capture::{CapturePref, ChordTracker, Grabber, Situation, should_capture},
-    clipboard::{self, ClipboardError},
+    clipboard,
     core::{Command, Core, UiEvent},
     input::{Canvas, KeyTranslator, PointerTranslator},
     settings::{self, Store},
@@ -599,6 +599,15 @@ impl ViewerApp {
                         }
                     }
                 }
+                UiEvent::ClipboardText(text) => {
+                    if self.clipboard_sync {
+                        let text = clipboard::from_remote_utf8(&text);
+                        if !text.is_empty() {
+                            ctx.copy_text(text);
+                        }
+                    }
+                }
+                UiEvent::Notice(message) => self.say(message),
                 UiEvent::Untrusted {
                     addr,
                     host,
@@ -883,20 +892,7 @@ impl ViewerApp {
 
     /// Send the local clipboard text to the remote machine (on paste).
     fn send_clipboard(&mut self, text: &str) {
-        match clipboard::to_remote(text) {
-            Ok(out) => {
-                if out.replaced > 0 {
-                    self.say(format!(
-                        "{} character(s) outside Latin-1 were sent as “?”",
-                        out.replaced
-                    ));
-                }
-                self.core.send(Command::CutText(out.latin1));
-            }
-            Err(ClipboardError::TooLarge { .. }) => {
-                self.say("Clipboard text is too large to send (limit 1 MiB)".to_owned());
-            }
-        }
+        self.core.send(Command::Clipboard(text.to_owned()));
     }
 
     fn new_texture(&mut self, ctx: &Context, width: u16, height: u16) {

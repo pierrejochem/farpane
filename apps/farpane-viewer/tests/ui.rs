@@ -263,7 +263,7 @@ async fn server_pixels_and_resizes_update_the_window() {
             width: 400,
             height: 300,
         },
-        encoding: farpane_viewer::DEFAULT_ENCODINGS[farpane_viewer::DEFAULT_ENCODINGS.len() - 1],
+        encoding: rfb_proto::consts::pseudo::DESKTOP_SIZE,
     };
     assert_eq!(header.encoding, rfb_proto::consts::pseudo::DESKTOP_SIZE);
     server
@@ -410,11 +410,10 @@ async fn paste_sends_the_text_before_ctrl_v() {
             ClientMessage::KeyEvent { down, keysym }
         );
     }
-    assert!(
-        app.notice().is_some_and(|n| n.contains("Latin-1")),
-        "{:?}",
-        app.notice()
-    );
+    until(&ctx, &mut app, "Latin-1 notice", |a| {
+        a.notice().is_some_and(|n| n.contains("Latin-1"))
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -499,11 +498,10 @@ async fn oversized_clipboard_text_is_not_sent_and_the_session_survives() {
     let (ctx, mut app, mut server) = connected().await;
     let big = "x".repeat(1024 * 1024 + 1);
     frame_with(&ctx, &mut app, vec![Event::Paste(big)], CTRL_KEY);
-    assert!(
-        app.notice().is_some_and(|n| n.contains("too large")),
-        "{:?}",
-        app.notice()
-    );
+    until(&ctx, &mut app, "size notice", |a| {
+        a.notice().is_some_and(|n| n.contains("too large"))
+    })
+    .await;
     // No ClientCutText came through, only the shortcut keys, and the
     // connection is still usable afterwards.
     assert_eq!(

@@ -493,3 +493,27 @@ async fn qemu_answers_a_resize_request_even_though_a_bios_guest_cannot_comply() 
         l.status
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn qemu_takes_part_in_extended_clipboard() {
+    use farpane_viewer::ClipboardSent;
+    let Some((_qemu, addr)) = start(None) else {
+        return;
+    };
+    let mut screen = RemoteScreen::connect(&addr, None).await.unwrap();
+    // QEMU announces its clipboard capabilities after SetEncodings; the viewer
+    // answers while it processes events.
+    follow(&mut screen, Duration::from_secs(2)).await;
+    let sent = screen
+        .send_clipboard("5\u{20ac} \u{4f60}\u{597d}")
+        .await
+        .unwrap();
+    assert_eq!(
+        sent,
+        ClipboardSent::Utf8,
+        "QEMU should have announced UTF-8 text"
+    );
+    // QEMU asks for the text (a notify) or accepts it unsolicited; either way
+    // the connection stays healthy afterwards.
+    follow(&mut screen, Duration::from_secs(2)).await;
+}
