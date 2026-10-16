@@ -55,6 +55,9 @@ const RESIZE_SETTLE: f64 = 0.4;
 /// Smallest remote size we ask for.
 const MIN_REMOTE_SIZE: u16 = 64;
 
+/// Below this window width, in points, the session controls fold into a menu.
+const NARROW_BAR: f32 = 1080.0;
+
 /// Cursors wider or taller than this are not drawn (the server still thinks
 /// we show them, so we hide ours rather than the local one).
 const MAX_CURSOR_PX: u16 = 512;
@@ -146,6 +149,8 @@ pub struct ViewerApp {
     server_can_resize: bool,
     /// Protocol version and security of the current session.
     session_info: Option<(String, String)>,
+    /// Whether the bar under the picture is shown.
+    show_footer: bool,
     /// The server refused a request: stop asking for this connection.
     resize_refused: bool,
     /// A size we want to ask for, and when the window first had it.
@@ -233,6 +238,7 @@ impl ViewerApp {
             resize_remote: input.resize_remote,
             server_can_resize: false,
             session_info: None,
+            show_footer: look.show_footer,
             resize_refused: false,
             resize_wanted: None,
             last_requested: None,
@@ -328,6 +334,16 @@ impl ViewerApp {
             self.resize_refused = false;
             self.last_requested = None;
         }
+    }
+
+    /// Whether the bar under the picture is shown.
+    #[must_use]
+    pub fn show_footer(&self) -> bool {
+        self.show_footer
+    }
+
+    pub fn set_show_footer(&mut self, on: bool) {
+        self.show_footer = on;
     }
 
     /// Whether the server has shown that it supports resizing.
@@ -446,7 +462,7 @@ impl ViewerApp {
         if !immersive {
             self.top_bar(ctx, &tokens);
         }
-        if !immersive && self.is_connected() {
+        if !immersive && self.show_footer && self.is_connected() {
             self.session_footer(ctx, &tokens);
         }
         match self.phase {
@@ -711,6 +727,7 @@ impl ViewerApp {
             accent: appearance::accent_key(self.accent).to_owned(),
             interface_size: self.interface_size,
             reduce_transparency: self.reduce_transparency,
+            show_footer: self.show_footer,
         };
         let input = settings::Input {
             capture: self.capture_pref.key().to_owned(),
@@ -1011,6 +1028,10 @@ impl ViewerApp {
                         );
                         ctx.request_repaint_after(Duration::from_secs(1));
                     }
+                    // In a narrow window the less used controls move into a
+                    // menu, so the bar never runs out of room.
+                    let narrow = ctx.screen_rect().width() < NARROW_BAR;
+                    let connected = matches!(self.phase, Phase::Connected { .. });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
                             .selected_text(appearance::theme_label(self.theme))
@@ -1023,63 +1044,91 @@ impl ViewerApp {
                                     );
                                 }
                             });
-                        ui.label(RichText::new("Theme").color(tokens.muted));
+                        if !narrow {
+                            ui.label(RichText::new("Theme").color(tokens.muted));
+                        }
                         if ui.button("Settings").clicked() {
                             self.settings_open = !self.settings_open;
                         }
-                        if matches!(self.phase, Phase::Connected { .. }) {
-                            ui.add_space(8.0);
-                            ui.checkbox(&mut self.clipboard_sync, "Clipboard")
-                                .on_hover_text(
-                                    "Share text between this computer and the remote one",
-                                );
+                        if !connected {
+                            return;
                         }
-                        if matches!(self.phase, Phase::Connected { .. }) {
-                            ui.add_space(12.0);
+                        if narrow {
                             if ui.button("Disconnect").clicked() {
                                 self.core.send(Command::Disconnect);
                             }
-                            if ui.button("Full screen").clicked() {
-                                self.set_fullscreen(ctx, true);
-                            }
-                            if ui.button("Ctrl+Alt+Del").clicked() {
-                                self.send_ctrl_alt_del();
-                            }
-                            let label = if self.one_to_one {
-                                "Fit to window"
-                            } else {
-                                "Actual size"
-                            };
-                            if ui.button(label).clicked() {
-                                self.one_to_one = !self.one_to_one;
-                            }
-                            ui.toggle_value(&mut self.stats_visible, "Stats")
-                                .on_hover_text("Ctrl+Alt+Shift+S");
-                            let mut resize = self.resize_remote;
-                            if ui
-                                .toggle_value(&mut resize, "Resize remote")
-                                .on_hover_text(self.resize_hint())
-                                .changed()
-                            {
-                                self.set_resize_remote(resize);
-                            }
-                            let mut capturing = self.capture_wanted();
-                            let status = self.capture_status();
-                            if ui
-                                .toggle_value(&mut capturing, "Capture keys")
-                                .on_hover_text(status)
-                                .changed()
-                            {
-                                self.set_capture_pref(if capturing {
-                                    CapturePref::Always
-                                } else {
-                                    CapturePref::Never
-                                });
-                            }
+                            ui.menu_button("More", |ui| {
+                                self.session_controls(ctx, ui, true);
+                            });
+                            return;
                         }
+                        ui.add_space(8.0);
+                        ui.checkbox(&mut self.clipboard_sync, "Clipboard")
+                            .on_hover_text("Share text between this computer and the remote one");
+                        ui.add_space(12.0);
+                        if ui.button("Disconnect").clicked() {
+                            self.core.send(Command::Disconnect);
+                        }
+                        self.session_controls(ctx, ui, false);
                     });
                 });
             }
+        }
+    }
+
+    /// The session's buttons, in the bar (right to left) or in the "More" menu.
+    fn session_controls(&mut self, ctx: &Context, ui: &mut egui::Ui, in_menu: bool) {
+        if ui.button("Full screen").clicked() {
+            self.set_fullscreen(ctx, true);
+            if in_menu {
+                ui.close();
+            }
+        }
+        if ui.button("Ctrl+Alt+Del").clicked() {
+            self.send_ctrl_alt_del();
+            if in_menu {
+                ui.close();
+            }
+        }
+        let label = if self.one_to_one {
+            "Fit to window"
+        } else {
+            "Actual size"
+        };
+        if ui.button(label).clicked() {
+            self.one_to_one = !self.one_to_one;
+            if in_menu {
+                ui.close();
+            }
+        }
+        ui.toggle_value(&mut self.stats_visible, "Stats")
+            .on_hover_text("Ctrl+Alt+Shift+S");
+        let mut resize = self.resize_remote;
+        if ui
+            .toggle_value(&mut resize, "Resize remote")
+            .on_hover_text(self.resize_hint())
+            .changed()
+        {
+            self.set_resize_remote(resize);
+        }
+        let mut capturing = self.capture_wanted();
+        let status = self.capture_status();
+        if ui
+            .toggle_value(&mut capturing, "Capture keys")
+            .on_hover_text(status)
+            .changed()
+        {
+            self.set_capture_pref(if capturing {
+                CapturePref::Always
+            } else {
+                CapturePref::Never
+            });
+        }
+        // In the bar the clipboard has its own box and the footer is a
+        // setting; in the menu both are here.
+        if in_menu {
+            ui.checkbox(&mut self.clipboard_sync, "Clipboard");
+            ui.checkbox(&mut self.show_footer, "Footer");
         }
     }
 
@@ -1836,6 +1885,9 @@ impl ViewerApp {
                         ui.end_row();
                         ui.label("Reduce transparency");
                         ui.checkbox(&mut self.reduce_transparency, "Solid panels");
+                        ui.end_row();
+                        ui.label("Session footer");
+                        ui.checkbox(&mut self.show_footer, "Show under the picture");
                         ui.end_row();
                         ui.label("Capture keyboard");
                         ui.horizontal(|ui| {
