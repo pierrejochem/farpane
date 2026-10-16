@@ -20,6 +20,22 @@ const MAX_TRACKED: usize = 4096;
 #[derive(Debug, Default)]
 pub struct Throttle {
     failures: HashMap<IpAddr, (u32, Instant)>,
+    /// Connections open per address.
+    open: HashMap<IpAddr, usize>,
+}
+
+/// What one client counts as: its own address, or its whole /64 for IPv6
+/// (one customer typically holds a /64 and can pick any address in it).
+fn key(ip: IpAddr) -> IpAddr {
+    let IpAddr::V6(v6) = ip else {
+        return ip;
+    };
+    if let Some(v4) = v6.to_ipv4_mapped() {
+        return IpAddr::V4(v4);
+    }
+    let mut octets = v6.octets();
+    octets[8..].fill(0);
+    IpAddr::from(octets)
 }
 
 impl Throttle {
@@ -31,7 +47,7 @@ impl Throttle {
     /// How long a connection from `ip` has to wait at `now`.
     #[must_use]
     pub fn delay(&self, ip: IpAddr, now: Instant) -> Duration {
-        match self.failures.get(&ip) {
+        match self.failures.get(&key(ip)) {
             Some(&(n, at)) if n > 0 && now.saturating_duration_since(at) < FORGET_AFTER => {
                 // 2^(n-1) seconds, without overflowing for large n.
                 let secs = 1u64 << (n - 1).min(10);
@@ -41,7 +57,30 @@ impl Throttle {
         }
     }
 
+    /// Admit a connection from `ip`, or `None` when it already has `max_open`.
+    /// The caller must call [`Throttle::leave`] when the connection ends.
+    pub fn enter(&mut self, ip: IpAddr, max_open: usize) -> bool {
+        let open = self.open.entry(key(ip)).or_insert(0);
+        if *open >= max_open {
+            return false;
+        }
+        *open += 1;
+        true
+    }
+
+    /// A connection admitted by [`Throttle::enter`] ended.
+    pub fn leave(&mut self, ip: IpAddr) {
+        let k = key(ip);
+        if let Some(open) = self.open.get_mut(&k) {
+            *open -= 1;
+            if *open == 0 {
+                self.open.remove(&k);
+            }
+        }
+    }
+
     pub fn record_failure(&mut self, ip: IpAddr, now: Instant) {
+        let ip = key(ip);
         if self.failures.len() >= MAX_TRACKED && !self.failures.contains_key(&ip) {
             self.failures
                 .retain(|_, &mut (_, at)| now.saturating_duration_since(at) < FORGET_AFTER);
@@ -67,7 +106,7 @@ impl Throttle {
 
     /// A successful sign-in clears the address.
     pub fn record_success(&mut self, ip: IpAddr) {
-        self.failures.remove(&ip);
+        self.failures.remove(&key(ip));
     }
 }
 
@@ -109,6 +148,29 @@ mod tests {
         assert_eq!(t.delay(ip(1), now + FORGET_AFTER), Duration::from_secs(1));
         t.record_success(ip(1));
         assert_eq!(t.delay(ip(1), now + FORGET_AFTER), Duration::ZERO);
+    }
+
+    #[test]
+    fn an_ipv6_prefix_counts_as_one_address() {
+        let mut t = Throttle::new();
+        let now = Instant::now();
+        let a: IpAddr = "2001:db8::1".parse().unwrap();
+        let b: IpAddr = "2001:db8::ffff:2".parse().unwrap();
+        let other: IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        t.record_failure(a, now);
+        assert_eq!(t.delay(b, now), Duration::from_secs(1));
+        assert_eq!(t.delay(other, now), Duration::ZERO);
+    }
+
+    #[test]
+    fn open_connections_per_address_are_capped_and_given_back() {
+        let mut t = Throttle::new();
+        assert!(t.enter(ip(1), 2));
+        assert!(t.enter(ip(1), 2));
+        assert!(!t.enter(ip(1), 2));
+        assert!(t.enter(ip(2), 2), "other addresses are unaffected");
+        t.leave(ip(1));
+        assert!(t.enter(ip(1), 2));
     }
 
     #[test]

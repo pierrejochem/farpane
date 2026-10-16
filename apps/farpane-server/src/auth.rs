@@ -2,7 +2,7 @@
 //! behind one verifier.
 
 use std::{
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Condvar, Mutex, RwLock},
     time::Instant,
 };
 
@@ -18,6 +18,7 @@ pub struct Authenticator {
     users: Arc<RwLock<UserStore>>,
     lockout: Arc<Mutex<Lockout>>,
     log: Arc<dyn Fn(String) + Send + Sync>,
+    gate: Arc<HashGate>,
 }
 
 impl std::fmt::Debug for Authenticator {
@@ -33,6 +34,7 @@ impl Authenticator {
             users: Arc::new(RwLock::new(users)),
             lockout: Arc::new(Mutex::new(Lockout::new())),
             log: Arc::new(log),
+            gate: Arc::new(HashGate::new()),
         }
     }
 
@@ -64,12 +66,21 @@ impl Authenticator {
             return false;
         };
         let now = Instant::now();
-        let locked = self
-            .lockout
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .locked_until(name, now)
-            .is_some();
+        // Count the attempt as a failure *before* the slow check and undo it
+        // on success. Checking first and recording afterwards would let any
+        // number of parallel guesses pass the lock check while the first
+        // ones are still being hashed.
+        let (locked, now_locked) = {
+            let mut lockout = self
+                .lockout
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if lockout.locked_until(name, now).is_some() {
+                (true, false)
+            } else {
+                (false, lockout.record_failure(name, now))
+            }
+        };
         // Pick up edits made with `farpane-server user ...` while running.
         self.users
             .write()
@@ -77,15 +88,13 @@ impl Authenticator {
             .reload_if_changed();
         // Always do the expensive check, so a locked name takes as long as
         // any other and the right password cannot be told from the answer.
-        let role = self
-            .users
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .verify(name, password);
-        let mut lockout = self
-            .lockout
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let role = {
+            let _slot = self.gate.enter();
+            self.users
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .verify(name, password)
+        };
         if locked {
             (self.log)(format!(
                 "sign-in refused for {name:?}: the account is locked"
@@ -93,10 +102,12 @@ impl Authenticator {
             return false;
         }
         if role.is_some() {
-            lockout.record_success(name);
+            self.lockout
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_success(name);
             true
         } else {
-            let now_locked = lockout.record_failure(name, now);
             (self.log)(format!("sign-in failed for {name:?}"));
             if now_locked {
                 (self.log)(format!(
@@ -105,6 +116,57 @@ impl Authenticator {
             }
             false
         }
+    }
+}
+
+/// Lets at most [`MAX_HASHES`] password checks run at once. Argon2id takes
+/// tens of megabytes and some tens of milliseconds, so without a bound a
+/// crowd of unauthenticated connections could exhaust memory.
+#[derive(Debug)]
+struct HashGate {
+    running: Mutex<usize>,
+    freed: Condvar,
+}
+
+/// Most password hashes computed at the same time.
+const MAX_HASHES: usize = 4;
+
+/// Held while one hash runs.
+struct HashSlot<'a>(&'a HashGate);
+
+impl HashGate {
+    fn new() -> Self {
+        Self {
+            running: Mutex::new(0),
+            freed: Condvar::new(),
+        }
+    }
+
+    /// Wait for a free slot (the caller is on a blocking thread).
+    fn enter(&self) -> HashSlot<'_> {
+        let mut running = self
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *running >= MAX_HASHES {
+            running = self
+                .freed
+                .wait(running)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *running += 1;
+        HashSlot(self)
+    }
+}
+
+impl Drop for HashSlot<'_> {
+    fn drop(&mut self) {
+        *self
+            .0
+            .running
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) -= 1;
+        self.0.freed.notify_one();
     }
 }
 
@@ -168,5 +230,22 @@ mod tests {
             assert!(!auth.check(b"ghost", b"whatever pass"));
         }
         assert!(log.lock().unwrap().join("\n").contains("account is locked"));
+    }
+
+    #[test]
+    fn parallel_guesses_cannot_get_past_the_lock() {
+        let (_d, auth, _log) = setup();
+        let handles: Vec<_> = (0..12)
+            .map(|_| {
+                let auth = auth.clone();
+                std::thread::spawn(move || auth.check(b"alice", b"wrong pass"))
+            })
+            .collect();
+        for h in handles {
+            assert!(!h.join().unwrap());
+        }
+        // Twelve attempts at once must have locked the name, so now even the
+        // right password is refused.
+        assert!(!auth.check(b"alice", b"alice's pass"));
     }
 }

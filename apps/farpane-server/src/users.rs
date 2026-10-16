@@ -120,14 +120,17 @@ impl From<io::Error> for UserError {
 }
 
 const MIN_PASSWORD: usize = 8;
-const MAX_PASSWORD: usize = 256;
+/// 255 so that every password also fits the one-byte length of RSA-AES.
+const MAX_PASSWORD: usize = 255;
 
 /// The users, with the file they live in.
 #[derive(Debug)]
 pub struct UserStore {
     path: PathBuf,
     users: Vec<User>,
-    modified: Option<SystemTime>,
+    /// Modification time and length when last read: a same-second edit that
+    /// changes the length is still noticed.
+    modified: Option<(SystemTime, u64)>,
 }
 
 fn valid_name(name: &str) -> Result<(), UserError> {
@@ -150,7 +153,7 @@ fn hash(password: &[u8]) -> Result<String, UserError> {
         return Err(UserError::BadPassword("must be at least 8 characters"));
     }
     if password.len() > MAX_PASSWORD {
-        return Err(UserError::BadPassword("must be at most 256 bytes"));
+        return Err(UserError::BadPassword("must be at most 255 bytes"));
     }
     Argon2::default()
         .hash_password(password)
@@ -175,10 +178,7 @@ impl UserStore {
                         file.version
                     )));
                 }
-                (
-                    file.users,
-                    fs::metadata(path).and_then(|m| m.modified()).ok(),
-                )
+                (file.users, stamp(path))
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => (Vec::new(), None),
             Err(e) => return Err(e.into()),
@@ -194,7 +194,7 @@ impl UserStore {
     /// it did. A file that fails to parse is ignored (the old list stays), so a
     /// half-written edit cannot lock everyone out.
     pub fn reload_if_changed(&mut self) -> bool {
-        let now = fs::metadata(&self.path).and_then(|m| m.modified()).ok();
+        let now = stamp(&self.path);
         if now == self.modified {
             return false;
         }
@@ -248,7 +248,7 @@ impl UserStore {
             fs::create_dir_all(dir)?;
         }
         write_private(&self.path, text.as_bytes())?;
-        self.modified = fs::metadata(&self.path).and_then(|m| m.modified()).ok();
+        self.modified = stamp(&self.path);
         Ok(())
     }
 
@@ -347,11 +347,20 @@ fn dummy_hash() -> &'static str {
 }
 
 /// Write `data` to `path` through a temporary file, with mode 0600 on Unix.
+/// Modification time and length of `path`, if it can be read.
+fn stamp(path: &Path) -> Option<(SystemTime, u64)> {
+    let meta = fs::metadata(path).ok()?;
+    Some((meta.modified().ok()?, meta.len()))
+}
+
 pub(crate) fn write_private(path: &Path, data: &[u8]) -> io::Result<()> {
     use std::io::Write;
     let tmp = path.with_extension("tmp");
     let mut options = fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    // `create_new` refuses a leftover file or a planted symlink, which
+    // would keep its own (possibly wider) permissions.
+    let _ = fs::remove_file(&tmp);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

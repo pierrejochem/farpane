@@ -86,10 +86,27 @@ pub struct Server {
     /// Connections being served or still in their handshake.
     connections: AtomicUsize,
     max_connections: usize,
+    max_per_address: usize,
 }
 
 /// Connections allowed at once unless [`Server::set_max_connections`] says otherwise.
 pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
+/// Connections one address may hold at once unless
+/// [`Server::set_max_per_address`] says otherwise.
+pub const DEFAULT_MAX_PER_ADDRESS: usize = 32;
+
+/// Counts a connection against its address for as long as it lives.
+struct AddressSlot<'a>(&'a Mutex<Throttle>, std::net::IpAddr);
+
+impl Drop for AddressSlot<'_> {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .leave(self.1);
+    }
+}
 
 /// Counts a connection for as long as it lives.
 struct Slot<'a>(&'a AtomicUsize);
@@ -190,6 +207,7 @@ impl Server {
             throttle: Mutex::new(Throttle::new()),
             connections: AtomicUsize::new(0),
             max_connections: DEFAULT_MAX_CONNECTIONS,
+            max_per_address: DEFAULT_MAX_PER_ADDRESS,
         })
     }
 
@@ -207,6 +225,12 @@ impl Server {
     /// flood of connections can cause.
     pub fn set_max_connections(&mut self, max: usize) {
         self.max_connections = max.max(1);
+    }
+
+    /// The most connections one address may hold at once (an IPv6 /64 counts
+    /// as one address), so a single machine cannot fill every slot.
+    pub fn set_max_per_address(&mut self, max: usize) {
+        self.max_per_address = max.max(1);
     }
 
     /// Receive [`Event`]s: sign-ins, hang-ups, failures.
@@ -353,6 +377,25 @@ impl Server {
             });
             return Err(error);
         }
+        let _address = match peer {
+            Some(p) => {
+                let admitted = self
+                    .throttle
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .enter(p.ip(), self.max_per_address);
+                if !admitted {
+                    let error = Error::Config("too many connections from this address");
+                    self.emit(&Event::HandshakeFailed {
+                        peer,
+                        error: error.to_string(),
+                    });
+                    return Err(error);
+                }
+                Some(AddressSlot(&self.throttle, p.ip()))
+            }
+            None => None,
+        };
         if let Some(p) = peer {
             let wait = self
                 .throttle

@@ -149,7 +149,11 @@ impl X11Input {
             (code, false)
         } else if let (true, Some(spare)) = (down, st.spare) {
             // Borrow the spare keycode for a symbol nothing maps (a euro sign
-            // on a US keyboard, say).
+            // on a US keyboard, say). One still held down is let go first, so
+            // it is not left pressed under a different symbol.
+            if let Some((old, _)) = st.borrowed {
+                self.fake(KEY_RELEASE, old, 0, 0)?;
+            }
             self.conn
                 .change_keyboard_mapping(
                     1,
