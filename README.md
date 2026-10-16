@@ -5,10 +5,10 @@
 A VNC-compatible remote desktop viewer and server, written in Rust.
 
 - **Farpane Viewer** connects to any RFB/VNC server (TigerVNC, QEMU, macOS Screen Sharing, x11vnc, …).
-- **Farpane Server** shares Windows, macOS and Linux (X11 and Wayland) desktops, including unattended access, with its own user accounts and a dashboard UI.
-- Modern security by default (VeNCrypt with X.509, RA2-256), browser access via noVNC, Glass, Slate and Light themes.
+- **Farpane Server** shares a Linux desktop (X11, or Wayland through the desktop portal) with its own user accounts, TLS or RSA-AES, and a dashboard window. Windows and macOS capture and input backends are not written yet.
+- Encrypted by default for signed-in users (VeNCrypt with X.509, RSA-AES), Glass, Slate and Light themes. Browser access via noVNC is planned.
 
-> Status: early development. The protocol core (`crates/rfb-proto`) is being built; the apps are placeholders.
+> Status: early development, not released. Viewer and server work against each other and against real servers (QEMU and a kiosk VNC server); see `CLAUDE.md` for what is verified and what is not.
 
 ## Build
 
@@ -24,13 +24,18 @@ cargo test --workspace
 | Path | Contents |
 |---|---|
 | `crates/rfb-proto` | Sans-IO RFB protocol core |
-| `crates/rfb-codec` | Pixel encodings |
-| `crates/rfb-security` | Security handshakes |
+| `crates/rfb-codec` | Pixel encoders and decoders, clipboard messages |
+| `crates/rfb-security` | Cryptography for the security types (TLS trust, RSA-AES, VNC Auth) |
+| `crates/rfb-tokio` | Async client and server sessions |
+| `crates/rfb-server` | The server engine: capture thread, per-client tasks, `Source` and `Input` traits |
+| `crates/farpane-x11`, `crates/farpane-wayland` | Linux capture and input backends |
+| `crates/farpane-grab` | Keyboard capture for the viewer |
 | `crates/farpane-ui` | Shared dashboard UI and themes |
 | `apps/` | `farpane-viewer` and `farpane-server` binaries |
 | `packaging/` | Installers and packages for Windows, macOS and Linux |
 | `docs/design/` | Design reference and UI mockups |
 | `docs/brand/` | Icon and brand assets |
+| `tools/interop/` | Independent RSA-AES implementation in Python, used to cross-check the Rust one |
 
 ## Releases
 

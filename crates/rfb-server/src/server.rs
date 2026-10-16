@@ -83,6 +83,21 @@ pub struct Server {
     policy: Option<Policy>,
     events: Option<Sink>,
     throttle: Mutex<Throttle>,
+    /// Connections being served or still in their handshake.
+    connections: AtomicUsize,
+    max_connections: usize,
+}
+
+/// Connections allowed at once unless [`Server::set_max_connections`] says otherwise.
+pub const DEFAULT_MAX_CONNECTIONS: usize = 256;
+
+/// Counts a connection for as long as it lives.
+struct Slot<'a>(&'a AtomicUsize);
+
+impl Drop for Slot<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 impl std::fmt::Debug for Server {
@@ -173,6 +188,8 @@ impl Server {
             policy: None,
             events: None,
             throttle: Mutex::new(Throttle::new()),
+            connections: AtomicUsize::new(0),
+            max_connections: DEFAULT_MAX_CONNECTIONS,
         })
     }
 
@@ -183,6 +200,13 @@ impl Server {
         policy: impl Fn(Option<&str>) -> Permission + Send + Sync + 'static,
     ) {
         self.policy = Some(Arc::new(policy));
+    }
+
+    /// The most connections served at once, handshakes included: further ones
+    /// are dropped at once. Bounds the memory and the password-hashing work a
+    /// flood of connections can cause.
+    pub fn set_max_connections(&mut self, max: usize) {
+        self.max_connections = max.max(1);
     }
 
     /// Receive [`Event`]s: sign-ins, hang-ups, failures.
@@ -319,6 +343,16 @@ impl Server {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
+        let in_use = self.connections.fetch_add(1, Ordering::Relaxed) + 1;
+        let _slot = Slot(&self.connections);
+        if in_use > self.max_connections {
+            let error = Error::Config("too many connections");
+            self.emit(&Event::HandshakeFailed {
+                peer,
+                error: error.to_string(),
+            });
+            return Err(error);
+        }
         if let Some(p) = peer {
             let wait = self
                 .throttle

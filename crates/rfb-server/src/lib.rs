@@ -3,7 +3,7 @@
 //! (design doc, section 23).
 //!
 //! Platform specifics are behind [`Source`] and [`Input`]. Authentication,
-//! TLS and the handshake come from `rfb-tokio`'s [`ServerOptions`].
+//! TLS and the handshake come from `rfb-tokio`'s `ServerOptions`.
 
 mod client;
 mod region;
@@ -16,6 +16,6 @@ mod throttle;
 pub use region::Region;
 pub use registry::{ClientInfo, Preview};
 pub use scroll::{Copy, find_copy};
-pub use server::{Event, Permission, Server, Settings};
+pub use server::{DEFAULT_MAX_CONNECTIONS, Event, Permission, Server, Settings};
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
 pub use throttle::Throttle;

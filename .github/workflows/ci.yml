@@ -32,6 +32,9 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked
+      - name: Docs build without warnings
+        if: runner.os == 'Linux'
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
       - name: Test
         run: cargo test --workspace --locked
       - name: rfb-proto builds without std

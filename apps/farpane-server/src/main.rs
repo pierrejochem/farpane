@@ -51,6 +51,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
                          users; $FARPANE_PASSWORD also works
   --allow-no-auth        accept connections without credentials on a
                          non-loopback address (a bad idea without a tunnel)
+  --max-connections N    most connections at once, handshakes included (default 256)
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
@@ -69,6 +70,7 @@ struct Args {
     listen: SocketAddr,
     size: (u16, u16),
     fps: u32,
+    max_connections: Option<usize>,
     password: Option<Vec<u8>>,
     view_only: bool,
     allow_no_auth: bool,
@@ -97,6 +99,7 @@ fn value(it: &mut Words, name: &str) -> Result<String, String> {
     it.next().ok_or(format!("{name} needs a value"))
 }
 
+#[allow(clippy::too_many_lines)] // one arm per option
 fn parse() -> Result<Args, String> {
     let mut args = Args {
         listen: "127.0.0.1:5900"
@@ -104,6 +107,7 @@ fn parse() -> Result<Args, String> {
             .map_err(|_| "bad default address")?,
         size: (1024, 768),
         fps: 30,
+        max_connections: None,
         password: std::env::var("FARPANE_PASSWORD")
             .ok()
             .filter(|p| !p.is_empty())
@@ -160,6 +164,13 @@ fn parse() -> Result<Args, String> {
                 args.fps = value(&mut it, "--fps")?
                     .parse()
                     .map_err(|_| "--fps: not a number")?;
+            }
+            "--max-connections" => {
+                args.max_connections = Some(
+                    value(&mut it, "--max-connections")?
+                        .parse()
+                        .map_err(|_| "--max-connections: not a number")?,
+                );
             }
             "--password-file" => {
                 let path = value(&mut it, "--password-file")?;
@@ -461,6 +472,9 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         })?;
     if let Some(auth) = access.authenticator.clone() {
         server.set_policy(move |user| auth.permission(user));
+    }
+    if let Some(max) = args.max_connections {
+        server.set_max_connections(max);
     }
     let sink = events.clone();
     server.set_events(move |e| {

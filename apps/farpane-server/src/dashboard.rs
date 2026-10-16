@@ -5,7 +5,7 @@
 //! running without it (`--headless`).
 
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -149,6 +149,9 @@ pub struct Dashboard {
     /// Bytes per second in and out since the last sample.
     rates: (f64, f64),
     out_history: VecDeque<f32>,
+    in_history: VecDeque<f32>,
+    /// Per client: bytes sent at the last sample and bytes per second since.
+    client_rates: HashMap<u64, (u64, f64)>,
     preview: Option<TextureHandle>,
     last_preview: f64,
     users: UsersPanel,
@@ -259,6 +262,8 @@ impl Dashboard {
             last_totals: (0, 0),
             rates: (0.0, 0.0),
             out_history: VecDeque::new(),
+            in_history: VecDeque::new(),
+            client_rates: HashMap::new(),
             preview: None,
             last_preview: f64::NEG_INFINITY,
             users: UsersPanel::new(),
@@ -335,12 +340,25 @@ impl Dashboard {
                 per_sec(totals.1, self.last_totals.1),
             );
             self.last_totals = totals;
+            self.client_rates = self
+                .clients
+                .iter()
+                .map(|c| {
+                    let old = self.client_rates.get(&c.id).map_or(c.bytes_out, |r| r.0);
+                    (c.id, (c.bytes_out, per_sec(c.bytes_out, old)))
+                })
+                .collect();
             self.last_sample = now;
-            if self.out_history.len() >= HISTORY_LEN {
-                self.out_history.pop_front();
+            for (history, value) in [
+                (&mut self.out_history, self.rates.1),
+                (&mut self.in_history, self.rates.0),
+            ] {
+                if history.len() >= HISTORY_LEN {
+                    history.pop_front();
+                }
+                #[allow(clippy::cast_possible_truncation)] // a chart value
+                history.push_back(value as f32);
             }
-            #[allow(clippy::cast_possible_truncation)] // a chart value
-            self.out_history.push_back(self.rates.1 as f32);
         }
         if self.page == Page::Overview && now - self.last_preview >= PREVIEW_EVERY {
             self.last_preview = now;
@@ -519,15 +537,22 @@ impl Dashboard {
         style::apply(ctx, &tokens);
 
         egui::SidePanel::left("nav")
-            .exact_width(190.0)
-            .frame(
-                Frame::NONE
-                    .fill(tokens.card.into())
-                    .inner_margin(Margin::same(14)),
-            )
+            .exact_width(268.0)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
+                left: 18,
+                right: 0,
+                top: 18,
+                bottom: 18,
+            }))
             .show(ctx, |ui| self.nav(ui, &tokens));
         egui::TopBottomPanel::bottom("notice")
-            .frame(Frame::NONE.inner_margin(Margin::symmetric(14, 6)))
+            .frame(
+                Frame::NONE
+                    .fill(tokens.bg.into())
+                    .inner_margin(Margin::symmetric(18, 6)),
+            )
             .show_animated(ctx, self.notice.is_some(), |ui| {
                 if let Some(text) = self.notice.clone() {
                     ui.horizontal(|ui| {
@@ -545,14 +570,15 @@ impl Dashboard {
                     .inner_margin(Margin::same(18)),
             )
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing.y = GAP;
+                self.top_bar(ui, &tokens);
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.heading(self.page.title());
-                        ui.add_space(8.0);
+                        ui.spacing_mut().item_spacing.y = GAP;
                         match self.page {
                             Page::Overview => self.overview(ui, &tokens),
-                            Page::Clients => self.clients_page(ui, &tokens),
+                            Page::Clients => self.clients_card(ui, &tokens),
                             Page::Users => self.users_page(ui, &tokens),
                             Page::Security => self.security_page(ui, &tokens),
                             Page::Log => self.log_page(ui, &tokens),
@@ -589,202 +615,450 @@ impl Dashboard {
         ctx.request_repaint_after(Duration::from_millis(100));
     }
 
-    fn nav(&mut self, ui: &mut Ui, tokens: &Tokens) {
-        ui.label(RichText::new("Farpane Server").strong().size(18.0));
-        ui.add_space(12.0);
-        for page in Page::ALL {
-            let count = match page {
-                Page::Clients if !self.clients.is_empty() => format!(" ({})", self.clients.len()),
-                _ => String::new(),
-            };
-            let label = format!("{}{count}", page.title());
-            if ui.selectable_label(self.page == page, label).clicked() {
-                self.page = page;
-            }
-        }
-        ui.with_layout(Layout::bottom_up(Align::LEFT), |ui| {
-            ui.label(
-                RichText::new(env!("CARGO_PKG_VERSION"))
-                    .color(tokens.muted)
-                    .small(),
-            );
-            egui::ComboBox::from_id_salt("theme")
-                .selected_text(crate::dashboard::theme_label(self.theme))
-                .show_ui(ui, |ui| {
-                    for t in [
-                        ThemePreference::Glass,
-                        ThemePreference::Slate,
-                        ThemePreference::Light,
-                        ThemePreference::System,
-                    ] {
-                        ui.selectable_value(&mut self.theme, t, theme_label(t));
-                    }
-                });
-            ui.label(RichText::new("Theme").color(tokens.muted).small());
-        });
-    }
-
-    fn card<R>(ui: &mut Ui, tokens: &Tokens, add: impl FnOnce(&mut Ui) -> R) -> R {
-        Frame::NONE
-            .fill(tokens.card.into())
-            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
-            .corner_radius(style::radius(tokens.radius / 1.5))
-            .inner_margin(Margin::symmetric(14, 10))
-            .show(ui, add)
-            .inner
-    }
-
-    fn overview(&mut self, ui: &mut Ui, tokens: &Tokens) {
+    fn top_bar(&mut self, ui: &mut Ui, tokens: &Tokens) {
         let running = self.status.failure.is_none();
-        ui.horizontal_wrapped(|ui| {
-            Self::card(ui, tokens, |ui| {
-                ui.set_min_width(170.0);
-                ui.label(RichText::new("Status").color(tokens.muted).small());
-                let (text, colour) = if running {
-                    ("Running", tokens.green)
+        Self::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(self.page.title()).strong().size(18.0));
+                let (text, tone) = if running {
+                    ("Sharing", tokens.green)
                 } else {
                     ("Stopped", tokens.red)
                 };
-                ui.label(RichText::new(text).strong().size(18.0).color(colour));
-                ui.label(RichText::new(format!("Listening on {}", self.status.listen)).small());
-                if let Some(why) = &self.status.failure {
-                    ui.label(
-                        RichText::new(format!("Capture stopped: {why}"))
-                            .color(tokens.red)
-                            .small(),
-                    );
-                }
-            });
-            Self::card(ui, tokens, |ui| {
-                ui.set_min_width(130.0);
-                ui.label(RichText::new("Clients").color(tokens.muted).small());
-                ui.label(
-                    RichText::new(self.clients.len().to_string())
-                        .strong()
-                        .size(18.0),
-                );
-                let viewing = self.clients.iter().filter(|c| c.view_only).count();
-                ui.label(RichText::new(format!("{viewing} view only")).small());
-            });
-            Self::card(ui, tokens, |ui| {
-                ui.set_min_width(200.0);
-                ui.label(RichText::new("Traffic").color(tokens.muted).small());
-                ui.label(
-                    RichText::new(format!("out {}", format_rate(self.rates.1)))
-                        .strong()
-                        .size(18.0),
-                );
-                ui.label(RichText::new(format!("in {}", format_rate(self.rates.0))).small());
-                let history: Vec<f32> = self.out_history.iter().copied().collect();
-                widgets::sparkline(
-                    ui,
-                    &history,
-                    vec2(180.0, 28.0),
-                    HISTORY_LEN,
-                    None,
-                    tokens.accent.into(),
-                );
+                badge(ui, text, tone.into());
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    self.theme_switch(ui, tokens);
+                });
             });
         });
-        ui.add_space(10.0);
-        Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Sharing").color(tokens.muted).small());
-            let (w, h) = self.status.screen;
-            ui.label(format!("{} ({w} × {h})", self.status.source));
-            ui.label(RichText::new(&self.status.access).small());
-            for (label, fingerprint) in &self.status.fingerprints {
-                ui.horizontal_wrapped(|ui| {
+    }
+
+    /// The theme choice as one segmented control.
+    fn theme_switch(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        Frame::NONE
+            .fill(inset(tokens))
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+            .corner_radius(style::radius(10.0))
+            .inner_margin(Margin::same(3))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // Laid out right to left, so listed in reverse.
+                    for t in [
+                        ThemePreference::System,
+                        ThemePreference::Light,
+                        ThemePreference::Slate,
+                        ThemePreference::Glass,
+                    ] {
+                        let on = self.theme == t;
+                        let colour = if on { tokens.text } else { tokens.muted };
+                        let button = egui::Button::new(
+                            RichText::new(theme_label(t)).size(12.0).color(colour),
+                        )
+                        .fill(if on {
+                            selected(tokens)
+                        } else {
+                            Color32::TRANSPARENT
+                        })
+                        .stroke(egui::Stroke::NONE)
+                        .corner_radius(style::radius(7.0));
+                        if ui.add(button).clicked() {
+                            self.theme = t;
+                        }
+                    }
+                });
+            });
+    }
+
+    fn nav(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        Self::card_frame(tokens, 14, 22).show(ui, |ui| {
+            ui.set_min_size(ui.available_size());
+            ui.horizontal(|ui| {
+                brand_mark(ui, tokens, 38.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new("Farpane Server").strong().size(15.0));
                     ui.label(
-                        RichText::new(format!("{label} SHA-256"))
+                        RichText::new(env!("CARGO_PKG_VERSION"))
                             .color(tokens.muted)
                             .small(),
                     );
-                    ui.label(RichText::new(fingerprint).monospace().small());
+                });
+            });
+            ui.add_space(14.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            for page in Page::ALL {
+                let count = match page {
+                    Page::Clients if !self.clients.is_empty() => Some(self.clients.len()),
+                    _ => None,
+                };
+                if nav_item(ui, tokens, self.page == page, page.title(), count) {
+                    self.page = page;
+                }
+            }
+            ui.add_space(14.0);
+            ui.label(eyebrow("Listeners", tokens));
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("RFB").color(tokens.muted).size(12.5));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(RichText::new(&self.status.listen).monospace().size(12.5));
+                });
+            });
+        });
+    }
+
+    fn card_frame(tokens: &Tokens, x: i8, y: i8) -> Frame {
+        Frame::NONE
+            .fill(tokens.card.into())
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+            .corner_radius(style::radius(tokens.radius))
+            .inner_margin(Margin::symmetric(x, y))
+    }
+
+    /// A panel as wide as the space it is in.
+    fn card<R>(ui: &mut Ui, tokens: &Tokens, add: impl FnOnce(&mut Ui) -> R) -> R {
+        Self::card_frame(tokens, 20, 16)
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                add(ui)
+            })
+            .inner
+    }
+
+    /// Two columns side by side when there is room, stacked when not.
+    fn columns(
+        ui: &mut Ui,
+        left_share: f32,
+        left: impl FnOnce(&mut Ui),
+        right: impl FnOnce(&mut Ui),
+    ) {
+        let total = ui.available_width();
+        if total < 760.0 {
+            left(ui);
+            right(ui);
+            return;
+        }
+        let left_width = ((total - GAP) * left_share).floor();
+        let right_width = total - GAP - left_width;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.allocate_ui_with_layout(vec2(left_width, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(left_width);
+                ui.spacing_mut().item_spacing.y = GAP;
+                left(ui);
+            });
+            ui.allocate_ui_with_layout(
+                vec2(right_width, 0.0),
+                Layout::top_down(Align::Min),
+                |ui| {
+                    ui.set_width(right_width);
+                    ui.spacing_mut().item_spacing.y = GAP;
+                    right(ui);
+                },
+            );
+        });
+    }
+
+    fn overview(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        if let Some(why) = &self.status.failure {
+            Self::card(ui, tokens, |ui| {
+                ui.label(
+                    RichText::new(format!("Capture stopped: {why}"))
+                        .color(tokens.red)
+                        .strong(),
+                );
+            });
+        }
+        self.tiles(ui, tokens);
+        Self::columns(
+            ui,
+            0.64,
+            |ui| self.traffic_card(ui, tokens),
+            |ui| self.sharing_card(ui, tokens),
+        );
+        self.clients_card(ui, tokens);
+        // The preview stays out of the columns closure so the card can borrow
+        // the texture while the log reads the shared state.
+        Self::columns(
+            ui,
+            0.5,
+            |ui| {
+                Self::card(ui, tokens, |ui| {
+                    ui.label(heading("Live preview"));
+                    ui.add_space(8.0);
+                    if let Some(tex) = &self.preview {
+                        let size = tex.size_vec2();
+                        let scale = (ui.available_width() / size.x).min(1.0);
+                        ui.image((tex.id(), size * scale));
+                    } else {
+                        ui.label("Waiting for the first frame…");
+                    }
+                });
+            },
+            |ui| {
+                Self::card(ui, tokens, |ui| {
+                    ui.label(heading("Recent events"));
+                    ui.add_space(8.0);
+                    self.log_lines(ui, tokens, Some(6));
+                });
+            },
+        );
+    }
+
+    fn tiles(&self, ui: &mut Ui, tokens: &Tokens) {
+        let viewing = self.clients.iter().filter(|c| c.view_only).count();
+        let peak = self.out_history.iter().copied().fold(0.0_f32, f32::max);
+        let (out_value, out_unit) = split_rate(self.rates.1);
+        let (in_value, in_unit) = split_rate(self.rates.0);
+        let worst = self.clients.iter().filter_map(|c| c.rtt).max();
+        let (rtt_value, rtt_unit, rtt_note) = worst.map_or_else(
+            || ("n/a".to_owned(), "", "no Fence yet".to_owned()),
+            |d| (d.as_millis().to_string(), "ms", "slowest client".to_owned()),
+        );
+        let tiles = [
+            Tile {
+                label: "Connected clients",
+                value: self.clients.len().to_string(),
+                unit: "now".into(),
+                note: format!("{viewing} view only"),
+                foot: String::new(),
+                tone: tokens.blue,
+            },
+            Tile {
+                label: "Outgoing traffic",
+                value: out_value,
+                unit: out_unit,
+                note: format!("peak {}", format_rate(f64::from(peak))),
+                foot: "recent".into(),
+                tone: tokens.green,
+            },
+            Tile {
+                label: "Incoming input",
+                value: in_value,
+                unit: in_unit,
+                note: "from viewers".into(),
+                foot: String::new(),
+                tone: tokens.violet,
+            },
+            Tile {
+                label: "Round trip",
+                value: rtt_value,
+                unit: rtt_unit.into(),
+                note: rtt_note,
+                foot: String::new(),
+                tone: tokens.amber,
+            },
+        ];
+        let total = ui.available_width();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // 1 to 4
+        let per_row = (((total + GAP) / (170.0 + GAP)).floor() as usize).clamp(1, tiles.len());
+        #[allow(clippy::cast_precision_loss)] // at most 4
+        let width = ((total - GAP * (per_row - 1) as f32) / per_row as f32).floor();
+        for row in tiles.chunks(per_row) {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for tile in row {
+                    ui.allocate_ui_with_layout(
+                        vec2(width, 0.0),
+                        Layout::top_down(Align::Min),
+                        |ui| tile.show(ui, tokens, width),
+                    );
+                }
+            });
+        }
+    }
+
+    fn traffic_card(&self, ui: &mut Ui, tokens: &Tokens) {
+        Self::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(heading("Traffic"));
+                    ui.label(
+                        RichText::new("Outgoing frames vs. incoming input")
+                            .color(tokens.muted)
+                            .size(12.5),
+                    );
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    legend(ui, tokens, tokens.blue.into(), "Incoming");
+                    legend(ui, tokens, tokens.accent.into(), "Outgoing");
+                });
+            });
+            ui.add_space(8.0);
+            let out: Vec<f32> = self.out_history.iter().copied().collect();
+            let incoming: Vec<f32> = self.in_history.iter().copied().collect();
+            widgets::area_chart(
+                ui,
+                vec2(ui.available_width(), 190.0),
+                &[
+                    (&incoming, tokens.blue.into()),
+                    (&out, tokens.accent.into()),
+                ],
+                HISTORY_LEN,
+                16_384.0,
+                Color32::from(tokens.line),
+            );
+            ui.add_space(6.0);
+            ui.separator();
+            let peak = out.iter().copied().fold(0.0_f32, f32::max);
+            #[allow(clippy::cast_precision_loss)] // a short history
+            let average = out.iter().sum::<f32>() / out.len().max(1) as f32;
+            #[allow(clippy::cast_precision_loss)] // a display figure
+            let sent = self.clients.iter().map(|c| c.bytes_out).sum::<u64>() as f64;
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                for (key, value) in [
+                    ("Peak", format_rate(f64::from(peak))),
+                    ("Average", format_rate(f64::from(average))),
+                    ("Sent", format_bytes(sent)),
+                ] {
+                    ui.label(RichText::new(key).color(tokens.muted).size(12.5));
+                    ui.label(RichText::new(value).strong().size(12.5));
+                }
+                let (text, tone) = if self.status.failure.is_none() {
+                    ("healthy", tokens.green)
+                } else {
+                    ("stopped", tokens.red)
+                };
+                ui.label(RichText::new("Capture").color(tokens.muted).size(12.5));
+                ui.label(RichText::new(text).strong().size(12.5).color(tone));
+            });
+        });
+    }
+
+    fn sharing_card(&self, ui: &mut Ui, tokens: &Tokens) {
+        Self::card(ui, tokens, |ui| {
+            ui.label(heading("Shared screen"));
+            let (w, h) = self.status.screen;
+            ui.label(
+                RichText::new(format!("{} ({w} × {h})", self.status.source))
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
+            ui.add_space(8.0);
+            ui.label(eyebrow("Sign-in and protection", tokens));
+            ui.label(RichText::new(&self.status.access).strong());
+            for (label, fingerprint) in &self.status.fingerprints {
+                ui.add_space(6.0);
+                ui.label(eyebrow(&format!("{label} SHA-256"), tokens));
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(fingerprint).monospace().size(11.5));
                     if ui.small_button("Copy").clicked() {
                         ui.ctx().copy_text(fingerprint.clone());
                     }
                 });
             }
         });
-        ui.add_space(10.0);
-        Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Live preview").color(tokens.muted).small());
-            if let Some(tex) = &self.preview {
-                let size = tex.size_vec2();
-                ui.image((tex.id(), size));
-            } else {
-                ui.label("Waiting for the first frame…");
-            }
-        });
     }
 
-    fn clients_page(&mut self, ui: &mut Ui, tokens: &Tokens) {
-        if self.clients.is_empty() {
-            ui.label(RichText::new("Nobody is connected.").color(tokens.muted));
-            return;
-        }
+    fn clients_card(&mut self, ui: &mut Ui, tokens: &Tokens) {
         let rows = self.clients.clone();
         let mut view_only_changes = Vec::new();
         let mut kick = None;
-        egui::Grid::new("clients")
-            .striped(true)
-            .num_columns(9)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                for head in [
-                    "Client",
-                    "Protection",
-                    "Encoding",
-                    "In",
-                    "Out",
-                    "RTT",
-                    "Connected",
-                    "Input",
-                    "",
-                ] {
-                    ui.label(RichText::new(head).color(tokens.muted).small());
-                }
-                ui.end_row();
-                for c in &rows {
-                    ui.label(client_label(c));
-                    ui.label(c.encryption);
-                    ui.label(if c.updates == 0 {
-                        "-"
-                    } else {
-                        encoding_name(c.encoding)
+        Self::card(ui, tokens, |ui| {
+            ui.label(heading("Connected clients"));
+            ui.add_space(4.0);
+            if rows.is_empty() {
+                ui.label(RichText::new("Nobody is connected.").color(tokens.muted));
+                return;
+            }
+            let top = self
+                .client_rates
+                .values()
+                .map(|r| r.1)
+                .fold(1.0_f64, f64::max);
+            ScrollArea::horizontal().show(ui, |ui| {
+                egui::Grid::new("clients")
+                    .num_columns(8)
+                    .spacing([16.0, 14.0])
+                    .show(ui, |ui| {
+                        for head in [
+                            "Client",
+                            "Protection",
+                            "Encoding",
+                            "Bitrate",
+                            "RTT",
+                            "Connected",
+                            "Input",
+                            "",
+                        ] {
+                            ui.label(eyebrow(head, tokens));
+                        }
+                        ui.end_row();
+                        for c in &rows {
+                            ui.horizontal(|ui| {
+                                avatar(ui, tokens, c);
+                                ui.label(RichText::new(client_label(c)).strong());
+                            });
+                            let tone = if c.encryption == "none" {
+                                tokens.red
+                            } else {
+                                tokens.green
+                            };
+                            ui.vertical(|ui| {
+                                ui.add_space(2.0);
+                                badge(ui, c.encryption, tone.into());
+                            });
+                            ui.label(
+                                RichText::new(if c.updates == 0 {
+                                    "-"
+                                } else {
+                                    encoding_name(c.encoding)
+                                })
+                                .monospace(),
+                            );
+                            let rate = self.client_rates.get(&c.id).map_or(0.0, |r| r.1);
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 4.0;
+                                ui.label(RichText::new(format_rate(rate)).size(12.5));
+                                bar(ui, tokens, rate / top);
+                            });
+                            ui.label(c.rtt.map_or_else(
+                                || "-".to_owned(),
+                                |d| format!("{} ms", d.as_millis()),
+                            ));
+                            ui.label(format_duration(c.connected_for));
+                            let mut view_only = c.view_only;
+                            if ui.checkbox(&mut view_only, "View only").changed() {
+                                view_only_changes.push((c.id, view_only));
+                            }
+                            if ui.button("Disconnect").clicked() {
+                                kick = Some(c.id);
+                            }
+                            ui.end_row();
+                        }
                     });
-                    ui.label(format_bytes(
-                        #[allow(clippy::cast_precision_loss)] // a display figure
-                        {
-                            c.bytes_in as f64
-                        },
-                    ));
-                    ui.label(format_bytes(
-                        #[allow(clippy::cast_precision_loss)] // a display figure
-                        {
-                            c.bytes_out as f64
-                        },
-                    ));
-                    ui.label(
-                        c.rtt
-                            .map_or_else(|| "-".to_owned(), |d| format!("{} ms", d.as_millis())),
-                    );
-                    ui.label(format_duration(c.connected_for));
-                    let mut view_only = c.view_only;
-                    if ui.checkbox(&mut view_only, "View only").changed() {
-                        view_only_changes.push((c.id, view_only));
-                    }
-                    if ui.button("Disconnect").clicked() {
-                        kick = Some(c.id);
-                    }
-                    ui.end_row();
-                }
             });
+        });
         for (id, v) in view_only_changes {
             self.set_view_only(id, v);
         }
         if let Some(id) = kick {
             self.disconnect(id);
+        }
+    }
+
+    /// The newest `limit` log lines (all when `None`), newest first.
+    fn log_lines(&self, ui: &mut Ui, tokens: &Tokens, limit: Option<usize>) {
+        let lines = self.log.lines();
+        if lines.is_empty() {
+            ui.label(RichText::new("Nothing has happened yet.").color(tokens.muted));
+        }
+        for line in lines.iter().rev().take(limit.unwrap_or(usize::MAX)) {
+            let tone = match line.level {
+                Level::Info => tokens.green,
+                Level::Warning => tokens.amber,
+            };
+            ui.horizontal(|ui| {
+                chip(ui, tokens, tone.into(), 24.0);
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new(&line.text).size(13.0));
+                    ui.label(RichText::new(clock(line.at)).color(tokens.muted).size(11.5));
+                });
+            });
+            ui.add_space(6.0);
         }
     }
 
@@ -1005,33 +1279,246 @@ impl Dashboard {
     }
 
     fn log_page(&mut self, ui: &mut Ui, tokens: &Tokens) {
-        ui.horizontal(|ui| {
-            if ui.button("Export as JSON").clicked() {
-                self.export_log();
-            }
-            if ui.button("Clear").clicked() {
-                self.log.clear();
-            }
-        });
-        ui.add_space(6.0);
-        let lines = self.log.lines();
-        if lines.is_empty() {
-            ui.label(RichText::new("Nothing has happened yet.").color(tokens.muted));
-        }
-        for line in lines.iter().rev() {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(
-                    RichText::new(clock(line.at))
-                        .monospace()
-                        .color(tokens.muted),
-                );
-                let colour = match line.level {
-                    Level::Info => tokens.text,
-                    Level::Warning => tokens.amber,
-                };
-                ui.label(RichText::new(&line.text).color(Color32::from(colour)));
+        Self::card(ui, tokens, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(heading("Event log"));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Clear").clicked() {
+                        self.log.clear();
+                    }
+                    if ui.button("Export as JSON").clicked() {
+                        self.export_log();
+                    }
+                });
             });
-        }
+            ui.add_space(10.0);
+            self.log_lines(ui, tokens, None);
+        });
+    }
+}
+
+/// Space between panels.
+const GAP: f32 = 18.0;
+
+/// One figure on the overview.
+struct Tile {
+    label: &'static str,
+    value: String,
+    unit: String,
+    note: String,
+    foot: String,
+    tone: farpane_ui::theme::Rgba,
+}
+
+impl Tile {
+    fn show(&self, ui: &mut Ui, tokens: &Tokens, width: f32) {
+        Dashboard::card_frame(tokens, 20, 16).show(ui, |ui| {
+            ui.set_width(width - 42.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(self.label).color(tokens.muted).size(12.5));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    chip(ui, tokens, self.tone.into(), 28.0);
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(RichText::new(&self.value).strong().size(26.0));
+                ui.label(RichText::new(&self.unit).color(tokens.muted).size(13.0));
+            });
+            ui.horizontal_wrapped(|ui| {
+                badge(ui, &self.note, self.tone.into());
+                if !self.foot.is_empty() {
+                    ui.label(RichText::new(&self.foot).color(tokens.muted).size(12.0));
+                }
+            });
+        });
+    }
+}
+
+fn heading(text: &str) -> RichText {
+    RichText::new(text).strong().size(16.0)
+}
+
+fn eyebrow(text: &str, tokens: &Tokens) -> RichText {
+    RichText::new(text.to_uppercase())
+        .color(tokens.muted)
+        .size(10.5)
+}
+
+/// Fill of an inset control (segmented control, bars).
+fn inset(tokens: &Tokens) -> Color32 {
+    if tokens.dark {
+        Color32::from_white_alpha(13)
+    } else {
+        Color32::from_black_alpha(10)
+    }
+}
+
+/// Fill of the chosen segment or the current page.
+fn selected(tokens: &Tokens) -> Color32 {
+    if tokens.dark {
+        Color32::from_white_alpha(34)
+    } else {
+        Color32::WHITE
+    }
+}
+
+/// A small pill with `text` in the colour `tone`.
+fn badge(ui: &mut Ui, text: &str, tone: Color32) {
+    Frame::NONE
+        .fill(tone.gamma_multiply(0.13))
+        .stroke(egui::Stroke::new(1.0_f32, tone.gamma_multiply(0.38)))
+        .corner_radius(style::radius(99.0))
+        .inner_margin(Margin::symmetric(9, 2))
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).color(tone).size(11.5).strong());
+        });
+}
+
+/// A rounded square with a dot in `tone`.
+fn chip(ui: &mut Ui, tokens: &Tokens, tone: Color32, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        style::radius(size * 0.3),
+        tone.gamma_multiply(0.14),
+        egui::Stroke::new(1.0_f32, tone.gamma_multiply(0.32)),
+        egui::StrokeKind::Inside,
+    );
+    painter.circle_filled(rect.center(), size * 0.14, tone);
+    let _ = tokens;
+}
+
+/// The legend entry of a chart series.
+fn legend(ui: &mut Ui, tokens: &Tokens, colour: Color32, text: &str) {
+    ui.label(RichText::new(text).color(tokens.muted).size(12.5));
+    let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 4.0, colour);
+}
+
+/// A horizontal bar filled to `fraction` (0 to 1).
+fn bar(ui: &mut Ui, tokens: &Tokens, fraction: f64) {
+    let (rect, _) = ui.allocate_exact_size(vec2(90.0, 6.0), egui::Sense::hover());
+    ui.painter()
+        .rect_filled(rect, style::radius(3.0), inset(tokens));
+    #[allow(clippy::cast_possible_truncation)] // a pixel width
+    let filled = (rect.width() * fraction.clamp(0.0, 1.0) as f32).max(0.0);
+    if filled > 0.5 {
+        let mut fill = rect;
+        fill.set_width(filled);
+        ui.painter()
+            .rect_filled(fill, style::radius(3.0), Color32::from(tokens.blue));
+    }
+}
+
+/// The client's initials on a coloured square.
+fn avatar(ui: &mut Ui, tokens: &Tokens, c: &ClientInfo) {
+    let name = c.user.as_deref().unwrap_or("?");
+    let initials: String = name.chars().take(2).flat_map(char::to_uppercase).collect();
+    let palette = [
+        tokens.violet,
+        tokens.blue,
+        tokens.amber,
+        tokens.green,
+        tokens.accent,
+    ];
+    let colour = palette[usize::try_from(c.id).unwrap_or(0) % palette.len()];
+    let (rect, _) = ui.allocate_exact_size(vec2(30.0, 30.0), egui::Sense::hover());
+    ui.painter().rect_filled(
+        rect,
+        style::radius(9.0),
+        Color32::from(colour).gamma_multiply(0.85),
+    );
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        initials,
+        egui::FontId::proportional(11.5),
+        Color32::from(tokens.bg),
+    );
+}
+
+/// The brand tile: receding panes on the accent colour.
+fn brand_mark(ui: &mut Ui, tokens: &Tokens, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        style::radius(size * 0.29),
+        Color32::from(tokens.accent),
+    );
+    for (inset, alpha) in [(0.2_f32, 255_u8), (0.32, 170), (0.44, 100)] {
+        painter.rect_stroke(
+            rect.shrink(size * inset),
+            style::radius(size * 0.06),
+            egui::Stroke::new(1.8_f32, Color32::from_white_alpha(alpha)),
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+/// A row of the side bar. Returns whether it was clicked.
+fn nav_item(ui: &mut Ui, tokens: &Tokens, active: bool, title: &str, count: Option<usize>) -> bool {
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), 38.0), egui::Sense::click());
+    let label = count.map_or_else(|| title.to_owned(), |n| format!("{title} ({n})"));
+    response
+        .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
+    let painter = ui.painter();
+    if active || response.hovered() {
+        painter.rect(
+            rect,
+            style::radius(12.0),
+            if active {
+                selected(tokens)
+            } else {
+                inset(tokens)
+            },
+            egui::Stroke::new(
+                1.0_f32,
+                if active {
+                    Color32::from(tokens.line)
+                } else {
+                    Color32::TRANSPARENT
+                },
+            ),
+            egui::StrokeKind::Inside,
+        );
+    }
+    if active {
+        let mark = egui::Rect::from_min_size(rect.left_center() + vec2(0.0, -8.0), vec2(3.0, 16.0));
+        painter.rect_filled(mark, style::radius(2.0), Color32::from(tokens.accent));
+    }
+    let colour = if active { tokens.text } else { tokens.muted };
+    painter.text(
+        rect.left_center() + vec2(16.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(14.0),
+        Color32::from(colour),
+    );
+    if let Some(n) = count {
+        painter.text(
+            rect.right_center() - vec2(14.0, 0.0),
+            egui::Align2::RIGHT_CENTER,
+            n.to_string(),
+            egui::FontId::proportional(12.0),
+            Color32::from(tokens.muted),
+        );
+    }
+    response
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .clicked()
+}
+
+/// `1.5 MB/s` as `("1.5", "MB/s")`.
+fn split_rate(bytes_per_sec: f64) -> (String, String) {
+    let text = format_rate(bytes_per_sec);
+    match text.rsplit_once(' ') {
+        Some((value, unit)) => (value.to_owned(), unit.to_owned()),
+        None => (text, String::new()),
     }
 }
 

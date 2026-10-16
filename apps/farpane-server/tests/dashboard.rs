@@ -117,8 +117,8 @@ fn settle(h: &mut Harness<'static, Dashboard>) {
 fn the_overview_shows_status_clients_traffic_and_fingerprints() {
     let (_rig, mut h) = rig(vec![client(1, Some("alice")), client(2, None)]);
     settle(&mut h);
-    h.get_by_label("Running");
-    h.get_by_label("Listening on 127.0.0.1:5900");
+    h.get_by_label("Sharing");
+    h.get_by_label("127.0.0.1:5900");
     h.get_by_label("2");
     h.get_by_label("test pattern (320 × 200)");
     h.get_by_label("user accounts, TLS");

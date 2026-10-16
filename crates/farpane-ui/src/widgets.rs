@@ -47,6 +47,57 @@ pub fn sparkline_points(
         .collect()
 }
 
+/// Draw filled line series (oldest first) that share one vertical scale, with
+/// faint grid lines, as in the dashboard's traffic chart.
+///
+/// Each series is `(values, colour)`; `capacity` is how many samples fill the
+/// width. The scale tops out at the largest value over all series (at least
+/// `min_top`, so an idle chart stays flat instead of magnifying noise).
+pub fn area_chart(
+    ui: &mut Ui,
+    size: Vec2,
+    series: &[(&[f32], Color32)],
+    capacity: usize,
+    min_top: f32,
+    grid: Color32,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    let top = series
+        .iter()
+        .flat_map(|(v, _)| v.iter().copied())
+        .filter(|v| v.is_finite())
+        .fold(min_top.max(f32::MIN_POSITIVE), f32::max);
+    for i in 1..4_u8 {
+        let y = rect.top() + rect.height() * f32::from(i) / 4.0;
+        painter.line_segment(
+            [pos2(rect.left(), y), pos2(rect.right(), y)],
+            Stroke::new(1.0_f32, grid),
+        );
+    }
+    let inner = rect.shrink2(Vec2::new(0.0, LINE_WIDTH));
+    for &(values, colour) in series {
+        let points = sparkline_points(values, inner, capacity, Some(top));
+        if points.len() < 2 {
+            continue;
+        }
+        let mut mesh = egui::Mesh::default();
+        let (strong, faint) = (colour.gamma_multiply(0.38), colour.gamma_multiply(0.02));
+        for p in &points {
+            mesh.colored_vertex(*p, strong);
+            mesh.colored_vertex(pos2(p.x, rect.bottom()), faint);
+        }
+        for i in 0..points.len() - 1 {
+            let a = u32::try_from(i * 2).unwrap_or(0);
+            mesh.add_triangle(a, a + 1, a + 2);
+            mesh.add_triangle(a + 1, a + 3, a + 2);
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        painter.add(egui::Shape::line(points, Stroke::new(2.0_f32, colour)));
+    }
+    response
+}
+
 /// Draw a sparkline in a `size` box and return its response.
 pub fn sparkline(
     ui: &mut Ui,
