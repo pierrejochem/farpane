@@ -24,6 +24,8 @@ struct Args {
     pin_toolbar: bool,
     show_stats: bool,
     password_file: Option<PathBuf>,
+    username: Option<String>,
+    pins: Vec<rfb_security::tls::Fingerprint>,
     encodings: Vec<i32>,
     /// Keep applying updates for this long before saving, so a slowly drawn
     /// screen is complete.
@@ -34,12 +36,22 @@ fn parse_args() -> Result<Args, String> {
     let mut args = std::env::args().skip(1);
     let (mut addr, mut screenshot, mut ui_screenshot, mut password_file) = (None, None, None, None);
     let (mut fullscreen, mut pin_toolbar, mut show_stats) = (false, false, false);
+    let (mut username, mut pins) = (None, Vec::new());
     let mut settle = Duration::from_millis(1500);
     let mut encodings = DEFAULT_ENCODINGS.to_vec();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--screenshot" => {
                 screenshot = Some(args.next().ok_or("--screenshot needs a file")?.into());
+            }
+            "--username" => username = Some(args.next().ok_or("--username needs a name")?),
+            "--pin" => {
+                let text = args.next().ok_or("--pin needs a SHA-256 fingerprint")?;
+                pins.push(
+                    rfb_security::tls::parse_fingerprint(&text).ok_or(
+                        "--pin: not a SHA-256 fingerprint (64 hex digits, colons optional)",
+                    )?,
+                );
             }
             "--fullscreen" => fullscreen = true,
             "--stats" => show_stats = true,
@@ -74,6 +86,8 @@ fn parse_args() -> Result<Args, String> {
         pin_toolbar,
         show_stats,
         password_file,
+        username,
+        pins,
         encodings,
         settle,
     })
@@ -81,7 +95,7 @@ fn parse_args() -> Result<Args, String> {
 
 fn usage() {
     eprintln!(
-        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--password-file FILE] HOST:PORT\n\
+        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--username NAME] [--pin SHA256] [--password-file FILE] HOST:PORT\n\
          The password comes from $FARPANE_PASSWORD or --password-file, never from an argument."
     );
 }
@@ -152,12 +166,13 @@ fn gui(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
-    let mut screen = RemoteScreen::connect_with(
-        &args.addr,
-        password(args.password_file.as_ref())?,
-        &args.encodings,
-    )
-    .await?;
+    let options = farpane_viewer::ConnectOptions {
+        password: password(args.password_file.as_ref())?,
+        username: args.username.clone().map(String::into_bytes),
+        pins: args.pins.clone(),
+        extra_roots: Vec::new(),
+    };
+    let mut screen = RemoteScreen::connect_opts(&args.addr, &options, &args.encodings).await?;
     let fb = screen.framebuffer();
     eprintln!(
         "connected to {:?}: {}x{}",

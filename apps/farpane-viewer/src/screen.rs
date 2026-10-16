@@ -4,7 +4,8 @@ use rfb_codec::{Cursor, Damage, DecodeError, Decoder, Framebuffer, enc};
 use rfb_proto::{
     PixelFormat, conn::ClientConnEvent, consts::pseudo, msg::client::ClientMessage, types::Rect,
 };
-use rfb_tokio::{ClientOptions, ClientSession, Error, ServerInfo};
+use rfb_security::tls::Fingerprint;
+use rfb_tokio::{ClientOptions, ClientSession, Error, ServerInfo, TlsOptions};
 use tokio::net::TcpStream;
 
 use crate::stats::{Collector, Snapshot};
@@ -21,6 +22,32 @@ pub const DEFAULT_ENCODINGS: [i32; 8] = [
     pseudo::CURSOR,
     pseudo::DESKTOP_SIZE,
 ];
+
+/// What to authenticate with and which TLS certificates to trust.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectOptions {
+    /// For VNC Auth, and for `VeNCrypt` `X509Plain` together with `username`.
+    pub password: Option<Vec<u8>>,
+    pub username: Option<Vec<u8>>,
+    /// Certificate fingerprints the user trusts for this server.
+    pub pins: Vec<Fingerprint>,
+    /// DER certificates of extra CAs to trust.
+    pub extra_roots: Vec<Vec<u8>>,
+}
+
+/// The host part of `host:port`, `[v6]:port` or a bare host: the name a
+/// server's certificate has to match.
+#[must_use]
+pub fn host_of(addr: &str) -> &str {
+    let addr = addr.trim();
+    if let Some(rest) = addr.strip_prefix('[') {
+        return rest.split(']').next().unwrap_or(rest);
+    }
+    match addr.matches(':').count() {
+        1 => addr.split(':').next().unwrap_or(addr),
+        _ => addr, // no port, or a bare IPv6 address
+    }
+}
 
 /// Why connecting or running failed.
 #[derive(Debug)]
@@ -85,12 +112,36 @@ impl RemoteScreen {
         password: Option<Vec<u8>>,
         encodings: &[i32],
     ) -> Result<Self, ConnectError> {
+        let options = ConnectOptions {
+            password,
+            ..ConnectOptions::default()
+        };
+        Self::connect_opts(addr, &options, encodings).await
+    }
+
+    /// The general form: credentials and trusted certificates in `options`.
+    /// An untrusted TLS certificate is reported as
+    /// `ConnectError::Session(Error::Untrusted { .. })` with its fingerprint.
+    ///
+    /// # Errors
+    /// As [`RemoteScreen::connect`].
+    pub async fn connect_opts(
+        addr: &str,
+        options: &ConnectOptions,
+        encodings: &[i32],
+    ) -> Result<Self, ConnectError> {
         let stream = TcpStream::connect(addr).await.map_err(ConnectError::Io)?;
         stream.set_nodelay(true).map_err(ConnectError::Io)?;
         let (mut session, info) = ClientSession::connect(
             stream,
             ClientOptions {
-                password,
+                password: options.password.clone(),
+                username: options.username.clone(),
+                tls: Some(TlsOptions {
+                    server_name: host_of(addr).to_owned(),
+                    pins: options.pins.clone(),
+                    extra_roots: options.extra_roots.clone(),
+                }),
                 ..ClientOptions::default()
             },
         )
@@ -255,4 +306,23 @@ pub enum ScreenEvent {
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::host_of;
+
+    #[test]
+    fn the_certificate_name_is_the_host_without_the_port() {
+        assert_eq!(host_of("example.org:5900"), "example.org");
+        assert_eq!(host_of(" 10.0.0.5:5901 "), "10.0.0.5");
+        assert_eq!(host_of("[::1]:5900"), "::1");
+        assert_eq!(host_of("[fe80::1]"), "fe80::1");
+        assert_eq!(
+            host_of("::1"),
+            "::1",
+            "a bare IPv6 address has no port to strip"
+        );
+        assert_eq!(host_of("localhost"), "localhost");
+    }
 }
