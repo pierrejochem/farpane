@@ -553,12 +553,12 @@ mod tests {
         assert!(cli.poll(&mut buf, &mut Vec::new()).is_err());
 
         let mut tail = msg(&ServerMessage::UpdateBegin { rects: 1 });
-        tail.extend_from_slice(&hdr(enc::TIGHT, 0, 0, 1, 1).to_bytes());
+        tail.extend_from_slice(&hdr(enc::TRLE, 0, 0, 1, 1).to_bytes());
         tail.extend_from_slice(&[0; 8]);
         let (mut cli, tail) = session(&tail);
         assert_eq!(
             collect(&mut cli, &tail, 7),
-            Err(ProtoError::UnsupportedEncoding(enc::TIGHT))
+            Err(ProtoError::UnsupportedEncoding(enc::TRLE))
         );
     }
 }

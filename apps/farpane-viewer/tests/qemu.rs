@@ -114,13 +114,11 @@ async fn wait_for_bios(addr: &str) {
 
 /// Connect, take the first full update, then updates for a short while.
 async fn capture(addr: &str, password: Option<&str>, encodings: &str) -> Framebuffer {
-    let mut screen = RemoteScreen::connect_with(
-        addr,
-        password.map(|p| p.as_bytes().to_vec()),
-        &parse_encodings(encodings).unwrap(),
-    )
-    .await
-    .unwrap();
+    let wanted = parse_encodings(encodings).unwrap();
+    let mut screen =
+        RemoteScreen::connect_with(addr, password.map(|p| p.as_bytes().to_vec()), &wanted)
+            .await
+            .unwrap();
     screen.next_update().await.unwrap();
     let deadline = tokio::time::Instant::now() + Duration::from_millis(600);
     loop {
@@ -132,6 +130,17 @@ async fn capture(addr: &str, password: Option<&str>, encodings: &str) -> Framebu
             break;
         }
     }
+    // The server really used the encoding we preferred, so the comparison
+    // above tests that decoder and not just Raw.
+    let used = screen.sample_stats(std::time::Instant::now());
+    assert!(
+        used.encodings
+            .iter()
+            .any(|e| e.encoding == wanted[0] && e.rects > 0),
+        "{encodings}: server did not use {}: {:?}",
+        wanted[0],
+        used.encodings
+    );
     screen.framebuffer().clone()
 }
 
@@ -168,7 +177,8 @@ async fn every_encoding_shows_the_same_bios_screen() {
         "hextile,raw",
         "zlib,raw",
         "zrle,raw",
-        "zrle,hextile,zlib,corre,copyrect,raw",
+        "tight,raw",
+        "tight,zrle,hextile,zlib,corre,copyrect,raw",
     ] {
         let fb = capture(&addr, None, encodings).await;
         // Only the blinking text cursor (a few pixels) may differ.

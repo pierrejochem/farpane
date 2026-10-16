@@ -66,6 +66,7 @@ pub struct Decoder {
     converter: PixelConverter,
     zlib: Inflater,
     zrle: Inflater,
+    tight: [Inflater; 4],
 }
 
 impl Decoder {
@@ -76,6 +77,7 @@ impl Decoder {
             converter: PixelConverter::new(pf)?,
             zlib: Inflater::default(),
             zrle: Inflater::default(),
+            tight: Default::default(),
         })
     }
 
@@ -123,6 +125,10 @@ impl Decoder {
             }
             enc::ZRLE => {
                 crate::zrle::decode(fb, &self.converter, rect, payload, &mut self.zrle)?;
+                Ok(Damage::Rect(rect))
+            }
+            enc::TIGHT => {
+                crate::tight::decode(fb, &self.converter, rect, payload, &mut self.tight)?;
                 Ok(Damage::Rect(rect))
             }
             enc::HEXTILE => {

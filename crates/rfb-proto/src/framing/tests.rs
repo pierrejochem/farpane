@@ -244,8 +244,8 @@ fn oversized_payloads_are_refused_before_buffering() {
 #[test]
 fn unknown_encodings_are_fatal() {
     assert_eq!(
-        frame(&header(enc::TIGHT, 8, 8), &PF32, &[0; 16]),
-        Err(ProtoError::UnsupportedEncoding(enc::TIGHT))
+        frame(&header(enc::TRLE, 8, 8), &PF32, &[0; 16]),
+        Err(ProtoError::UnsupportedEncoding(enc::TRLE))
     );
     assert_eq!(
         frame(&header(12345, 8, 8), &PF32, &[]),
@@ -267,4 +267,138 @@ fn extended_desktop_size_is_four_bytes_plus_sixteen_per_screen() {
         frame(&h, &PF32, &[255]),
         Err(ProtoError::NeedMore(3 + 255 * 16))
     );
+}
+
+// --- Tight (rfbproto.rst, "Tight Encoding") ---------------------------------
+
+fn tight_header(w: u16, h: u16) -> RectHeader {
+    header(enc::TIGHT, w, h)
+}
+
+#[test]
+fn tight_fill_is_one_tpixel() {
+    // 32 bpp, depth 24, 8-bit channels: a TPIXEL is 3 bytes.
+    check(&tight_header(100, 100), &PF32, &[0x80, 1, 2, 3]);
+    // Stream reset bits do not change the length.
+    check(&tight_header(100, 100), &PF32, &[0x8F, 1, 2, 3]);
+    // Any other format uses its own pixel size.
+    check(&tight_header(100, 100), &pf16(), &[0x80, 1, 2]);
+}
+
+#[test]
+fn tight_tpixel_is_three_bytes_only_for_8_bit_channels() {
+    assert_eq!(PF32.tight_pixel_len(), 3);
+    assert_eq!(pf16().tight_pixel_len(), 2);
+    let deep = PixelFormat {
+        red_max: 1023,
+        green_max: 1023,
+        blue_max: 1023,
+        depth: 30,
+        ..PF32
+    };
+    assert_eq!(deep.tight_pixel_len(), 4);
+}
+
+#[test]
+fn tight_basic_data_under_twelve_bytes_is_sent_as_is() {
+    // 2 x 1 pixels = 6 bytes of CopyFilter data, no length, no zlib.
+    check(&tight_header(2, 1), &PF32, &[0x00, 1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn tight_basic_data_of_twelve_bytes_or_more_has_a_compact_length() {
+    // 4 x 1 pixels = 12 bytes: length 5, then 5 compressed bytes.
+    check(&tight_header(4, 1), &PF32, &[0x00, 5, 9, 9, 9, 9, 9]);
+    // Stream 3 selected (bits 4-5), reset bit 3 set: same framing.
+    check(&tight_header(4, 1), &PF32, &[0x38, 5, 9, 9, 9, 9, 9]);
+}
+
+#[test]
+fn tight_palette_filter_sizes() {
+    // Two colours: 1 bit per pixel, rows padded to bytes. 8 x 1 -> 1 byte,
+    // raw. Layout: control, filter id, colours - 1, palette, data.
+    let mut p = vec![0x40, 1, 1, 1, 2, 3, 4, 5, 6, 0xAA];
+    check(&tight_header(8, 1), &PF32, &p);
+    // 9 x 2 -> 2 bytes per row = 4 bytes, still raw.
+    p = vec![0x40, 1, 1, 1, 2, 3, 4, 5, 6, 1, 2, 3, 4];
+    check(&tight_header(9, 2), &PF32, &p);
+    // Three colours: 8 bits per pixel. 4 x 3 = 12 bytes -> compact length.
+    p = vec![0x40, 1, 2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 3, 0, 0, 0];
+    check(&tight_header(4, 3), &PF32, &p);
+}
+
+#[test]
+fn tight_without_zlib_is_always_raw() {
+    let mut p = vec![0xA0];
+    p.extend_from_slice(&[0; 48]); // 4 x 4 x 3
+    check(&tight_header(4, 4), &PF32, &p);
+    // With a filter id (0xE0), copy filter.
+    let mut p = vec![0xE0, 0];
+    p.extend_from_slice(&[0; 48]);
+    check(&tight_header(4, 4), &PF32, &p);
+    // Palette without zlib: data size known, no length.
+    let p = vec![0xE0, 1, 1, 1, 2, 3, 4, 5, 6, 0xFF, 0xFF];
+    check(&tight_header(8, 2), &PF32, &p);
+}
+
+#[test]
+fn tight_gradient_filter_has_the_size_of_copy() {
+    check(&tight_header(2, 1), &PF32, &[0x40, 2, 1, 2, 3, 4, 5, 6]);
+}
+
+#[test]
+fn tight_jpeg_is_a_compact_length_and_data() {
+    // The spec's own example: 10000 is 0x90 0x4E.
+    let mut p = vec![0x90, 0x90, 0x4E];
+    p.extend_from_slice(&[0; 10_000]);
+    check(&tight_header(64, 64), &PF32, &p);
+    check(&tight_header(1, 1), &PF32, &[0x90, 0]);
+}
+
+#[test]
+fn tight_compact_length_uses_three_bytes_from_16384() {
+    // 16384 = 1 << 14: 0x80 0x80 0x01.
+    let mut p = vec![0x90, 0x80, 0x80, 0x01];
+    p.extend_from_slice(&[0; 16_384]);
+    check(&tight_header(64, 64), &PF32, &p);
+    // 127 and 128 bracket the one/two byte boundary: 0x7F and 0x80 0x01.
+    let mut p = vec![0x90, 0x7F];
+    p.extend_from_slice(&[0; 127]);
+    check(&tight_header(64, 64), &PF32, &p);
+    let mut p = vec![0x90, 0x80, 0x01];
+    p.extend_from_slice(&[0; 128]);
+    check(&tight_header(64, 64), &PF32, &p);
+}
+
+#[test]
+fn tight_invalid_controls_are_fatal() {
+    for bad in [&[0xB0u8][..], &[0xC0], &[0xD0], &[0xF0]] {
+        assert!(
+            matches!(
+                frame(&tight_header(4, 4), &PF32, bad),
+                Err(ProtoError::Malformed { .. })
+            ),
+            "{bad:x?}"
+        );
+    }
+    // Unknown filter id, and a palette of one colour.
+    assert!(matches!(
+        frame(&tight_header(4, 4), &PF32, &[0x40, 3]),
+        Err(ProtoError::Malformed { .. })
+    ));
+    assert!(matches!(
+        frame(&tight_header(4, 4), &PF32, &[0x40, 1, 0, 1, 2, 3]),
+        Err(ProtoError::Malformed { .. })
+    ));
+}
+
+#[test]
+fn tight_sizes_are_bounded() {
+    // A raw 16384 x 16384 rectangle is far beyond the payload limit.
+    let mut h = tight_header(u16::MAX, u16::MAX);
+    h.rect.width = u16::MAX;
+    assert!(matches!(
+        frame(&h, &PF32, &[0xA0]),
+        Err(ProtoError::LimitExceeded { .. })
+    ));
 }

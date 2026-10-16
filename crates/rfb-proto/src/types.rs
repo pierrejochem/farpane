@@ -43,6 +43,24 @@ impl PixelFormat {
         self.bits_per_pixel as usize / 8
     }
 
+    /// Bytes per `TPIXEL` in the Tight encoding: 3 (red, green, blue) when
+    /// the format is true colour, 32 bpp, depth 24 and every channel is
+    /// exactly 8 bits wide, otherwise the same as a wire pixel.
+    #[must_use]
+    pub const fn tight_pixel_len(&self) -> usize {
+        if self.true_colour
+            && self.bits_per_pixel == 32
+            && self.depth == 24
+            && self.red_max == 255
+            && self.green_max == 255
+            && self.blue_max == 255
+        {
+            3
+        } else {
+            self.bytes_per_pixel()
+        }
+    }
+
     /// Parse and validate.
     ///
     /// # Errors

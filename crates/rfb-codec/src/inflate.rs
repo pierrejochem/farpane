@@ -19,6 +19,11 @@ impl core::fmt::Debug for Inflater {
 }
 
 impl Inflater {
+    /// Forget everything: the next chunk starts a fresh stream.
+    pub fn reset(&mut self) {
+        self.0 = None;
+    }
+
     /// Inflate `input`, the next chunk of the stream. Fails if the output
     /// would exceed `limit` bytes (zip-bomb guard); the stream is unusable
     /// after any error.
