@@ -1,8 +1,12 @@
 use core::fmt;
 
-use rfb_codec::{Cursor, Damage, DecodeError, Decoder, Framebuffer, enc};
+use rfb_codec::{Cursor, Damage, DecodeError, Decoder, DesktopLayout, Framebuffer, enc};
 use rfb_proto::{
-    PixelFormat, conn::ClientConnEvent, consts::pseudo, msg::client::ClientMessage, types::Rect,
+    PixelFormat,
+    conn::ClientConnEvent,
+    consts::pseudo,
+    msg::client::ClientMessage,
+    types::{Rect, Screen},
 };
 use rfb_security::tls::Fingerprint;
 use rfb_tokio::{ClientOptions, ClientSession, Error, ServerInfo, TlsOptions};
@@ -12,7 +16,7 @@ use crate::stats::{Collector, Snapshot};
 
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
-pub const DEFAULT_ENCODINGS: [i32; 8] = [
+pub const DEFAULT_ENCODINGS: [i32; 9] = [
     enc::ZRLE,
     enc::HEXTILE,
     enc::ZLIB,
@@ -20,6 +24,9 @@ pub const DEFAULT_ENCODINGS: [i32; 8] = [
     enc::COPY_RECT,
     enc::RAW,
     pseudo::CURSOR,
+    // Both size encodings: a server must send only the extended one to a
+    // client that asks for both, and old servers still understand the other.
+    pseudo::EXT_DESKTOP_SIZE,
     pseudo::DESKTOP_SIZE,
 ];
 
@@ -89,6 +96,8 @@ pub struct RemoteScreen {
     fb: Framebuffer,
     name: String,
     stats: Collector,
+    /// The screens from the last accepted layout, to build resize requests.
+    screens: Vec<Screen>,
 }
 
 impl RemoteScreen {
@@ -166,6 +175,7 @@ impl RemoteScreen {
             fb,
             name: String::from_utf8_lossy(&name).into_owned(),
             stats: Collector::new(std::time::Instant::now()),
+            screens: Vec::new(),
         };
         screen.request_update(false).await?;
         Ok(screen)
@@ -216,6 +226,12 @@ impl RemoteScreen {
                     match self.decoder.decode(&mut self.fb, &header, &payload)? {
                         Damage::None => {}
                         Damage::Cursor(cursor) => return Ok(ScreenEvent::Cursor(cursor)),
+                        Damage::Layout(layout) => {
+                            if layout.status == 0 {
+                                self.screens.clone_from(&layout.screens);
+                            }
+                            return Ok(ScreenEvent::Layout(layout));
+                        }
                         damage => return Ok(ScreenEvent::Damage(damage)),
                     }
                 }
@@ -244,7 +260,10 @@ impl RemoteScreen {
             match self.next_event().await? {
                 ScreenEvent::Damage(d) => damage.push(d),
                 ScreenEvent::UpdateEnd => return Ok(damage),
-                ScreenEvent::Cursor(_) | ScreenEvent::Bell | ScreenEvent::CutText(_) => {}
+                ScreenEvent::Cursor(_)
+                | ScreenEvent::Layout(_)
+                | ScreenEvent::Bell
+                | ScreenEvent::CutText(_) => {}
             }
         }
     }
@@ -257,6 +276,37 @@ impl RemoteScreen {
             self.session.bytes_received(),
             self.session.bytes_sent(),
         )
+    }
+
+    /// Ask the server to resize the remote desktop to `width` x `height`
+    /// (one screen). Returns `false` without sending if the server has not
+    /// shown that it supports this. The answer arrives as a
+    /// [`ScreenEvent::Layout`] with reason 1.
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn request_size(&mut self, width: u16, height: u16) -> Result<bool, ConnectError> {
+        if !self.session.conn().supports_desktop_resize() {
+            return Ok(false);
+        }
+        // Keep the identity (id, flags) of the first screen, as the spec asks
+        // clients to do; a multi-screen layout collapses to one screen.
+        let first = self.screens.first().copied().unwrap_or_default();
+        let screen = Screen {
+            x: 0,
+            y: 0,
+            width,
+            height,
+            ..first
+        };
+        self.session
+            .send(&ClientMessage::SetDesktopSize {
+                width,
+                height,
+                screens: vec![screen],
+            })
+            .await?;
+        Ok(true)
     }
 
     /// Send a key press or release (an X11 keysym).
@@ -299,6 +349,9 @@ impl RemoteScreen {
 pub enum ScreenEvent {
     /// The picture changed (already applied).
     Damage(Damage),
+    /// The server announced its screen layout (also the answer to a resize
+    /// request: check `reason` 1 and `status`). The picture is already resized.
+    Layout(DesktopLayout),
     /// The cursor shape changed (an empty one means "hide the cursor").
     Cursor(Cursor),
     /// The server finished one `FramebufferUpdate`; request the next one.

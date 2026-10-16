@@ -417,3 +417,79 @@ async fn qemu_tls_with_a_password_uses_x509_vnc() {
         r.err()
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn qemu_announces_its_screen_layout_when_asked() {
+    use farpane_viewer::ScreenEvent;
+    let Some((_qemu, addr)) = start(None) else {
+        return;
+    };
+    let mut screen = RemoteScreen::connect(&addr, None).await.unwrap();
+    // The server must answer our first (non-incremental) request with an
+    // ExtendedDesktopSize rectangle (spec), which is how the client learns that
+    // SetDesktopSize is available at all.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut layout = None;
+    while layout.is_none() && tokio::time::Instant::now() < deadline {
+        screen.request_update(true).await.unwrap();
+        if let Ok(Ok(ScreenEvent::Layout(l))) =
+            tokio::time::timeout(Duration::from_millis(500), screen.next_event()).await
+        {
+            layout = Some(l);
+        }
+    }
+    let l = layout.expect("QEMU sent no ExtendedDesktopSize rectangle");
+    assert_eq!(l.status, 0);
+    assert!(!l.screens.is_empty(), "at least one screen is described");
+    assert_eq!(
+        (l.width, l.height),
+        (screen.framebuffer().width(), screen.framebuffer().height())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn qemu_answers_a_resize_request_even_though_a_bios_guest_cannot_comply() {
+    use farpane_viewer::ScreenEvent;
+    let Some((_qemu, addr)) = start(None) else {
+        return;
+    };
+    let mut screen = RemoteScreen::connect(&addr, None).await.unwrap();
+    // Wait for the layout announcement first: SetDesktopSize is not allowed before.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut announced = false;
+    while !announced && tokio::time::Instant::now() < deadline {
+        screen.request_update(true).await.unwrap();
+        announced = matches!(
+            tokio::time::timeout(Duration::from_millis(500), screen.next_event()).await,
+            Ok(Ok(ScreenEvent::Layout(_)))
+        );
+    }
+    assert!(announced);
+    assert!(
+        screen.request_size(1024, 768).await.unwrap(),
+        "the request was sent"
+    );
+    // The spec says every SetDesktopSize is answered with a rectangle for the
+    // requester (reason 1), granted or not.
+    let mut answer = None;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while answer.is_none() && tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(ScreenEvent::Layout(l))) =
+            tokio::time::timeout(Duration::from_millis(500), screen.next_event()).await
+        {
+            if l.reason == 1 {
+                answer = Some(l);
+            }
+        }
+    }
+    let l = answer.expect("no answer to SetDesktopSize");
+    eprintln!(
+        "QEMU answered: reason {} status {} size {}x{}",
+        l.reason, l.status, l.width, l.height
+    );
+    assert!(
+        matches!(l.status, 0..=4),
+        "a defined status code: {}",
+        l.status
+    );
+}

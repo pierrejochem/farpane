@@ -106,6 +106,20 @@ fn rival() -> Option<(RustConnection, u32)> {
     Some((conn, root))
 }
 
+/// Poll until the grab is active, for up to three seconds. A freshly mapped
+/// window can be reported "not viewable" for a moment (the same transient
+/// refusal the live app sees); the backend retries, and so does this.
+fn wait_active(grab: &mut KeyboardGrab) -> GrabState {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let state = grab.poll();
+        if state == GrabState::Active || Instant::now() >= deadline {
+            return state;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Whether another client can grab the keyboard right now.
 fn another_client_can_grab(conn: &RustConnection, window: u32) -> bool {
     let reply = conn
@@ -140,7 +154,7 @@ fn the_grab_is_real_exclusive_and_released_on_request() {
     assert_eq!(grab.backend_name(), "x11");
     assert_eq!(grab.poll(), GrabState::Released, "nothing asked yet");
     grab.set_wanted(true);
-    assert_eq!(grab.poll(), GrabState::Active, "an X11 grab is immediate");
+    assert_eq!(wait_active(&mut grab), GrabState::Active);
     assert!(
         !another_client_can_grab(&rival, root),
         "the server must refuse a second grab"
@@ -168,7 +182,7 @@ fn dropping_the_grab_gives_the_keyboard_back() {
     {
         let mut grab = app.grab();
         grab.set_wanted(true);
-        assert_eq!(grab.poll(), GrabState::Active);
+        assert_eq!(wait_active(&mut grab), GrabState::Active);
         assert!(!another_client_can_grab(&rival, root));
     }
     assert!(another_client_can_grab(&rival, root));
@@ -218,7 +232,7 @@ fn the_applications_own_window_still_gets_its_keys_while_the_keyboard_is_grabbed
     }
     let mut grab = app.grab();
     grab.set_wanted(true);
-    assert_eq!(grab.poll(), GrabState::Active);
+    assert_eq!(wait_active(&mut grab), GrabState::Active);
     // A grab made from a different connection than the window's would swallow it.
     let got = key_reaches(&app, &rival);
     grab.set_wanted(false);
