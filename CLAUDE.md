@@ -59,7 +59,7 @@ Milestone M1 (protocol skeleton) is done: `consts`, `version`, `types`, `wire::R
 
 Next steps, in order:
 1. M1 is done apart from optional `wire::Writer`.
-2. M2: framers for Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, TRLE; Cursor, DesktopSize, LastRect; `ClientConn`/`ServerConn` message loop; fuzz targets.
+2. M2: `framing::frame` is done for Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, Cursor, DesktopSize, LastRect. Still open: TRLE (no section in rfbproto.rst, needs a verified source first), `ClientConn`/`ServerConn` message loop, fuzz targets. `limits::MAX_RECT_PAYLOAD` (128 MiB) is our own bound, not from the spec.
 3. Tokio adapter and a minimal viewer that connects to a TigerVNC or QEMU server.
 
 ## Open items

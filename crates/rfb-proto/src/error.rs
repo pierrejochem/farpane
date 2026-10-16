@@ -23,6 +23,9 @@ pub enum ProtoError {
     SecurityFailed(Option<String>),
     /// None of the peer's security types is one we allow.
     NoAcceptableSecurity,
+    /// A rectangle uses an encoding we cannot frame. The stream cannot be
+    /// resynchronised, so this is fatal.
+    UnsupportedEncoding(i32),
 }
 
 impl fmt::Display for ProtoError {
@@ -43,6 +46,7 @@ impl fmt::Display for ProtoError {
             Self::SecurityFailed(Some(r)) => write!(f, "security failed: {r}"),
             Self::SecurityFailed(None) => write!(f, "security failed"),
             Self::NoAcceptableSecurity => write!(f, "no acceptable security type"),
+            Self::UnsupportedEncoding(e) => write!(f, "unsupported encoding {e}"),
         }
     }
 }
