@@ -95,6 +95,11 @@ impl State {
     }
 }
 
+/// Input from this client is ignored: it is view only, or sharing is paused.
+fn input_blocked(st: &State, shared: &Shared) -> bool {
+    st.handle.view_only.load(Ordering::Relaxed) || shared.paused.load(Ordering::Relaxed)
+}
+
 fn whole(size: (u16, u16)) -> Rect {
     Rect {
         x: 0,
@@ -187,10 +192,11 @@ where
             st.in_flight.pop_front();
         }
         if let Some(request) = st.request {
-            let ready = st.dirty.touches(request)
+            let ready = !shared.paused.load(Ordering::Relaxed)
+                && (st.dirty.touches(request)
                 || st.layout_reply.is_some()
                 || st.cursor.is_some()
-                || !st.copies.is_empty();
+                || !st.copies.is_empty());
             // With fences, send the next update only once the client has
             // caught up with the earlier ones: a slow link then skips
             // intermediate frames (the changes pile up in `dirty`) instead of
@@ -210,7 +216,7 @@ where
                 }
             }
         }
-        if st.holds_input() && handle.view_only.load(Ordering::Relaxed) {
+        if st.holds_input() && input_blocked(&st, &shared) {
             st.release_input(&shared);
         }
         handle
@@ -340,7 +346,7 @@ where
             st.request = Some(st.request.map_or(rect, |old| region::union(old, rect)));
         }
         ClientMessage::KeyEvent { down, keysym } => {
-            if !st.handle.view_only.load(Ordering::Relaxed) {
+            if !input_blocked(st, shared) {
                 if down {
                     st.held_keys.insert(keysym);
                 } else {
@@ -350,13 +356,13 @@ where
             }
         }
         ClientMessage::PointerEvent { buttons, x, y } => {
-            if !st.handle.view_only.load(Ordering::Relaxed) {
+            if !input_blocked(st, shared) {
                 st.pointer = (x, y, buttons);
                 shared.input.pointer(x, y, buttons);
             }
         }
         ClientMessage::ClientCutText(latin1) => {
-            if !st.handle.view_only.load(Ordering::Relaxed) {
+            if !input_blocked(st, shared) {
                 let text: String = latin1.iter().map(|&b| char::from(b)).collect();
                 shared.input.clipboard(&text);
             }
@@ -372,7 +378,7 @@ where
                     .await?;
             }
             if let Some(text) = reaction.received {
-                if !st.handle.view_only.load(Ordering::Relaxed) {
+                if !input_blocked(st, shared) {
                     // The wire has CR LF; backends get plain LF.
                     shared.input.clipboard(&text.replace("\r\n", "\n"));
                 }

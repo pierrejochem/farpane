@@ -506,6 +506,42 @@ async fn input_reaches_the_backend_and_view_only_stops_it() {
 }
 
 #[tokio::test]
+async fn a_paused_server_sends_nothing_and_ignores_input_until_resumed() {
+    let input = Recording::default();
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(64, 64),
+            input.clone(),
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    v.update().await;
+    assert!(!server.is_paused());
+    server.set_paused(true);
+    assert!(server.is_paused());
+    v.request(true).await;
+    v.key(0x61).await;
+    v.quiet(Duration::from_millis(1500)).await;
+    assert!(
+        !v.other
+            .iter()
+            .any(|e| matches!(e, ClientConnEvent::UpdateBegin { .. })),
+        "no picture while paused: {:?}",
+        v.other
+    );
+    assert!(input.seen().is_empty(), "{:?}", input.seen());
+    server.set_paused(false);
+    assert!(
+        !v.update().await.is_empty(),
+        "the picture follows on resume"
+    );
+}
+
+#[tokio::test]
 async fn keys_and_buttons_are_let_go_when_the_client_leaves_or_becomes_view_only() {
     for leave in [true, false] {
         let input = Recording::default();

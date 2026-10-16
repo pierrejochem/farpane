@@ -36,15 +36,17 @@ pub enum Page {
     Clients,
     Users,
     Security,
+    Displays,
     Log,
 }
 
 impl Page {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::Overview,
         Self::Clients,
         Self::Users,
         Self::Security,
+        Self::Displays,
         Self::Log,
     ];
 
@@ -56,6 +58,7 @@ impl Page {
             "clients" => Some(Self::Clients),
             "users" => Some(Self::Users),
             "security" => Some(Self::Security),
+            "displays" => Some(Self::Displays),
             "log" => Some(Self::Log),
             _ => None,
         }
@@ -68,6 +71,7 @@ impl Page {
             Self::Clients => Icon::Clients,
             Self::Users => Icon::Users,
             Self::Security => Icon::Security,
+            Self::Displays => Icon::Displays,
             Self::Log => Icon::Log,
         }
     }
@@ -78,7 +82,37 @@ impl Page {
             Self::Clients => "Clients",
             Self::Users => "Users",
             Self::Security => "Security",
+            Self::Displays => "Displays",
             Self::Log => "Event log",
+        }
+    }
+}
+
+/// How much history the traffic chart shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Range {
+    Minute,
+    FiveMinutes,
+    Hour,
+}
+
+impl Range {
+    const ALL: [Self; 3] = [Self::Minute, Self::FiveMinutes, Self::Hour];
+
+    /// Seconds, which is also how many points the chart holds.
+    fn seconds(self) -> usize {
+        match self {
+            Self::Minute => 60,
+            Self::FiveMinutes => 300,
+            Self::Hour => 3600,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Minute => "1 m",
+            Self::FiveMinutes => "5 m",
+            Self::Hour => "1 h",
         }
     }
 }
@@ -164,6 +198,14 @@ pub struct Dashboard {
     rates: (f64, f64),
     out_history: VecDeque<f32>,
     in_history: VecDeque<f32>,
+    /// Bytes per second out and in, one point per second, for the chart.
+    long_out: VecDeque<f32>,
+    long_in: VecDeque<f32>,
+    /// Sum and count of the samples of the second in progress, and when it began.
+    second: (f32, f32, u32, f64),
+    range: Range,
+    /// The top bar's search: filters the clients table and the event log.
+    search: String,
     /// Per client: bytes sent at the last sample and bytes per second since.
     client_rates: HashMap<u64, (u64, f64)>,
     preview: Option<TextureHandle>,
@@ -277,6 +319,11 @@ impl Dashboard {
             rates: (0.0, 0.0),
             out_history: VecDeque::new(),
             in_history: VecDeque::new(),
+            long_out: VecDeque::new(),
+            long_in: VecDeque::new(),
+            second: (0.0, 0.0, 0, 0.0),
+            range: Range::FiveMinutes,
+            search: String::new(),
             client_rates: HashMap::new(),
             preview: None,
             last_preview: f64::NEG_INFINITY,
@@ -363,6 +410,26 @@ impl Dashboard {
                 })
                 .collect();
             self.last_sample = now;
+            #[allow(clippy::cast_possible_truncation)] // chart values
+            {
+                self.second.0 += self.rates.1 as f32;
+                self.second.1 += self.rates.0 as f32;
+                self.second.2 += 1;
+            }
+            if now - self.second.3 >= 1.0 {
+                #[allow(clippy::cast_precision_loss)] // a handful of samples
+                let n = self.second.2.max(1) as f32;
+                for (history, total) in [
+                    (&mut self.long_out, self.second.0),
+                    (&mut self.long_in, self.second.1),
+                ] {
+                    if history.len() >= Range::Hour.seconds() {
+                        history.pop_front();
+                    }
+                    history.push_back(total / n);
+                }
+                self.second = (0.0, 0.0, 0, now);
+            }
             for (history, value) in [
                 (&mut self.out_history, self.rates.1),
                 (&mut self.in_history, self.rates.0),
@@ -600,6 +667,7 @@ impl Dashboard {
                             Page::Clients => self.clients_card(ui, &tokens),
                             Page::Users => self.users_page(ui, &tokens),
                             Page::Security => self.security_page(ui, &tokens),
+                            Page::Displays => self.displays_page(ui, &tokens),
                             Page::Log => self.log_page(ui, &tokens),
                         }
                     });
@@ -636,6 +704,7 @@ impl Dashboard {
 
     fn top_bar(&mut self, ui: &mut Ui, tokens: &Tokens) {
         let running = self.status.failure.is_none();
+        let paused = self.status.paused;
         Self::card_frame(tokens, 16, 12).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
@@ -644,17 +713,93 @@ impl Dashboard {
                         .family(style::semibold(ui.ctx()))
                         .size(18.0),
                 );
-                let (text, tone) = if running {
-                    ("Sharing", tokens.green)
-                } else {
+                let (text, tone) = if !running {
                     ("Stopped", tokens.red)
+                } else if paused {
+                    ("Paused", tokens.amber)
+                } else {
+                    ("Sharing", tokens.green)
                 };
                 badge(ui, text, tone.into());
+                // Window width, not what is left: the controls only fit in a wide window.
+                let width = ui.ctx().screen_rect().width();
+                if width >= 1100.0 {
+                    egui::Frame::NONE
+                        .fill(inset(tokens))
+                        .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                        .corner_radius(style::radius(10.0))
+                        .inner_margin(Margin::symmetric(10, 4))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.search)
+                                    .hint_text("Search clients and events")
+                                    .frame(false)
+                                    .desired_width(220.0),
+                            );
+                        });
+                }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.theme_switch(ui, tokens);
+                    if running {
+                        let label = if paused {
+                            "Resume sharing"
+                        } else {
+                            "Pause sharing"
+                        };
+                        let button =
+                            egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
+                                .fill(Color32::from(tokens.accent))
+                                .min_size(vec2(0.0, 32.0));
+                        if ui.add(button).clicked() {
+                            self.backend.set_paused(!paused);
+                            self.log.push(
+                                Level::Info,
+                                if paused {
+                                    "sharing resumed from the dashboard"
+                                } else {
+                                    "sharing paused from the dashboard"
+                                },
+                            );
+                            self.status.paused = !paused;
+                        }
+                    }
+                    if self.page == Page::Overview && width >= 1280.0 {
+                        self.range_switch(ui, tokens);
+                    }
                 });
             });
         });
+    }
+
+    /// The time range of the traffic chart as a segmented control.
+    fn range_switch(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        Frame::NONE
+            .fill(inset(tokens))
+            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+            .corner_radius(style::radius(10.0))
+            .inner_margin(Margin::same(3))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    // Laid out right to left, so listed in reverse.
+                    for r in Range::ALL.into_iter().rev() {
+                        let on = self.range == r;
+                        let colour = if on { tokens.text } else { tokens.muted };
+                        let button =
+                            egui::Button::new(RichText::new(r.label()).size(12.0).color(colour))
+                                .fill(if on {
+                                    selected(tokens)
+                                } else {
+                                    Color32::TRANSPARENT
+                                })
+                                .stroke(egui::Stroke::NONE)
+                                .corner_radius(style::radius(7.0));
+                        if ui.add(button).clicked() {
+                            self.range = r;
+                        }
+                    }
+                });
+            });
     }
 
     /// The theme choice as one segmented control.
@@ -805,12 +950,19 @@ impl Dashboard {
             });
         }
         self.tiles(ui, tokens);
+        let change = std::cell::Cell::new(false);
         Self::columns(
             ui,
             0.64,
             |ui| self.traffic_card(ui, tokens),
-            |ui| self.sharing_card(ui, tokens),
+            |ui| {
+                self.sharing_card(ui, tokens);
+                self.security_card(ui, tokens, &change);
+            },
         );
+        if change.get() {
+            self.page = Page::Security;
+        }
         self.clients_card(ui, tokens);
         // The preview stays out of the columns closure so the card can borrow
         // the texture while the log reads the shared state.
@@ -921,8 +1073,15 @@ impl Dashboard {
                 });
             });
             ui.add_space(8.0);
-            let out: Vec<f32> = self.out_history.iter().copied().collect();
-            let incoming: Vec<f32> = self.in_history.iter().copied().collect();
+            let span = self.range.seconds();
+            let last = |h: &VecDeque<f32>| -> Vec<f32> {
+                h.iter()
+                    .skip(h.len().saturating_sub(span))
+                    .copied()
+                    .collect()
+            };
+            let out = last(&self.long_out);
+            let incoming = last(&self.long_in);
             widgets::area_chart(
                 ui,
                 vec2(ui.available_width(), 190.0),
@@ -930,7 +1089,7 @@ impl Dashboard {
                     (&incoming, tokens.blue.into()),
                     (&out, tokens.accent.into()),
                 ],
-                HISTORY_LEN,
+                span,
                 16_384.0,
                 Color32::from(tokens.line),
             );
@@ -962,6 +1121,95 @@ impl Dashboard {
         });
     }
 
+    /// Whether `text` matches the top bar's search (always, when it is empty).
+    fn matches_search(&self, text: &str) -> bool {
+        let needle = self.search.trim().to_lowercase();
+        needle.is_empty() || text.to_lowercase().contains(&needle)
+    }
+
+    /// The Displays page: what is shared. One display for now.
+    fn displays_page(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        let (w, h) = self.status.screen;
+        let running = self.status.failure.is_none();
+        Self::card(ui, tokens, |ui| {
+            ui.label(heading(ui, "Shared display"));
+            ui.label(
+                RichText::new("Farpane shares one display; several screens are not built yet.")
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(44.0, 34.0), egui::Sense::hover());
+                ui.painter().rect_stroke(
+                    rect,
+                    style::radius(6.0),
+                    egui::Stroke::new(2.0_f32, Color32::from(tokens.accent_text)),
+                    egui::StrokeKind::Inside,
+                );
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    ui.label(RichText::new(&self.status.source).strong());
+                    ui.label(
+                        RichText::new(format!("{w} × {h}"))
+                            .color(tokens.muted)
+                            .size(12.5),
+                    );
+                });
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (text, tone) = if !running {
+                        ("Stopped", tokens.red)
+                    } else if self.status.paused {
+                        ("Paused", tokens.amber)
+                    } else {
+                        ("Sharing", tokens.green)
+                    };
+                    badge(ui, text, tone.into());
+                });
+            });
+            if let Some(why) = &self.status.failure {
+                ui.add_space(8.0);
+                ui.label(RichText::new(format!("Capture stopped: {why}")).color(tokens.red));
+            }
+        });
+    }
+
+    /// The ways to sign in, as read-only switches; they change on the
+    /// Security page and take effect at the next start.
+    fn security_card(&self, ui: &mut Ui, tokens: &Tokens, change: &std::cell::Cell<bool>) {
+        Self::card(ui, tokens, |ui| {
+            ui.label(heading(ui, "Security"));
+            ui.label(
+                RichText::new("Offered sign-in methods")
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
+            ui.add_space(8.0);
+            for (name, note, on) in &self.status.offered {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(name).strong().size(13.5));
+                        ui.label(RichText::new(note).color(tokens.muted).size(11.5));
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let (text, tone) = if *on {
+                            ("On", tokens.green)
+                        } else {
+                            ("Off", tokens.muted)
+                        };
+                        badge(ui, text, tone.into());
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            ui.add_space(4.0);
+            if ui.button("Change on the Security page").clicked() {
+                change.set(true);
+            }
+        });
+    }
+
     fn sharing_card(&self, ui: &mut Ui, tokens: &Tokens) {
         Self::card(ui, tokens, |ui| {
             ui.label(heading(ui, "Shared screen"));
@@ -987,15 +1235,34 @@ impl Dashboard {
         });
     }
 
+    #[allow(clippy::too_many_lines)] // filter, table and actions in one card
     fn clients_card(&mut self, ui: &mut Ui, tokens: &Tokens) {
-        let rows = self.clients.clone();
+        let all = self.clients.len();
+        let rows: Vec<_> = self
+            .clients
+            .iter()
+            .filter(|c| {
+                self.matches_search(&format!(
+                    "{} {} {}",
+                    client_label(c),
+                    c.encryption,
+                    encoding_name(c.encoding)
+                ))
+            })
+            .cloned()
+            .collect();
         let mut view_only_changes = Vec::new();
         let mut kick = None;
         Self::card(ui, tokens, |ui| {
             ui.label(heading(ui, "Connected clients"));
             ui.add_space(4.0);
             if rows.is_empty() {
-                ui.label(RichText::new("Nobody is connected.").color(tokens.muted));
+                let text = if all == 0 {
+                    "Nobody is connected."
+                } else {
+                    "No client matches the search."
+                };
+                ui.label(RichText::new(text).color(tokens.muted));
                 return;
             }
             let top = self
@@ -1080,7 +1347,12 @@ impl Dashboard {
         if lines.is_empty() {
             ui.label(RichText::new("Nothing has happened yet.").color(tokens.muted));
         }
-        for line in lines.iter().rev().take(limit.unwrap_or(usize::MAX)) {
+        for line in lines
+            .iter()
+            .rev()
+            .filter(|l| self.matches_search(&l.text))
+            .take(limit.unwrap_or(usize::MAX))
+        {
             let tone = match line.level {
                 Level::Info => tokens.green,
                 Level::Warning => tokens.amber,

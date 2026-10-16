@@ -19,6 +19,7 @@ use rfb_server::{ClientInfo, Preview};
 struct Calls {
     disconnected: Vec<u64>,
     view_only: Vec<(u64, bool)>,
+    paused: Vec<bool>,
 }
 
 #[derive(Debug)]
@@ -37,7 +38,23 @@ impl Backend for Fake {
             fingerprints: vec![("Certificate".into(), "AA:BB:CC".into())],
             failure: self.failure.lock().unwrap().clone(),
             screen: (320, 200),
+            paused: self
+                .calls
+                .lock()
+                .unwrap()
+                .paused
+                .last()
+                .copied()
+                .unwrap_or(false),
+            offered: vec![
+                ("VeNCrypt over TLS".into(), "Certificate".into(), true),
+                ("No authentication".into(), "Anyone gets in".into(), false),
+            ],
         }
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.calls.lock().unwrap().paused.push(paused);
     }
 
     fn clients(&self) -> Vec<ClientInfo> {
@@ -180,7 +197,8 @@ fn the_users_page_adds_changes_and_removes_users_through_the_same_rules_as_the_c
     settle(&mut h);
     h.get_by_label_contains("No users yet");
     // Fill the form: user name, display name, password (in this order).
-    let boxes: Vec<_> = h.get_all_by_role(NodeRole::TextInput).collect();
+    // The first box is the top bar's search.
+    let boxes: Vec<_> = h.get_all_by_role(NodeRole::TextInput).skip(1).collect();
     assert_eq!(boxes.len(), 2);
     boxes[0].focus();
     boxes[0].type_text("boss");
@@ -205,7 +223,7 @@ fn the_users_page_adds_changes_and_removes_users_through_the_same_rules_as_the_c
     h.get_by_label("boss");
     h.get_by_label("The Boss");
     // A short password is refused with the CLI's message.
-    let boxes: Vec<_> = h.get_all_by_role(NodeRole::TextInput).collect();
+    let boxes: Vec<_> = h.get_all_by_role(NodeRole::TextInput).skip(1).collect();
     boxes[0].focus();
     boxes[0].type_text("second");
     let password = h.get_by_role(NodeRole::PasswordInput);
@@ -328,7 +346,7 @@ fn an_invalid_listen_address_is_refused_and_nothing_is_saved() {
         !rig.dir.path().join("server.toml").exists(),
         "nothing saved yet"
     );
-    let listen = h.get_by_role(NodeRole::TextInput);
+    let listen = h.get_all_by_role(NodeRole::TextInput).nth(1).unwrap();
     listen.focus();
     listen.type_text("not an address");
     h.run_steps(2);
@@ -347,7 +365,7 @@ fn the_security_page_saves_what_was_ticked_and_typed() {
     h.get_by_label("Encrypt with a self-signed certificate (TLS)")
         .click();
     h.get_by_label("Offer RSA-AES (needs users)").click();
-    let listen = h.get_by_role(NodeRole::TextInput);
+    let listen = h.get_all_by_role(NodeRole::TextInput).nth(1).unwrap();
     listen.focus();
     listen.type_text("127.0.0.1:5999");
     h.run_steps(2);
@@ -448,4 +466,63 @@ fn listening_beyond_this_computer_without_users_is_flagged() {
     h.state_mut().set_page(Page::Security);
     settle(&mut h);
     h.get_by_label_contains("Reachable from other machines but no users exist");
+}
+
+#[test]
+fn pause_sharing_asks_the_server_and_the_button_turns_into_resume() {
+    let (rig, mut h) = rig(vec![]);
+    settle(&mut h);
+    h.get_by_label("Sharing");
+    h.get_by_label("Pause sharing").click();
+    settle(&mut h);
+    assert_eq!(rig.fake.calls.lock().unwrap().paused, [true]);
+    h.get_by_label("Paused");
+    h.get_by_label("Resume sharing").click();
+    settle(&mut h);
+    assert_eq!(rig.fake.calls.lock().unwrap().paused, [true, false]);
+    let lines: Vec<String> = rig.log.lines().into_iter().map(|l| l.text).collect();
+    assert!(lines.iter().any(|l| l.contains("paused")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("resumed")), "{lines:?}");
+}
+
+#[test]
+fn the_search_box_filters_clients_and_events() {
+    let (rig, mut h) = rig(vec![client(1, Some("alice")), client(2, Some("bob"))]);
+    rig.log.push(Level::Info, "carol connected");
+    rig.log.push(Level::Info, "dave connected");
+    settle(&mut h);
+    h.get_by_label("alice (192.0.2.7:40001)");
+    h.get_by_label("bob (192.0.2.7:40002)");
+    h.get_by_label("carol connected");
+    let search = h.get_by_role(NodeRole::TextInput);
+    search.focus();
+    search.type_text("alice");
+    settle(&mut h);
+    h.get_by_label("alice (192.0.2.7:40001)");
+    assert!(h.query_by_label("bob (192.0.2.7:40002)").is_none());
+    assert!(h.query_by_label("carol connected").is_none());
+    h.get_by_role(NodeRole::TextInput).type_text("zzz");
+    settle(&mut h);
+    h.get_by_label("No client matches the search.");
+}
+
+#[test]
+fn the_overview_lists_the_offered_sign_in_methods_and_links_to_the_security_page() {
+    let (_rig, mut h) = rig(vec![]);
+    settle(&mut h);
+    h.get_by_label("VeNCrypt over TLS");
+    h.get_by_label("On");
+    h.get_by_label("Off");
+    h.get_by_label("Change on the Security page").click();
+    settle(&mut h);
+    assert_eq!(h.state().page(), Page::Security);
+}
+
+#[test]
+fn the_displays_page_shows_what_is_shared() {
+    let (_rig, mut h) = rig(vec![]);
+    h.state_mut().set_page(Page::Displays);
+    settle(&mut h);
+    h.get_by_label("test pattern");
+    h.get_by_label("320 × 200");
 }

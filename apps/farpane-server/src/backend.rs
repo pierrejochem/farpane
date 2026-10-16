@@ -133,6 +133,10 @@ pub struct Status {
     /// Why capturing stopped, if it did.
     pub failure: Option<String>,
     pub screen: (u16, u16),
+    /// Sharing is paused.
+    pub paused: bool,
+    /// The ways to sign in: name, a note, and whether it is offered.
+    pub offered: Vec<(String, String, bool)>,
 }
 
 /// The dashboard's view of the server.
@@ -142,6 +146,8 @@ pub trait Backend: Send + Sync {
     fn disconnect(&self, id: u64) -> bool;
     fn set_view_only(&self, id: u64, view_only: bool) -> bool;
     fn preview(&self, max_edge: u16) -> Preview;
+    /// Pause or resume sharing.
+    fn set_paused(&self, _paused: bool) {}
 }
 
 /// The real thing: a running [`Server`].
@@ -152,6 +158,7 @@ pub struct LiveBackend {
     pub source: String,
     pub access: String,
     pub fingerprints: Vec<(String, String)>,
+    pub offered: Vec<(String, String, bool)>,
 }
 
 impl Backend for LiveBackend {
@@ -163,6 +170,8 @@ impl Backend for LiveBackend {
             fingerprints: self.fingerprints.clone(),
             failure: self.server.capture_failure(),
             screen: self.server.size(),
+            paused: self.server.is_paused(),
+            offered: self.offered.clone(),
         }
     }
 
@@ -180,6 +189,10 @@ impl Backend for LiveBackend {
 
     fn preview(&self, max_edge: u16) -> Preview {
         self.server.preview(max_edge)
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.server.set_paused(paused);
     }
 }
 
