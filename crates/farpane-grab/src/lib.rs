@@ -37,12 +37,17 @@
 //! before the window, and used from the event loop thread. Each `unsafe`
 //! block has a `SAFETY` comment. Nothing else in the crate uses `unsafe`.
 
+#[cfg(all(unix, not(target_vendor = "apple")))]
 mod wayland;
+#[cfg(all(unix, not(target_vendor = "apple")))]
 mod x11;
 
+#[cfg(all(unix, not(target_vendor = "apple")))]
 use std::ffi::c_void;
 
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+#[cfg(all(unix, not(target_vendor = "apple")))]
+use raw_window_handle::RawDisplayHandle;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
 
 /// Where a capture request stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,12 +132,14 @@ impl KeyboardGrab {
             .map_err(|e| GrabError::Unsupported(e.to_string()))?
             .as_raw();
         match (handle, display) {
+            #[cfg(all(unix, not(target_vendor = "apple")))]
             (RawWindowHandle::Wayland(w), RawDisplayHandle::Wayland(d)) => {
                 // SAFETY: the handles come from a live window (`window` is
                 // borrowed for this call) and the documented contract of this
                 // function is that the result is dropped before the window.
                 unsafe { Self::wayland(d.display.as_ptr(), w.surface.as_ptr()) }
             }
+            #[cfg(all(unix, not(target_vendor = "apple")))]
             (RawWindowHandle::Xlib(w), RawDisplayHandle::Xlib(d)) => {
                 let display = d
                     .display
@@ -149,6 +156,7 @@ impl KeyboardGrab {
         }
     }
 
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     /// A Wayland capture for the surface `surface` on the connection
     /// `display` (the `wl_display` and `wl_surface` pointers winit exposes).
     ///
@@ -164,6 +172,7 @@ impl KeyboardGrab {
         Ok(Self::with(Box::new(backend)))
     }
 
+    #[cfg(all(unix, not(target_vendor = "apple")))]
     /// An X11 capture for `window` on the Xlib display `display`.
     ///
     /// # Errors
@@ -179,6 +188,8 @@ impl KeyboardGrab {
         Ok(Self::with(Box::new(backend)))
     }
 
+    // Only the Linux/BSD backends construct one; elsewhere nothing does.
+    #[cfg_attr(not(all(unix, not(target_vendor = "apple"))), allow(dead_code))]
     fn with(backend: Box<dyn Backend>) -> Self {
         Self {
             backend,

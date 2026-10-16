@@ -1,3 +1,4 @@
+#![cfg(all(unix, not(target_vendor = "apple")))]
 //! The X11 backend against the real X server (`$DISPLAY`); skipped without one.
 //!
 //! The "application" is an Xlib display with a window, the way winit presents
