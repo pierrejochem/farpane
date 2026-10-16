@@ -1,0 +1,18 @@
+[package]
+name = "farpane-x11"
+description = "X11 screen capture (GetImage + Damage) and input injection (XTest) for rfb-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-codec.workspace = true
+rfb-proto.workspace = true
+rfb-server.workspace = true
+x11rb = { version = "0.14.0", features = ["damage", "xtest"] }
+
+[lints]
+workspace = true

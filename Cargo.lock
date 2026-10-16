@@ -784,6 +784,7 @@ name = "farpane-server"
 version = "0.1.0"
 dependencies = [
  "farpane-ui",
+ "farpane-x11",
  "rfb-codec",
  "rfb-proto",
  "rfb-security",
@@ -819,6 +820,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "farpane-x11"
+version = "0.1.0"
+dependencies = [
+ "rfb-codec",
+ "rfb-proto",
+ "rfb-server",
+ "x11rb 0.14.0",
 ]
 
 [[package]]

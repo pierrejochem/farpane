@@ -2,20 +2,25 @@
 //!
 //! This first version has no dashboard window; it runs headless
 //! (`--headless` is what `packaging/linux/farpane-server.service` passes). The
-//! only screen source so far is the built-in test pattern.
+//! screen sources are the built-in test pattern and an X11 display.
 
 use std::{net::SocketAddr, process::ExitCode, sync::Arc};
 
-use rfb_server::{NoInput, Server, Settings, TestPattern};
+use rfb_server::{Input, NoInput, Server, Settings, Source, TestPattern};
 use rfb_tokio::{ServerAuth, ServerOptions};
 use tokio::net::TcpListener;
 
 const USAGE: &str = "\
-Usage: farpane-server [--headless] [--listen ADDR] [--size WxH] [--fps N]
-                      [--password-file FILE] [--view-only] [--allow-no-auth]
+Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH]
+                      [--fps N] [--password-file FILE] [--view-only]
+                      [--allow-no-auth]
+
+  --x11 [DISPLAY]        share an X11 display (default $DISPLAY) instead of
+                         the test pattern; under XWayland only X11 windows
+                         are visible, not the Wayland desktop
 
   --listen ADDR          address to listen on (default 127.0.0.1:5900)
-  --size WxH             test pattern size (default 1024x768)
+  --size WxH             test pattern size (ignored with --x11) (default 1024x768)
   --password-file FILE   VNC password (first line); $FARPANE_PASSWORD also works
   --allow-no-auth        accept connections without a password on a
                          non-loopback address (a bad idea without a tunnel)
@@ -30,6 +35,16 @@ struct Args {
     password: Option<Vec<u8>>,
     view_only: bool,
     allow_no_auth: bool,
+    /// Share an X11 display instead of the test pattern.
+    x11: bool,
+    /// Which one; `None` is `$DISPLAY`.
+    x11_display: Option<String>,
+}
+
+type Words = std::iter::Peekable<std::iter::Skip<std::env::Args>>;
+
+fn value(it: &mut Words, name: &str) -> Result<String, String> {
+    it.next().ok_or(format!("{name} needs a value"))
 }
 
 fn parse() -> Result<Args, String> {
@@ -45,31 +60,49 @@ fn parse() -> Result<Args, String> {
             .map(String::into_bytes),
         view_only: false,
         allow_no_auth: false,
+        x11: false,
+        x11_display: None,
     };
-    let mut it = std::env::args().skip(1);
+    let mut it = std::env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
-        let mut value = |name: &str| it.next().ok_or(format!("{name} needs a value"));
         match arg.as_str() {
             "--headless" => {}
             "--listen" => {
-                args.listen = value("--listen")?
+                args.listen = value(&mut it, "--listen")?
                     .parse()
                     .map_err(|e| format!("--listen: {e}"))?;
             }
             "--size" => {
-                let v = value("--size")?;
+                let v = value(&mut it, "--size")?;
                 let (w, h) = v.split_once('x').ok_or("--size wants WxH")?;
                 args.size = (
                     w.parse().map_err(|_| "--size: bad width")?,
                     h.parse().map_err(|_| "--size: bad height")?,
                 );
             }
-            "--fps" => args.fps = value("--fps")?.parse().map_err(|_| "--fps: not a number")?,
+            "--fps" => {
+                args.fps = value(&mut it, "--fps")?
+                    .parse()
+                    .map_err(|_| "--fps: not a number")?;
+            }
             "--password-file" => {
-                let path = value("--password-file")?;
+                let path = value(&mut it, "--password-file")?;
                 let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
                 let line = text.lines().next().unwrap_or("").trim_end_matches('\r');
                 args.password = Some(line.as_bytes().to_vec()).filter(|p| !p.is_empty());
+            }
+            "--x11" => {
+                // The display is optional: take the next word only if it
+                // looks like one (":0", "host:1").
+                let display = it
+                    .peek()
+                    .filter(|d| d.contains(':') && !d.starts_with('-'))
+                    .cloned();
+                if display.is_some() {
+                    it.next();
+                }
+                args.x11 = true;
+                args.x11_display = display;
             }
             "--view-only" => args.view_only = true,
             "--allow-no-auth" => args.allow_no_auth = true,
@@ -115,17 +148,34 @@ async fn main() -> ExitCode {
         }
         None => ServerAuth::None,
     };
-    let template = ServerOptions::new(auth, 1, 1, b"Farpane test pattern");
+    let template = ServerOptions::new(auth, 1, 1, b"Farpane");
     let settings = Settings {
         fps: args.fps,
         view_only: args.view_only,
     };
-    let server = match Server::new(
-        TestPattern::new(args.size.0, args.size.1),
-        NoInput,
-        template,
-        settings,
-    ) {
+    let (source, input, what): (Box<dyn Source>, Box<dyn Input>, String) =
+        match args.x11.then_some(&args.x11_display) {
+            Some(display) => match farpane_x11::open(display.as_deref()) {
+                Ok((source, input)) => {
+                    let (w, h) = source.size();
+                    (
+                        Box::new(source),
+                        Box::new(input),
+                        format!("X11 {}, {w}x{h}", display.as_deref().unwrap_or("$DISPLAY")),
+                    )
+                }
+                Err(e) => {
+                    eprintln!("farpane-server: cannot open the X11 display: {e}");
+                    return ExitCode::FAILURE;
+                }
+            },
+            None => (
+                Box::new(TestPattern::new(args.size.0, args.size.1)),
+                Box::new(NoInput),
+                format!("test pattern, {}x{}", args.size.0, args.size.1),
+            ),
+        };
+    let server = match Server::new(source, input, template, settings) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             eprintln!("farpane-server: cannot start: {e}");
@@ -140,11 +190,9 @@ async fn main() -> ExitCode {
         }
     };
     eprintln!(
-        "Farpane Server {} listening on {} ({}x{}, {})",
+        "Farpane Server {} listening on {} ({what}, {})",
         env!("CARGO_PKG_VERSION"),
         args.listen,
-        args.size.0,
-        args.size.1,
         if args.password.is_some() {
             "password"
         } else {
