@@ -361,7 +361,7 @@ impl ViewerApp {
                         }
                     }
                 }
-                UiEvent::Bell => {}
+                UiEvent::Stats(_) | UiEvent::Bell => {}
                 UiEvent::Disconnected(reason) => {
                     self.phase = Phase::Home;
                     if self.fullscreen {

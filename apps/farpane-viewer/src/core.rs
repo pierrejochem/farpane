@@ -10,7 +10,10 @@ use rfb_codec::{Cursor, Damage};
 use rfb_proto::types::Rect;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::{RemoteScreen, ScreenEvent, screen::DEFAULT_ENCODINGS};
+use crate::{RemoteScreen, ScreenEvent, screen::DEFAULT_ENCODINGS, stats::Snapshot};
+
+/// How often the UI gets a statistics reading.
+const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// What the UI asks the connection to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,7 +36,7 @@ pub enum Command {
 }
 
 /// What the connection tells the UI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiEvent {
     Connecting,
     Connected {
@@ -53,6 +56,8 @@ pub enum UiEvent {
     },
     /// The server's cursor shape (empty pixels mean "hidden").
     Cursor(Cursor),
+    /// A statistics reading, about four times a second while connected.
+    Stats(Snapshot),
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
@@ -188,9 +193,16 @@ async fn session(
         width: w,
         height: h,
     });
+    // Readings four times a second (design doc, section 16); a slow UI thread
+    // makes the interval skip, not pile up.
+    let mut ticker = tokio::time::interval(STATS_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: Result<(), String> = async {
         loop {
             tokio::select! {
+                _ = ticker.tick() => {
+                    ui.emit(UiEvent::Stats(screen.sample_stats(std::time::Instant::now())));
+                }
                 event = screen.next_event() => {
                     handle_event(&mut screen, event.map_err(|e| e.to_string())?, ui)
                         .await
