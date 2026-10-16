@@ -245,12 +245,21 @@ pub fn open(config: &Config) -> io::Result<(WaylandSource, WaylandInput)> {
     };
 
     let (events, mut queue) = mpsc::unbounded_channel::<InputEvent>();
+    let failure = Arc::new(std::sync::Mutex::new(None::<String>));
+    let task_failure = Arc::clone(&failure);
     runtime.spawn(async move {
+        let failure = task_failure;
         let mut buttons = 0u8;
         while let Some(event) = queue.recv().await {
             // A failed call means the session is gone; the capture side ends
             // the server when its stream stops.
-            let _ = deliver(&remote_desktop, &session, node_id, &mut buttons, event).await;
+            if let Err(e) = deliver(&remote_desktop, &session, node_id, &mut buttons, event).await {
+                // Keep the first failure for `WaylandInput::first_error`.
+                let mut slot = failure
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                slot.get_or_insert_with(|| e.to_string());
+            }
         }
         let _ = session.close().await;
     });
@@ -270,6 +279,7 @@ pub fn open(config: &Config) -> io::Result<(WaylandSource, WaylandInput)> {
         },
         WaylandInput {
             events,
+            failure,
             _backing: backing,
         },
     ))
@@ -479,12 +489,25 @@ fn changed_tiles(fb: &Framebuffer, new: &[u8], w: usize, h: usize) -> Vec<Rect> 
 /// Keyboard and pointer input through the portal.
 pub struct WaylandInput {
     events: mpsc::UnboundedSender<InputEvent>,
+    failure: Arc<std::sync::Mutex<Option<String>>>,
     _backing: Arc<Backing>,
 }
 
 impl std::fmt::Debug for WaylandInput {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WaylandInput").finish_non_exhaustive()
+    }
+}
+
+impl WaylandInput {
+    /// The first error the portal returned for an input event, if any (the
+    /// events are delivered in the background, so this is the way to find out).
+    #[must_use]
+    pub fn first_error(&self) -> Option<String> {
+        self.failure
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 }
 
