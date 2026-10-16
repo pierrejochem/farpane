@@ -99,6 +99,14 @@ impl ServerConn {
         self.state == State::Established
     }
 
+    /// The TLS handshake finished (after [`ServerEvent::StartTls`]).
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if no TLS upgrade was requested.
+    pub fn tls_established(&mut self, out: &mut Vec<u8>) -> Result<(), ProtoError> {
+        self.hs.tls_established(out)
+    }
+
     /// Send the VNC Auth challenge; see [`ServerHandshake::send_challenge`].
     ///
     /// # Errors
@@ -174,6 +182,13 @@ impl ServerConn {
             State::Handshake => {
                 let (n, ev) = self.hs.poll(buf, out)?;
                 buf.advance(n);
+                // The client sends its TLS hello only after our go-ahead, so
+                // plaintext still buffered at this point was injected.
+                if matches!(ev, Some(ServerEvent::StartTls { .. })) && !buf.is_empty() {
+                    return Err(ProtoError::Malformed {
+                        ctx: "data received before the TLS handshake",
+                    });
+                }
                 Ok(ev.map(ServerConnEvent::Handshake))
             }
             State::Established => {

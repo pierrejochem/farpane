@@ -35,6 +35,7 @@ impl Pair {
             ServerConfig {
                 max_version: v,
                 security: vec![sec],
+                ..ServerConfig::default()
             },
             &mut to_client,
         );
@@ -77,7 +78,7 @@ impl Pair {
                             .server_init(W, H, &PixelFormat::RGB888, b"srv", &mut s_out)
                             .unwrap();
                     }
-                    other @ ServerConnEvent::Message(_) => panic!("{other:?}"),
+                    other => panic!("{other:?}"),
                 }
             }
             self.to_client.extend_from_slice(&s_out);

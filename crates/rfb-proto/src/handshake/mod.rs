@@ -60,3 +60,5 @@ fn write_string(
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod vencrypt_tests;

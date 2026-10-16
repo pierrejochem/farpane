@@ -51,6 +51,11 @@ fn run(
                     progressed = true;
                 }
                 Some(e @ ClientEvent::ServerInit { .. }) => run.client_event = Some(e),
+                Some(
+                    other @ (ClientEvent::StartTls { .. } | ClientEvent::PlainCredentialsNeeded),
+                ) => {
+                    panic!("these tests use no VeNCrypt: {other:?}")
+                }
                 None => {}
             }
             // Client -> server.
@@ -73,6 +78,11 @@ fn run(
                 Some(ServerEvent::ClientInit { shared }) => {
                     run.shared = Some(shared);
                     s.server_init(1920, 1080, &PixelFormat::RGB888, b"desk", &mut out)?;
+                }
+                Some(
+                    other @ (ServerEvent::StartTls { .. } | ServerEvent::PlainCredentials { .. }),
+                ) => {
+                    panic!("these tests use no VeNCrypt: {other:?}")
                 }
                 None => {}
             }
@@ -98,10 +108,12 @@ fn cfg(max: V, sec: &[u8]) -> (ClientConfig, ServerConfig) {
             max_version: max,
             shared: true,
             security: vec![security::VNC_AUTH, security::NONE],
+            ..ClientConfig::default()
         },
         ServerConfig {
             max_version: max,
             security: sec.to_vec(),
+            ..ServerConfig::default()
         },
     )
 }
@@ -275,6 +287,7 @@ fn golden_server_transcripts() {
         ServerConfig {
             max_version: V::V3_8,
             security: vec![security::NONE],
+            ..ServerConfig::default()
         },
         &mut out,
     );
@@ -290,6 +303,7 @@ fn golden_server_transcripts() {
         ServerConfig {
             max_version: V::V3_8,
             security: vec![security::NONE],
+            ..ServerConfig::default()
         },
         &mut out,
     );
@@ -305,6 +319,7 @@ fn golden_server_transcripts() {
         ServerConfig {
             max_version: V::V3_8,
             security: vec![security::NONE],
+            ..ServerConfig::default()
         },
         &mut out,
     );

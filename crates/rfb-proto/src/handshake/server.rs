@@ -3,7 +3,7 @@ use alloc::{vec, vec::Vec};
 use super::{try_read, write_string};
 use crate::{
     PixelFormat, ProtoError, ProtocolVersion,
-    consts::{limits, security},
+    consts::{limits, security, vencrypt},
 };
 
 /// Server handshake settings.
@@ -11,9 +11,13 @@ use crate::{
 pub struct ServerConfig {
     /// Highest version to offer.
     pub max_version: ProtocolVersion,
-    /// Security types to offer, most preferred first. Only None and VNC Auth
-    /// are handled here; 3.3 can use only the first entry.
+    /// Security types to offer, most preferred first. None, VNC Auth and
+    /// `VeNCrypt` are handled here; 3.3 can use only the first entry that is
+    /// None or VNC Auth.
     pub security: Vec<u8>,
+    /// `VeNCrypt` subtypes to offer: any of `X509_NONE`, `X509_VNC` and
+    /// `X509_PLAIN`.
+    pub vencrypt: Vec<u32>,
 }
 
 impl Default for ServerConfig {
@@ -21,6 +25,7 @@ impl Default for ServerConfig {
         Self {
             max_version: ProtocolVersion::V3_8,
             security: vec![security::VNC_AUTH],
+            vencrypt: vec![vencrypt::X509_VNC],
         }
     }
 }
@@ -34,6 +39,15 @@ pub enum ServerEvent {
     /// The client's DES response. Verify it, then call
     /// [`ServerHandshake::security_result`].
     VncAuthResponse([u8; 16]),
+    /// `VeNCrypt`: the client picked a TLS subtype. Run the TLS handshake as
+    /// the server, then call [`ServerHandshake::tls_established`].
+    StartTls { subtype: u32 },
+    /// `X509Plain` credentials from the client, received over TLS. Verify
+    /// them, then call [`ServerHandshake::security_result`].
+    PlainCredentials {
+        username: Vec<u8>,
+        password: Vec<u8>,
+    },
     /// Security passed and the client sent `ClientInit`. Answer with
     /// [`ServerHandshake::server_init`].
     ClientInit { shared: bool },
@@ -46,6 +60,12 @@ enum State {
     AwaitChallengeSend,
     AwaitResponse,
     AwaitResultSend,
+    VencryptVersion,
+    VencryptSubtype,
+    AwaitTls,
+    /// TLS is up for `X509Vnc`: announce the VNC Auth step.
+    TlsDoneVnc,
+    AwaitCredentials,
     AwaitClientInit,
     AwaitServerInitSend,
     Done,
@@ -60,6 +80,7 @@ pub struct ServerHandshake {
     cfg: ServerConfig,
     state: State,
     version: ProtocolVersion,
+    subtype: Option<u32>,
 }
 
 enum Progress {
@@ -79,6 +100,7 @@ impl ServerHandshake {
             cfg,
             state: State::AwaitVersion,
             version,
+            subtype: None,
         }
     }
 
@@ -187,6 +209,25 @@ impl ServerHandshake {
         Ok(())
     }
 
+    /// The TLS handshake finished: continue with the subtype's authentication.
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if no TLS upgrade was requested.
+    pub fn tls_established(&mut self, out: &mut Vec<u8>) -> Result<(), ProtoError> {
+        self.expect(State::AwaitTls, "tls_established out of order")?;
+        match self.subtype {
+            Some(vencrypt::X509_NONE) => {
+                // After VeNCrypt a SecurityResult always follows, on every version.
+                out.extend_from_slice(&0u32.to_be_bytes());
+                self.state = State::AwaitClientInit;
+            }
+            Some(vencrypt::X509_VNC) => self.state = State::TlsDoneVnc,
+            Some(vencrypt::X509_PLAIN) => self.state = State::AwaitCredentials,
+            _ => return Err(ProtoError::NoAcceptableSecurity),
+        }
+        Ok(())
+    }
+
     fn expect(&self, want: State, ctx: &'static str) -> Result<(), ProtoError> {
         if self.state == want {
             Ok(())
@@ -196,7 +237,7 @@ impl ServerHandshake {
     }
 
     // Closures, not method paths: `Reader<'a>` methods are not higher-ranked.
-    #[allow(clippy::redundant_closure_for_method_calls)]
+    #[allow(clippy::redundant_closure_for_method_calls, clippy::too_many_lines)]
     fn step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<Progress, ProtoError> {
         match self.state {
             State::AwaitVersion => {
@@ -213,7 +254,8 @@ impl ServerHandshake {
                     let t = *self
                         .cfg
                         .security
-                        .first()
+                        .iter()
+                        .find(|t| matches!(**t, security::NONE | security::VNC_AUTH))
                         .ok_or(ProtoError::NoAcceptableSecurity)?;
                     out.extend_from_slice(&u32::from(t).to_be_bytes());
                     if let Some(ev) = self.chosen(t, out)? {
@@ -256,7 +298,89 @@ impl ServerHandshake {
                 self.state = State::AwaitServerInitSend;
                 Ok(Progress::Event(n, ServerEvent::ClientInit { shared }))
             }
-            State::AwaitChallengeSend
+            State::VencryptVersion => {
+                let Some(((major, minor), n)) = try_read(input, |r| Ok((r.u8()?, r.u8()?)))? else {
+                    return Ok(Progress::Idle);
+                };
+                if (major, minor) != (0, 2) {
+                    out.push(1); // we only speak VeNCrypt 0.2
+                    return Err(ProtoError::SecurityFailed(Some(
+                        "client does not speak VeNCrypt 0.2".into(),
+                    )));
+                }
+                out.push(0);
+                let offered: Vec<u32> = self
+                    .cfg
+                    .vencrypt
+                    .iter()
+                    .copied()
+                    .filter(|t| {
+                        matches!(
+                            *t,
+                            vencrypt::X509_NONE | vencrypt::X509_VNC | vencrypt::X509_PLAIN
+                        )
+                    })
+                    .collect();
+                let count = u8::try_from(offered.len())
+                    .ok()
+                    .filter(|&c| c > 0)
+                    .ok_or(ProtoError::NoAcceptableSecurity)?;
+                out.push(count);
+                for t in offered {
+                    out.extend_from_slice(&t.to_be_bytes());
+                }
+                self.state = State::VencryptSubtype;
+                Ok(Progress::Consumed(n))
+            }
+            State::VencryptSubtype => {
+                let Some((t, n)) = try_read(input, |r| r.u32())? else {
+                    return Ok(Progress::Idle);
+                };
+                let allowed = self.cfg.vencrypt.contains(&t)
+                    && matches!(
+                        t,
+                        vencrypt::X509_NONE | vencrypt::X509_VNC | vencrypt::X509_PLAIN
+                    );
+                if !allowed {
+                    out.push(0);
+                    return Err(ProtoError::NoAcceptableSecurity);
+                }
+                out.push(1);
+                self.subtype = Some(t);
+                self.state = State::AwaitTls;
+                Ok(Progress::Event(n, ServerEvent::StartTls { subtype: t }))
+            }
+            State::TlsDoneVnc => {
+                self.state = State::AwaitChallengeSend;
+                Ok(Progress::Event(0, ServerEvent::VncAuthSelected))
+            }
+            State::AwaitCredentials => {
+                let Some(((username, password), n)) = try_read(input, |r| {
+                    let (ulen, plen) = (r.u32()?, r.u32()?);
+                    for (field, len) in [("username", ulen), ("password", plen)] {
+                        if len > limits::MAX_CREDENTIAL_LEN {
+                            return Err(ProtoError::LimitExceeded {
+                                field,
+                                value: u64::from(len),
+                                limit: u64::from(limits::MAX_CREDENTIAL_LEN),
+                            });
+                        }
+                    }
+                    let username = r.take(ulen as usize)?.to_vec();
+                    let password = r.take(plen as usize)?.to_vec();
+                    Ok((username, password))
+                })?
+                else {
+                    return Ok(Progress::Idle);
+                };
+                self.state = State::AwaitResultSend;
+                Ok(Progress::Event(
+                    n,
+                    ServerEvent::PlainCredentials { username, password },
+                ))
+            }
+            State::AwaitTls
+            | State::AwaitChallengeSend
             | State::AwaitResultSend
             | State::AwaitServerInitSend
             | State::Rejected
@@ -282,6 +406,11 @@ impl ServerHandshake {
             security::VNC_AUTH => {
                 self.state = State::AwaitChallengeSend;
                 Ok(Some(ServerEvent::VncAuthSelected))
+            }
+            security::VENCRYPT if self.version != ProtocolVersion::V3_3 => {
+                out.extend_from_slice(&[0, 2]); // the highest version we support: 0.2
+                self.state = State::VencryptVersion;
+                Ok(None)
             }
             _ => Err(ProtoError::NoAcceptableSecurity),
         }
