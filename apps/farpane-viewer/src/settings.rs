@@ -47,6 +47,22 @@ impl Default for Appearance {
     }
 }
 
+/// Input options.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Input {
+    /// Keyboard capture: `auto` (full screen only), `always` or `never`.
+    pub capture: String,
+}
+
+impl Default for Input {
+    fn default() -> Self {
+        Self {
+            capture: "auto".into(),
+        }
+    }
+}
+
 /// One address book entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedConnection {
@@ -71,6 +87,7 @@ pub struct KnownHost {
 pub struct Settings {
     pub version: u32,
     pub appearance: Appearance,
+    pub input: Input,
     #[serde(rename = "connection")]
     pub connections: Vec<SavedConnection>,
     /// Pinned certificates (trust on first use).
@@ -83,6 +100,7 @@ impl Default for Settings {
         Self {
             version: FORMAT_VERSION,
             appearance: Appearance::default(),
+            input: Input::default(),
             connections: Vec::new(),
             known_hosts: Vec::new(),
         }
