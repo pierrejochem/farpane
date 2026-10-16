@@ -1,0 +1,118 @@
+use rfb_proto::{consts::limits, types::Rect};
+
+use crate::DecodeError;
+
+/// Bytes per framebuffer pixel: `B, G, R, 0xFF`.
+pub const BYTES_PER_PIXEL: usize = 4;
+
+/// The client-side picture: 32 bits per pixel, rows without padding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Framebuffer {
+    width: u16,
+    height: u16,
+    pixels: Vec<u8>,
+}
+
+impl Framebuffer {
+    /// A black framebuffer.
+    ///
+    /// # Errors
+    /// [`DecodeError::OutOfBounds`] if a side exceeds
+    /// [`limits::MAX_FB_DIMENSION`].
+    pub fn new(width: u16, height: u16) -> Result<Self, DecodeError> {
+        if width > limits::MAX_FB_DIMENSION || height > limits::MAX_FB_DIMENSION {
+            return Err(DecodeError::OutOfBounds);
+        }
+        let len = usize::from(width) * usize::from(height) * BYTES_PER_PIXEL;
+        let mut pixels = vec![0; len];
+        for px in pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
+            px[3] = 0xFF;
+        }
+        Ok(Self {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    /// Change the size and clear the picture (`DesktopSize` semantics: the
+    /// old contents are discarded).
+    ///
+    /// # Errors
+    /// As [`Framebuffer::new`]; the framebuffer is unchanged on error.
+    pub fn resize(&mut self, width: u16, height: u16) -> Result<(), DecodeError> {
+        *self = Self::new(width, height)?;
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn width(&self) -> u16 {
+        self.width
+    }
+
+    #[must_use]
+    pub fn height(&self) -> u16 {
+        self.height
+    }
+
+    /// Bytes per row.
+    #[must_use]
+    pub fn stride(&self) -> usize {
+        usize::from(self.width) * BYTES_PER_PIXEL
+    }
+
+    /// All pixels, row by row, `B, G, R, 0xFF`.
+    #[must_use]
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// One pixel as `[b, g, r, 0xFF]`, or `None` outside the picture.
+    #[must_use]
+    pub fn pixel(&self, x: u16, y: u16) -> Option<[u8; 4]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let at = self.offset(x, y);
+        self.pixels[at..at + BYTES_PER_PIXEL].try_into().ok()
+    }
+
+    pub(crate) fn offset(&self, x: u16, y: u16) -> usize {
+        usize::from(y) * self.stride() + usize::from(x) * BYTES_PER_PIXEL
+    }
+
+    pub(crate) fn check(&self, rect: Rect) -> Result<(), DecodeError> {
+        if rect.fits(self.width, self.height) {
+            Ok(())
+        } else {
+            Err(DecodeError::OutOfBounds)
+        }
+    }
+
+    /// The bytes of row `row` of `rect`, mutable. `rect` must have been
+    /// checked with [`Framebuffer::check`].
+    pub(crate) fn row_mut(&mut self, rect: Rect, row: u16) -> &mut [u8] {
+        let at = self.offset(rect.x, rect.y + row);
+        &mut self.pixels[at..at + usize::from(rect.width) * BYTES_PER_PIXEL]
+    }
+
+    /// Copy `rect`-sized pixels from `(sx, sy)` to `rect`, correct for
+    /// overlapping areas. Both areas must have been checked.
+    pub(crate) fn copy_within(&mut self, sx: u16, sy: u16, rect: Rect) {
+        let row_bytes = usize::from(rect.width) * BYTES_PER_PIXEL;
+        let rows = rect.height;
+        // Copy downwards-moving areas bottom-up, so a source row is read
+        // before an earlier copy overwrites it. `copy_within` handles overlap
+        // inside one row.
+        let mut copy_row = |row: u16| {
+            let from = self.offset(sx, sy + row);
+            let to = self.offset(rect.x, rect.y + row);
+            self.pixels.copy_within(from..from + row_bytes, to);
+        };
+        if sy >= rect.y {
+            (0..rows).for_each(&mut copy_row);
+        } else {
+            (0..rows).rev().for_each(&mut copy_row);
+        }
+    }
+}

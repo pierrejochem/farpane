@@ -1,11 +1,24 @@
 //! Pixel encoders and decoders for RFB rectangles.
 //!
 //! Receives complete rectangle payloads from `rfb-proto`'s framers and turns
-//! them into pixels (viewer) or the reverse (server). Each decoder owns its
-//! persistent zlib state for the life of the connection.
+//! them into pixels (viewer) or the reverse (server). The [`Decoder`] owns the
+//! per-connection state, including (later) the persistent zlib streams.
 //!
-//! Status: not started. Milestone M2 adds Raw, `CopyRect`, RRE, Hextile, zlib,
-//! TRLE and ZRLE; M3 adds Tight. See `docs/design/farpane-reference.md`,
+//! The framebuffer is always 32 bits per pixel in `B, G, R, 0xFF` byte order
+//! ([`Framebuffer`]); wire formats are converted on the way in
+//! ([`PixelConverter`]).
+//!
+//! Status: Raw and `CopyRect` decode. RRE, `CoRRE`, Hextile, zlib, ZRLE and
+//! TRLE follow in M2, Tight in M3. See `docs/design/farpane-reference.md`,
 //! sections 7, 15 and 22.
 
+mod decoder;
+mod error;
+mod framebuffer;
+mod pixel;
+
+pub use decoder::{Damage, Decoder};
+pub use error::DecodeError;
+pub use framebuffer::Framebuffer;
+pub use pixel::PixelConverter;
 pub use rfb_proto::consts::enc;
