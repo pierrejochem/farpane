@@ -1,9 +1,11 @@
 //! Security handshakes for RFB, plugged into `rfb-proto` through one trait.
 //!
-//! Status: interface only. Planned implementations (design doc section 4 and
-//! 20): None, VNC Auth (DES with bit-reversed key), `VeNCrypt` with rustls,
+//! Status: [`vnc_auth`] (DES with bit-reversed key) is done. Planned
+//! implementations (design doc section 4 and 20): `VeNCrypt` with rustls,
 //! RA2 and RA2-256 (RSA + AES-EAX framing), Apple DH (viewer), checking
 //! credentials against the server's own user list (Argon2id).
+
+pub mod vnc_auth;
 
 /// What a security step asks the I/O layer to do next.
 #[derive(Debug)]
