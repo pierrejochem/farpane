@@ -64,6 +64,10 @@ pub struct ServerOptions {
     /// Offer RSA-AES with this key. Needs [`ServerAuth::Plain`]: the
     /// credentials travel inside the encrypted channel.
     pub ra2: Option<Ra2Server>,
+    /// The stream is already inside TLS, as with a `wss` WebSocket: then the
+    /// credentials may travel as `VeNCrypt` `Plain` and the `RA2ne` types are
+    /// offered. Leave `tls` unset.
+    pub secure_transport: bool,
 }
 
 /// The server's RSA-AES settings.
@@ -87,6 +91,7 @@ impl ServerOptions {
             handshake_timeout: HANDSHAKE_TIMEOUT,
             tls: None,
             ra2: None,
+            secure_transport: false,
         }
     }
 
@@ -97,6 +102,14 @@ impl ServerOptions {
             key,
             allow_unencrypted: false,
         });
+        self
+    }
+
+    /// The stream is already encrypted by something else (TLS under a
+    /// WebSocket); see [`ServerOptions::secure_transport`].
+    #[must_use]
+    pub fn with_secure_transport(mut self) -> Self {
+        self.secure_transport = true;
         self
     }
 
@@ -129,9 +142,17 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     pub async fn accept(stream: S, opts: ServerOptions) -> Result<Self, Error> {
         let mut security_types = Vec::new();
         let mut subtypes = Vec::new();
+        if opts.secure_transport && opts.tls.is_some() {
+            return Err(Error::Config("a secure transport has TLS already"));
+        }
         match (&opts.tls, &opts.auth) {
             (None, ServerAuth::None) => security_types.push(security::NONE),
             (None, ServerAuth::VncPassword(_)) => security_types.push(security::VNC_AUTH),
+            (None, ServerAuth::Plain(_)) if opts.secure_transport => {
+                // The user name and password are safe inside the outer TLS.
+                security_types.push(security::VENCRYPT);
+                subtypes.push(vencrypt::PLAIN);
+            }
             (None, ServerAuth::Plain(_)) if opts.ra2.is_none() => {
                 return Err(Error::Config("username and password need TLS or RSA-AES"));
             }
@@ -150,7 +171,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
                 return Err(Error::Config("RSA-AES needs user names and passwords"));
             }
             security_types.extend([security::RA2_256, security::RA2]);
-            if ra2.allow_unencrypted {
+            if ra2.allow_unencrypted || opts.secure_transport {
                 security_types.extend([security::RA2NE_256, security::RA2NE]);
             }
         }

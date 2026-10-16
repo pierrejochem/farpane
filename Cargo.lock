@@ -3303,22 +3303,27 @@ dependencies = [
 name = "rfb-server"
 version = "0.1.0"
 dependencies = [
+ "rcgen",
  "rfb-codec",
  "rfb-proto",
  "rfb-tokio",
+ "rustls",
  "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
 name = "rfb-tokio"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bytes",
  "getrandom 0.4.3",
  "rcgen",
  "rfb-proto",
  "rfb-security",
  "rustls",
+ "sha1",
  "tokio",
  "tokio-rustls",
 ]

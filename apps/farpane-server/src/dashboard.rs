@@ -171,6 +171,8 @@ struct SecurityPanel {
     problem: Option<String>,
     edit: ServerSettings,
     listen_text: String,
+    /// The WebSocket address being typed (empty: no WebSocket port).
+    ws_text: String,
     /// Waiting for the user to confirm forgetting a key.
     confirm: Option<Forget>,
     /// The result of the last action: (was it fine, what to say).
@@ -483,6 +485,7 @@ impl Dashboard {
         match ServerSettings::load(&self.settings_path()) {
             Ok(s) => {
                 self.security.listen_text = s.listen.clone().unwrap_or_default();
+                self.security.ws_text = s.websocket.clone().unwrap_or_default();
                 self.security.edit = s;
                 self.security.problem = None;
             }
@@ -500,8 +503,17 @@ impl Dashboard {
             ));
             return;
         }
+        let ws = self.security.ws_text.trim().to_owned();
+        if !ws.is_empty() && ws.parse::<std::net::SocketAddr>().is_err() {
+            self.security.message = Some((
+                false,
+                format!("\"{ws}\" is not an address and port, such as 0.0.0.0:5800"),
+            ));
+            return;
+        }
         let mut s = self.security.edit.clone();
         s.listen = (!listen.is_empty()).then_some(listen);
+        s.websocket = (!ws.is_empty()).then_some(ws);
         self.security.message = Some(match s.save(&self.settings_path()) {
             Ok(()) => {
                 self.security.edit = s.clone();
@@ -914,6 +926,14 @@ impl Dashboard {
                     ui.label(RichText::new(&self.status.listen).monospace().size(12.5));
                 });
             });
+            if let Some(ws) = &self.status.websocket {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("WebSocket").color(tokens.muted).size(12.5));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.label(RichText::new(ws).monospace().size(12.5));
+                    });
+                });
+            }
         });
     }
 
@@ -1650,6 +1670,13 @@ impl Dashboard {
             ui.horizontal(|ui| {
                 ui.label("Listen on");
                 ui.text_edit_singleline(&mut self.security.listen_text);
+            });
+            ui.horizontal(|ui| {
+                ui.label("WebSocket for browsers");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.security.ws_text)
+                        .hint_text("empty: off, or 0.0.0.0:5800"),
+                );
             });
             let listen = self.security.listen_text.trim();
             let beyond_here = listen

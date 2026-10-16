@@ -28,6 +28,12 @@ By default the server listens on `127.0.0.1:5900` and refuses a non-loopback add
 
 Accounts sign in by name and password inside encryption: TLS (`--tls-self-signed` or `--tls-cert` and `--tls-key`) or RSA-AES (`--ra2`). The server prints the certificate and RSA key fingerprints at start; give them to your users so they can compare them in the viewer.
 
+## Browsers (noVNC)
+
+`--ws ADDR` (or **WebSocket for browsers** on the Security page) adds a second port that speaks WebSocket, so a page running [noVNC](https://novnc.com/) can connect to `wss://HOST:PORT`. With TLS configured (`--tls-self-signed` or your own certificate) it is `wss`: the browser's TLS protects the connection and users sign in with user name and password (VeNCrypt Plain or RSA-AES without extra encryption, both safe inside `wss`). Without TLS the port is `ws` and is only accepted on this computer (a loopback address), because a browser would otherwise send passwords in the clear. A self-signed certificate makes the browser ask you to accept it first.
+
+Only pages from the same host may use the port unless you list others with `--ws-origin https://pages.example` (repeatable; `*` allows any page, which makes the server's own sign-in the only protection). The server does not serve noVNC itself: host its files anywhere and point it at the port.
+
 ## Approving connections
 
 With `--require-approval` (or **Ask before a client gets in** on the Security page) every client that signs in waits until you answer. The dashboard shows an **Approval needed** card on every page with **Allow**, **Allow view only** and **Deny**. The client sees an open connection but no pictures meanwhile; with no answer in 60 seconds it is turned away. Decisions go into the event log.

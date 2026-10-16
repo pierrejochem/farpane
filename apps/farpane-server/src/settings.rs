@@ -38,6 +38,10 @@ pub struct ServerSettings {
     /// Hold every new client until the operator allows it.
     #[serde(default)]
     pub require_approval: bool,
+    /// Also accept WebSocket connections here (noVNC and other browser
+    /// clients), such as `0.0.0.0:5800`.
+    #[serde(default)]
+    pub websocket: Option<String>,
 }
 
 impl Default for ServerSettings {
@@ -49,6 +53,7 @@ impl Default for ServerSettings {
             ra2: false,
             view_only: false,
             require_approval: false,
+            websocket: None,
         }
     }
 }

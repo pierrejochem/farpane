@@ -417,6 +417,55 @@ fn the_server_refuses_what_it_did_not_offer() {
 }
 
 #[test]
+fn plain_without_tls_goes_straight_to_the_credentials() {
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(
+        ServerConfig {
+            security: vec![security::VENCRYPT],
+            vencrypt: vec![vencrypt::PLAIN],
+            ..ServerConfig::default()
+        },
+        &mut out,
+    );
+    out.clear();
+    let mut input = b"RFB 003.008\n".to_vec();
+    input.push(security::VENCRYPT);
+    input.extend_from_slice(&[0, 2]);
+    input.extend_from_slice(&vencrypt::PLAIN.to_be_bytes());
+    // user "alice" (5 bytes), password "s3cret" (6 bytes)
+    input.extend_from_slice(&5u32.to_be_bytes());
+    input.extend_from_slice(&6u32.to_be_bytes());
+    input.extend_from_slice(b"alices3cret");
+    // Fed byte by byte, as the split-input convention asks.
+    let mut event = None;
+    let mut buf = Vec::new();
+    for b in input {
+        buf.push(b);
+        loop {
+            let (n, ev) = s.poll(&buf, &mut out).unwrap();
+            buf.drain(..n);
+            if ev.is_some() {
+                event = ev;
+            }
+            if n == 0 {
+                break;
+            }
+        }
+    }
+    assert_eq!(
+        event,
+        Some(ServerEvent::PlainCredentials {
+            username: b"alice".to_vec(),
+            password: b"s3cret".to_vec()
+        })
+    );
+    // 0 (version ok), one subtype (Plain = 256); no acknowledgement byte and
+    // no TLS step after the choice.
+    let tail: Vec<u8> = out[out.len() - 6..].to_vec();
+    assert_eq!(tail, [0, 1, 0, 0, 1, 0]);
+}
+
+#[test]
 fn a_client_version_other_than_0_2_is_refused_by_the_server() {
     let mut out = Vec::new();
     let mut s = ServerHandshake::new(

@@ -331,9 +331,12 @@ where
             }
             if list.contains(&pseudo::FENCE) && !st.announced_fence {
                 st.announced_fence = true;
+                // A request with no flags and no payload: every client has to
+                // answer it, and none mistakes it for a stray reply (noVNC
+                // closes the connection on a fence that is not a request).
                 session
                     .send(&ServerMessage::Fence {
-                        flags: 0,
+                        flags: fence::REQUEST,
                         payload: Vec::new(),
                     })
                     .await?;

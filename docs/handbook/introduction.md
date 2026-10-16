@@ -29,7 +29,7 @@ Farpane is in early development and has **not been released**. The viewer and se
 | Server on Linux (X11, Wayland) | Works. |
 | Server on Windows and macOS | Capture and input backends are not written yet. |
 | Encodings | Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, TRLE and Tight (no JPEG). H.264 is not built. |
-| Browser access (noVNC) | Planned, not built. |
+| Browser access (noVNC) | A WebSocket port (`--ws`), checked against noVNC 1.5.0 in Chrome. |
 
 The [protocol support](protocol.html) page lists exactly what is verified, and the [security model](security.html) explains how connections are protected.
 

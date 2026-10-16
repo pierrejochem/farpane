@@ -15,8 +15,10 @@ pub struct ServerConfig {
     /// `VeNCrypt` are handled here; 3.3 can use only the first entry that is
     /// None or VNC Auth.
     pub security: Vec<u8>,
-    /// `VeNCrypt` subtypes to offer: any of `X509_NONE`, `X509_VNC` and
-    /// `X509_PLAIN`.
+    /// `VeNCrypt` subtypes to offer: any of `X509_NONE`, `X509_VNC`,
+    /// `X509_PLAIN` and `PLAIN`. `PLAIN` sends the user name and password
+    /// with no TLS of its own, so offer it only when the connection is
+    /// already encrypted (a `wss` WebSocket).
     pub vencrypt: Vec<u32>,
 }
 
@@ -321,7 +323,10 @@ impl ServerHandshake {
                     .filter(|t| {
                         matches!(
                             *t,
-                            vencrypt::X509_NONE | vencrypt::X509_VNC | vencrypt::X509_PLAIN
+                            vencrypt::X509_NONE
+                                | vencrypt::X509_VNC
+                                | vencrypt::X509_PLAIN
+                                | vencrypt::PLAIN
                         )
                     })
                     .collect();
@@ -343,14 +348,24 @@ impl ServerHandshake {
                 let allowed = self.cfg.vencrypt.contains(&t)
                     && matches!(
                         t,
-                        vencrypt::X509_NONE | vencrypt::X509_VNC | vencrypt::X509_PLAIN
+                        vencrypt::X509_NONE
+                            | vencrypt::X509_VNC
+                            | vencrypt::X509_PLAIN
+                            | vencrypt::PLAIN
                     );
                 if !allowed {
                     out.push(0);
                     return Err(ProtoError::NoAcceptableSecurity);
                 }
-                out.push(1);
                 self.subtype = Some(t);
+                if t == vencrypt::PLAIN {
+                    // No TLS of its own, and so no acknowledgement byte either
+                    // (rfbproto: only the TLS and X509 subtypes have one, and
+                    // noVNC does not read one): the credentials follow at once.
+                    self.state = State::AwaitCredentials;
+                    return Ok(Progress::Consumed(n));
+                }
+                out.push(1);
                 self.state = State::AwaitTls;
                 Ok(Progress::Event(n, ServerEvent::StartTls { subtype: t }))
             }

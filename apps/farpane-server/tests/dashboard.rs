@@ -41,6 +41,7 @@ impl Backend for Fake {
             fingerprints: vec![("Certificate".into(), "AA:BB:CC".into())],
             failure: self.failure.lock().unwrap().clone(),
             screen: (320, 200),
+            websocket: None,
             paused: self
                 .calls
                 .lock()

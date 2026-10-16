@@ -19,6 +19,7 @@ mod io;
 mod ra2;
 mod server;
 mod transport;
+pub mod ws;
 
 pub use client::{ClientOptions, ClientSession, ServerInfo, TlsOptions};
 pub use error::Error;

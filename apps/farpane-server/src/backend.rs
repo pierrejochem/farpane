@@ -133,6 +133,8 @@ pub struct Status {
     /// Why capturing stopped, if it did.
     pub failure: Option<String>,
     pub screen: (u16, u16),
+    /// Where browsers connect, if anywhere.
+    pub websocket: Option<String>,
     /// Sharing is paused.
     pub paused: bool,
     /// The ways to sign in: name, a note, and whether it is offered.
@@ -186,6 +188,8 @@ pub struct LiveInfo {
     pub listen: String,
     /// How clients sign in and how the traffic is protected.
     pub access: String,
+    /// Where WebSocket clients (browsers) connect, if anywhere.
+    pub websocket: Option<String>,
     /// Fingerprints a viewer asks its user to confirm, with a label each.
     pub fingerprints: Vec<(String, String)>,
     /// The ways to sign in: name, a note, and whether it is offered.
@@ -226,6 +230,7 @@ impl Backend for LiveBackend {
             fingerprints: info.fingerprints,
             failure: self.server.capture_failure(),
             screen: self.server.size(),
+            websocket: info.websocket,
             paused: self.server.is_paused(),
             offered: info.offered,
         }

@@ -28,6 +28,10 @@ The server keeps its own user list in `users.toml` (mode 0600). Passwords are ha
 - **Throttle**: delays of 1, 2, 4 ... 30 seconds per address (an IPv6 /64 counts as one address) after failures.
 - **Limits**: at most 4 password hashes at once, 32 connections per address and 256 in total by default.
 
+## Browsers
+
+The WebSocket port accepts user names and passwords only inside TLS (`wss`), and refuses `ws` on a network address. It checks the `Origin` of every browser connection so another web page cannot use a visitor's browser to reach the server. Frames are bounded and malformed ones end the connection.
+
 ## Approval
 
 The server can hold every new client until you allow it (`--require-approval`), as view only if you like. An unanswered request is refused after 60 seconds.

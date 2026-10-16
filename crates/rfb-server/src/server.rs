@@ -95,6 +95,14 @@ pub struct Server {
     approval_timeout: Duration,
     waiting: Mutex<Vec<Waiting>>,
     next_waiting: AtomicU64,
+    websocket: RwLock<WebSocketConfig>,
+}
+
+/// How the WebSocket listener treats connections; changeable while running.
+#[derive(Clone, Default)]
+struct WebSocketConfig {
+    tls: Option<Arc<rustls::ServerConfig>>,
+    origins: rfb_tokio::ws::OriginPolicy,
 }
 
 /// A client that signed in and waits for the operator.
@@ -275,6 +283,7 @@ impl Server {
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             waiting: Mutex::new(Vec::new()),
             next_waiting: AtomicU64::new(1),
+            websocket: RwLock::new(WebSocketConfig::default()),
         })
     }
 
@@ -516,8 +525,33 @@ impl Server {
     ///
     /// # Errors
     /// Handshake and protocol errors; [`Error::Closed`] when the client hangs up.
-    #[allow(clippy::too_many_lines)] // handshake, registration, session, cleanup
     pub async fn serve<S>(&self, stream: S, peer: Option<SocketAddr>) -> Result<(), Error>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        self.serve_over(stream, peer, false).await
+    }
+
+    /// Like [`Server::serve`] for a stream that is already encrypted, such as
+    /// a TLS WebSocket (`wss`): user names and passwords may then be sent as
+    /// `VeNCrypt` `Plain`, and the client is listed as protected by TLS.
+    ///
+    /// # Errors
+    /// As [`Server::serve`].
+    pub async fn serve_secure<S>(&self, stream: S, peer: Option<SocketAddr>) -> Result<(), Error>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        self.serve_over(stream, peer, true).await
+    }
+
+    #[allow(clippy::too_many_lines)] // handshake, registration, session, cleanup
+    async fn serve_over<S>(
+        &self,
+        stream: S,
+        peer: Option<SocketAddr>,
+        secure: bool,
+    ) -> Result<(), Error>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
@@ -568,6 +602,11 @@ impl Server {
             .clone();
         opts.width = w;
         opts.height = h;
+        if secure {
+            // The outer TLS replaces the one `VeNCrypt` would start.
+            opts.tls = None;
+            opts.secure_transport = true;
+        }
         let session = match ServerSession::accept(stream, opts).await {
             Ok(s) => s,
             Err(e) => {
@@ -608,7 +647,7 @@ impl Server {
                 .as_ref()
                 .map_or(Permission::Full, |f| f(user.as_deref()))
         };
-        let encryption = if session.is_encrypted() {
+        let encryption = if secure || session.is_encrypted() {
             "TLS"
         } else if session.is_ra2() {
             "RSA-AES"
@@ -708,6 +747,74 @@ impl Server {
         }
     }
 
+    /// How WebSocket connections are accepted by [`Server::listen_ws`]: with
+    /// `tls` they are `wss` (TLS first, then clients may sign in with
+    /// `VeNCrypt` `Plain` and `RA2ne`); without it they are `ws` and carry no
+    /// more protection than the RFB handshake gives. `origins` decides which
+    /// web pages may connect. Takes effect for the next connection.
+    pub fn set_websocket(
+        &self,
+        tls: Option<Arc<rustls::ServerConfig>>,
+        origins: rfb_tokio::ws::OriginPolicy,
+    ) {
+        *self
+            .websocket
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = WebSocketConfig { tls, origins };
+    }
+
+    /// Accept WebSocket connections on `listener` for ever (noVNC and other
+    /// browser clients), as set by [`Server::set_websocket`].
+    ///
+    /// # Errors
+    /// The listener failing.
+    pub async fn listen_ws(self: Arc<Self>, listener: TcpListener) -> io::Result<()> {
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            let _ = stream.set_nodelay(true);
+            let WebSocketConfig { tls, origins } = self
+                .websocket
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            let server = Arc::clone(&self);
+            tokio::spawn(async move {
+                let step = Duration::from_secs(30);
+                let result = async {
+                    if let Some(config) = tls {
+                        let tls =
+                            tokio::time::timeout(step, rfb_tokio::ws::accept_tls(stream, config))
+                                .await
+                                .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+                        let ws = tokio::time::timeout(step, rfb_tokio::ws::accept(tls, &origins))
+                            .await
+                            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+                        Ok::<_, io::Error>(Either::Secure(ws))
+                    } else {
+                        let ws =
+                            tokio::time::timeout(step, rfb_tokio::ws::accept(stream, &origins))
+                                .await
+                                .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+                        Ok(Either::Open(ws))
+                    }
+                }
+                .await;
+                match result {
+                    Ok(Either::Secure(ws)) => {
+                        let _ = server.serve_secure(ws, Some(peer)).await;
+                    }
+                    Ok(Either::Open(ws)) => {
+                        let _ = server.serve(ws, Some(peer)).await;
+                    }
+                    Err(e) => server.emit(&Event::HandshakeFailed {
+                        peer: Some(peer),
+                        error: format!("WebSocket: {e}"),
+                    }),
+                }
+            });
+        }
+    }
+
     /// Accept connections on `listener` for ever, one task each. Use
     /// [`Server::set_events`] to hear about them.
     ///
@@ -724,6 +831,12 @@ impl Server {
             });
         }
     }
+}
+
+/// Which kind of WebSocket connection was set up.
+enum Either<A, B> {
+    Secure(A),
+    Open(B),
 }
 
 /// A client going away is normal, not an error to report.

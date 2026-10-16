@@ -52,6 +52,10 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --allow-no-auth        accept connections without credentials on a
                          non-loopback address (a bad idea without a tunnel)
   --max-connections N    most connections at once, handshakes included (default 256)
+  --ws ADDR              also accept WebSocket connections (noVNC) on ADDR; needs TLS
+                         unless ADDR is on this computer (loopback)
+  --ws-origin ORIGIN     web page allowed to use the WebSocket port (repeatable, `*` for
+                         any; default: pages served from the same host)
   --require-approval     hold each new client until you allow it in the dashboard
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
@@ -75,6 +79,11 @@ struct Args {
     max_connections: Option<usize>,
     theme: Option<farpane_ui::ThemePreference>,
     require_approval: bool,
+    /// Also accept WebSocket connections (browsers) here.
+    ws: Option<SocketAddr>,
+    ws_given: bool,
+    /// Web pages allowed to connect: origins, or `*` for any.
+    ws_origins: Vec<String>,
     password: Option<Vec<u8>>,
     view_only: bool,
     allow_no_auth: bool,
@@ -118,6 +127,9 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
         max_connections: None,
         theme: None,
         require_approval: false,
+        ws: None,
+        ws_given: false,
+        ws_origins: Vec::new(),
         password: std::env::var("FARPANE_PASSWORD")
             .ok()
             .filter(|p| !p.is_empty())
@@ -153,6 +165,15 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
                     .map_err(|_| "--ui-delay: seconds")?;
             }
             "--require-approval" => args.require_approval = true,
+            "--ws" => {
+                args.ws = Some(
+                    value(&mut it, "--ws")?
+                        .parse()
+                        .map_err(|_| "--ws: an address and port, such as 0.0.0.0:5800")?,
+                );
+                args.ws_given = true;
+            }
+            "--ws-origin" => args.ws_origins.push(value(&mut it, "--ws-origin")?),
             "--theme" => {
                 use farpane_ui::ThemePreference as T;
                 let name = value(&mut it, "--theme")?;
@@ -257,6 +278,15 @@ fn merge_settings(mut args: Args, saved: &ServerSettings) -> Result<Args, String
     args.ra2 |= saved.ra2;
     args.view_only |= saved.view_only;
     args.require_approval |= saved.require_approval;
+    if !args.ws_given {
+        args.ws = match &saved.websocket {
+            Some(ws) => Some(
+                ws.parse()
+                    .map_err(|e| format!("server.toml: websocket: {e}"))?,
+            ),
+            None => None,
+        };
+    }
     Ok(args)
 }
 
@@ -420,6 +450,29 @@ fn note(events: &EventLog, level: Level, text: &str) {
     events.push(level, text);
 }
 
+/// How web pages are checked on the WebSocket port.
+fn origin_policy(args: &Args) -> rfb_tokio::ws::OriginPolicy {
+    use rfb_tokio::ws::OriginPolicy;
+    if args.ws_origins.iter().any(|o| o == "*") {
+        OriginPolicy::Any
+    } else if args.ws_origins.is_empty() {
+        OriginPolicy::SameHost
+    } else {
+        OriginPolicy::List(args.ws_origins.clone())
+    }
+}
+
+/// The WebSocket port needs TLS unless it is on this computer: a browser
+/// would send passwords over it in the clear.
+fn check_websocket(args: &Args, access: &config::Access) -> Result<(), String> {
+    match args.ws {
+        Some(ws) if access.identity.is_none() && !ws.ip().is_loopback() => Err(format!(
+            "the WebSocket port {ws} needs TLS (--tls-self-signed): browsers would send passwords in the clear."
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// What the dashboard shows about the setup.
 fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveInfo {
     let mut fingerprints = Vec::new();
@@ -459,6 +512,15 @@ fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveI
             args.require_approval,
         ),
         (
+            "WebSocket (browsers)".to_owned(),
+            if access.identity.is_some() {
+                "wss: TLS, then user name and password".to_owned()
+            } else {
+                "ws on this computer only".to_owned()
+            },
+            args.ws.is_some(),
+        ),
+        (
             "No authentication".to_owned(),
             "Anyone who can connect gets in".to_owned(),
             !authenticated,
@@ -466,6 +528,7 @@ fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveI
     ];
     LiveInfo {
         listen: args.listen.to_string(),
+        websocket: args.ws.map(|w| w.to_string()),
         access: access.description.clone(),
         fingerprints,
         offered,
@@ -476,6 +539,7 @@ fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveI
 struct Running {
     server: Arc<Server>,
     listener: TcpListener,
+    ws_listener: Option<TcpListener>,
     source: String,
     info: LiveInfo,
     events: EventLog,
@@ -535,6 +599,10 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             );
         }
     }
+    check_websocket(args, &access).map_err(|e| {
+        eprintln!("farpane-server: {e}");
+        ExitCode::from(2)
+    })?;
     // Opening a screen may wait for the user (the Wayland approval dialog), so
     // keep it off the async threads.
     let (a, dir) = (args.clone(), config_dir.clone());
@@ -574,10 +642,37 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         };
         note(&sink, level, &describe(e));
     });
+    let server = Arc::new(server);
     let listener = TcpListener::bind(args.listen).await.map_err(|e| {
         eprintln!("farpane-server: cannot listen on {}: {e}", args.listen);
         ExitCode::FAILURE
     })?;
+    let ws_listener = match args.ws {
+        Some(ws) => {
+            server.set_websocket(
+                access.identity.as_ref().map(|i| Arc::clone(&i.config)),
+                origin_policy(args),
+            );
+            let l = TcpListener::bind(ws).await.map_err(|e| {
+                eprintln!("farpane-server: cannot listen on {ws}: {e}");
+                ExitCode::FAILURE
+            })?;
+            note(
+                &events,
+                Level::Info,
+                &format!(
+                    "WebSocket clients: {}://{ws}",
+                    if access.identity.is_some() {
+                        "wss"
+                    } else {
+                        "ws"
+                    }
+                ),
+            );
+            Some(l)
+        }
+        None => None,
+    };
     note(
         &events,
         Level::Info,
@@ -598,8 +693,9 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         note(&events, Level::Info, &format!("{what} SHA-256 {text}"));
     }
     Ok(Running {
-        server: Arc::new(server),
+        server,
         listener,
+        ws_listener,
         source: what,
         info,
         events,
@@ -641,10 +737,22 @@ fn main() -> ExitCode {
     };
     if args.headless {
         return rt.block_on(async {
+            let ws = async {
+                match running.ws_listener {
+                    Some(l) => Arc::clone(&running.server).listen_ws(l).await,
+                    None => std::future::pending().await,
+                }
+            };
             tokio::select! {
                 result = Arc::clone(&running.server).listen(running.listener) => {
                     if let Err(e) = result {
                         eprintln!("farpane-server: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                result = ws => {
+                    if let Err(e) = result {
+                        eprintln!("farpane-server: WebSocket listener: {e}");
                         return ExitCode::FAILURE;
                     }
                 }
@@ -657,15 +765,18 @@ fn main() -> ExitCode {
     let Running {
         server,
         listener,
+        ws_listener,
         source,
         info,
         events,
         config_dir,
     } = running;
-    let listen_task = Arc::new(std::sync::Mutex::new((
-        args.listen,
-        rt.spawn(Arc::clone(&server).listen(listener)),
-    )));
+    let listen_task = Arc::new(std::sync::Mutex::new(Listeners {
+        rfb: (args.listen, rt.spawn(Arc::clone(&server).listen(listener))),
+        ws: ws_listener
+            .zip(args.ws)
+            .map(|(l, addr)| (addr, rt.spawn(Arc::clone(&server).listen_ws(l)))),
+    }));
     let applier: backend::Applier = {
         let (server, events, config_dir, handle) = (
             Arc::clone(&server),
@@ -721,6 +832,12 @@ fn main() -> ExitCode {
     }
 }
 
+/// The accept loops of a running server and where each listens.
+struct Listeners {
+    rfb: (SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>),
+    ws: Option<(SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>)>,
+}
+
 /// Put saved settings to work in the running server: how clients sign in,
 /// view-only, approval, and where it listens. Nothing changes if any step
 /// fails; connections already made are left alone.
@@ -731,7 +848,7 @@ fn apply_live(
     events: &EventLog,
     config_dir: &std::path::Path,
     handle: &tokio::runtime::Handle,
-    listen_task: &std::sync::Mutex<(SocketAddr, tokio::task::JoinHandle<std::io::Result<()>>)>,
+    listen_task: &std::sync::Mutex<Listeners>,
 ) -> Result<LiveInfo, String> {
     let args = merge_settings(cli.clone(), saved)?;
     let tls = tls_choice(&args)?;
@@ -753,23 +870,65 @@ fn apply_live(
             args.listen
         ));
     }
-    // Bind the new address before letting go of the old one.
+    check_websocket(&args, &access)?;
+    // Bind new addresses before letting go of the old ones.
     let mut current = listen_task
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if current.0 != args.listen {
-        let listener = handle
-            .block_on(TcpListener::bind(args.listen))
-            .map_err(|e| format!("cannot listen on {}: {e}.", args.listen))?;
-        current.1.abort();
-        current.1 = handle.spawn(Arc::clone(server).listen(listener));
-        current.0 = args.listen;
+    let new_rfb = if current.rfb.0 == args.listen {
+        None
+    } else {
+        Some(
+            handle
+                .block_on(TcpListener::bind(args.listen))
+                .map_err(|e| format!("cannot listen on {}: {e}.", args.listen))?,
+        )
+    };
+    let current_ws = current.ws.as_ref().map(|w| w.0);
+    let new_ws = match (args.ws, current_ws) {
+        (Some(want), have) if have != Some(want) => Some(
+            handle
+                .block_on(TcpListener::bind(want))
+                .map_err(|e| format!("cannot listen on {want}: {e}."))?,
+        ),
+        _ => None,
+    };
+    if let Some(listener) = new_rfb {
+        current.rfb.1.abort();
+        current.rfb.1 = handle.spawn(Arc::clone(server).listen(listener));
+        current.rfb.0 = args.listen;
         note(
             events,
             Level::Info,
             &format!("now listening on {}", args.listen),
         );
     }
+    // Certificate and origins apply to the next WebSocket connection.
+    server.set_websocket(
+        access.identity.as_ref().map(|i| Arc::clone(&i.config)),
+        origin_policy(&args),
+    );
+    match (args.ws, new_ws) {
+        (Some(want), Some(listener)) => {
+            if let Some(old) = current.ws.take() {
+                old.1.abort();
+            }
+            current.ws = Some((want, handle.spawn(Arc::clone(server).listen_ws(listener))));
+            note(
+                events,
+                Level::Info,
+                &format!("WebSocket clients now at {want}"),
+            );
+        }
+        (None, _) => {
+            if let Some(old) = current.ws.take() {
+                old.1.abort();
+                note(events, Level::Info, "the WebSocket port was closed");
+            }
+        }
+        (Some(_), None) => {}
+    }
+    drop(current);
     let policy = access.authenticator.clone().map(|auth| {
         let policy: rfb_server::Policy = Arc::new(move |user| auth.permission(user));
         policy
@@ -837,6 +996,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // one scenario, step by step
     fn applying_settings_live_changes_the_running_server_and_moves_the_listener() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let dir = tempfile::tempdir().unwrap();
@@ -852,7 +1012,10 @@ mod tests {
         );
         let first = rt.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
         let first_addr = first.local_addr().unwrap();
-        let task = std::sync::Mutex::new((first_addr, rt.spawn(Arc::clone(&server).listen(first))));
+        let task = std::sync::Mutex::new(Listeners {
+            rfb: (first_addr, rt.spawn(Arc::clone(&server).listen(first))),
+            ws: None,
+        });
         let mut cli = args(&["--config-dir", dir.path().to_str().unwrap()]);
         cli.listen = first_addr;
         cli.listen_given = true;
@@ -910,7 +1073,7 @@ mod tests {
             &task,
         )
         .unwrap();
-        assert_eq!(task.lock().unwrap().0, spare_addr);
+        assert_eq!(task.lock().unwrap().rfb.0, spare_addr);
         rt.block_on(async {
             use tokio::io::AsyncReadExt;
             let mut banner = [0u8; 4];
@@ -923,6 +1086,64 @@ mod tests {
                 "the old address is released"
             );
         });
+        // A WebSocket port on this computer opens and closes while running.
+        let ws_spare = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let ws_addr = ws_spare.local_addr().unwrap();
+        drop(ws_spare);
+        let ws_cli = Args {
+            listen_given: false,
+            ..cli.clone()
+        };
+        let live_ws = |saved: ServerSettings| {
+            apply_live(
+                &ws_cli,
+                &saved,
+                &server,
+                &events,
+                dir.path(),
+                rt.handle(),
+                &task,
+            )
+        };
+        let info = live_ws(ServerSettings {
+            listen: Some(spare_addr.to_string()),
+            websocket: Some(ws_addr.to_string()),
+            ..ServerSettings::default()
+        })
+        .unwrap();
+        assert_eq!(
+            info.websocket.as_deref(),
+            Some(ws_addr.to_string().as_str())
+        );
+        rt.block_on(async {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            let tcp = tokio::net::TcpStream::connect(ws_addr).await.unwrap();
+            let mut socket = rfb_tokio::ws::connect(tcp, &ws_addr.to_string(), None)
+                .await
+                .unwrap();
+            let mut banner = [0u8; 4];
+            socket.read_exact(&mut banner).await.unwrap();
+            assert_eq!(&banner, b"RFB ");
+            let _ = socket.shutdown().await;
+        });
+        // Off again: the port closes.
+        let info = live_ws(ServerSettings {
+            listen: Some(spare_addr.to_string()),
+            ..ServerSettings::default()
+        })
+        .unwrap();
+        assert_eq!(info.websocket, None);
+        rt.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            assert!(tokio::net::TcpStream::connect(ws_addr).await.is_err());
+        });
+        // A WebSocket port reachable from the network needs TLS.
+        let refused = live_ws(ServerSettings {
+            listen: Some(spare_addr.to_string()),
+            websocket: Some("0.0.0.0:0".into()),
+            ..ServerSettings::default()
+        });
+        assert!(refused.unwrap_err().contains("needs TLS"));
         // Reachable from other machines without users is refused, and nothing changes.
         let open_cli = Args {
             listen_given: false,
@@ -941,6 +1162,6 @@ mod tests {
             &task,
         );
         assert!(refused.unwrap_err().contains("credentials"));
-        assert_eq!(task.lock().unwrap().0, spare_addr, "nothing changed");
+        assert_eq!(task.lock().unwrap().rfb.0, spare_addr, "nothing changed");
     }
 }
