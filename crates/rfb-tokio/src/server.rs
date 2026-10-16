@@ -1,9 +1,10 @@
 use core::time::Duration;
+use std::sync::Arc;
 
 use rfb_proto::{
     PixelFormat,
     conn::{EncodedRect, ServerConn, ServerConnEvent},
-    consts::security,
+    consts::{security, vencrypt},
     handshake::{ServerConfig, ServerEvent},
     msg::{client::ClientMessage, server::ServerMessage},
 };
@@ -13,7 +14,26 @@ use tokio::{
     time::timeout,
 };
 
-use crate::{Error, HANDSHAKE_TIMEOUT, io::Io};
+use crate::{Error, HANDSHAKE_TIMEOUT, io::Io, transport::Transport};
+
+type CheckFn = dyn Fn(&[u8], &[u8]) -> bool + Send + Sync;
+
+/// Checks a username and password from `VeNCrypt` `X509Plain`.
+#[derive(Clone)]
+pub struct PlainVerifier(Arc<CheckFn>);
+
+impl PlainVerifier {
+    /// Wrap a function that returns whether the credentials are valid.
+    pub fn new(check: impl Fn(&[u8], &[u8]) -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(check))
+    }
+}
+
+impl std::fmt::Debug for PlainVerifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PlainVerifier(..)")
+    }
+}
 
 /// How the server authenticates a client.
 #[derive(Debug, Clone)]
@@ -23,6 +43,9 @@ pub enum ServerAuth {
     None,
     /// VNC Auth with one shared password (weak: DES, 8 characters).
     VncPassword(Vec<u8>),
+    /// A username and password checked by the callback. Only with TLS: the
+    /// credentials travel inside the encrypted channel (`X509Plain`).
+    Plain(PlainVerifier),
 }
 
 /// Settings for [`ServerSession::accept`].
@@ -35,6 +58,9 @@ pub struct ServerOptions {
     pub pixel_format: PixelFormat,
     pub name: Vec<u8>,
     pub handshake_timeout: Duration,
+    /// Offer `VeNCrypt` with this certificate. Without it the session stays
+    /// unencrypted and `ServerAuth::Plain` is refused.
+    pub tls: Option<Arc<rustls::ServerConfig>>,
 }
 
 impl ServerOptions {
@@ -47,14 +73,22 @@ impl ServerOptions {
             pixel_format: PixelFormat::RGB888,
             name: name.to_vec(),
             handshake_timeout: HANDSHAKE_TIMEOUT,
+            tls: None,
         }
+    }
+
+    /// Offer `VeNCrypt` TLS with `config`.
+    #[must_use]
+    pub fn with_tls(mut self, config: Arc<rustls::ServerConfig>) -> Self {
+        self.tls = Some(config);
+        self
     }
 }
 
 /// An established server-side connection to one client.
 #[derive(Debug)]
 pub struct ServerSession<S> {
-    io: Io<S>,
+    io: Io<Transport<S>>,
     conn: ServerConn,
     shared: bool,
     /// The VNC Auth challenge in flight.
@@ -68,14 +102,21 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     /// [`Error::HandshakeTimeout`], [`Error::AuthFailed`] (the client has been
     /// told), I/O and protocol errors.
     pub async fn accept(stream: S, opts: ServerOptions) -> Result<Self, Error> {
-        let sec = match opts.auth {
-            ServerAuth::None => security::NONE,
-            ServerAuth::VncPassword(_) => security::VNC_AUTH,
+        let (security, subtype) = match (&opts.tls, &opts.auth) {
+            (None, ServerAuth::None) => (security::NONE, None),
+            (None, ServerAuth::VncPassword(_)) => (security::VNC_AUTH, None),
+            (None, ServerAuth::Plain(_)) => {
+                return Err(Error::Config("username and password need TLS"));
+            }
+            (Some(_), ServerAuth::None) => (security::VENCRYPT, Some(vencrypt::X509_NONE)),
+            (Some(_), ServerAuth::VncPassword(_)) => (security::VENCRYPT, Some(vencrypt::X509_VNC)),
+            (Some(_), ServerAuth::Plain(_)) => (security::VENCRYPT, Some(vencrypt::X509_PLAIN)),
         };
-        let mut io = Io::new(stream);
+        let mut io = Io::new(Transport::Plain(stream));
         let conn = ServerConn::new(
             ServerConfig {
-                security: vec![sec],
+                security: vec![security],
+                vencrypt: subtype.into_iter().collect(),
                 ..ServerConfig::default()
             },
             &mut io.outbuf,
@@ -124,10 +165,32 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
                             return Err(Error::AuthFailed);
                         }
                     }
-                    // This server never offers VeNCrypt, so these cannot
-                    // happen; a peer that somehow provokes one gets an error.
-                    ServerEvent::StartTls { .. } | ServerEvent::PlainCredentials { .. } => {
-                        return Err(Error::Proto(rfb_proto::ProtoError::NoAcceptableSecurity));
+                    ServerEvent::StartTls { .. } => {
+                        let config = opts
+                            .tls
+                            .clone()
+                            .ok_or(Error::Config("TLS requested but no certificate"))?;
+                        // The client starts TLS only after it has read our
+                        // go-ahead byte, which is still in the output buffer.
+                        self.io.flush().await?;
+                        self.io.stream.upgrade_server(config).await?;
+                        self.conn.tls_established(&mut self.io.outbuf)?;
+                        self.io.flush().await?;
+                    }
+                    ServerEvent::PlainCredentials { username, password } => {
+                        let ServerAuth::Plain(verifier) = &opts.auth else {
+                            unreachable!("Plain credentials are only offered with a verifier");
+                        };
+                        let ok = (verifier.0)(&username, &password);
+                        self.conn.security_result(
+                            ok,
+                            b"authentication failed",
+                            &mut self.io.outbuf,
+                        )?;
+                        self.io.flush().await?;
+                        if !ok {
+                            return Err(Error::AuthFailed);
+                        }
                     }
                     ServerEvent::ClientInit { shared } => {
                         self.shared = shared;
@@ -188,6 +251,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     pub async fn send(&mut self, msg: &ServerMessage) -> Result<(), Error> {
         self.conn.send(msg, &mut self.io.outbuf)?;
         self.io.flush().await
+    }
+
+    /// Whether the session runs inside TLS.
+    #[must_use]
+    pub fn is_encrypted(&self) -> bool {
+        self.io.stream.is_tls()
     }
 
     /// Bytes read from the stream so far, handshake included.

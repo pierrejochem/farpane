@@ -3,16 +3,20 @@ use core::time::Duration;
 use rfb_proto::{
     PixelFormat,
     conn::{ClientConn, ClientConnEvent},
+    consts::{security, vencrypt},
     handshake::{ClientConfig, ClientEvent},
     msg::client::ClientMessage,
 };
-use rfb_security::vnc_auth;
+use rfb_security::{
+    tls::{self, Fingerprint},
+    vnc_auth,
+};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::timeout,
 };
 
-use crate::{Error, HANDSHAKE_TIMEOUT, io::Io};
+use crate::{Error, HANDSHAKE_TIMEOUT, io::Io, transport::Transport};
 
 /// Settings for [`ClientSession::connect`].
 #[derive(Debug, Clone)]
@@ -21,7 +25,24 @@ pub struct ClientOptions {
     /// Password for VNC Auth. `None` fails with [`Error::PasswordRequired`]
     /// if the server asks for one.
     pub password: Option<Vec<u8>>,
+    /// Username for `VeNCrypt` `X509Plain`. `None` fails with
+    /// [`Error::UsernameRequired`] if the server asks for one.
+    pub username: Option<Vec<u8>>,
+    /// TLS settings. Without them `VeNCrypt` is never chosen, so a server
+    /// that offers nothing else is refused rather than talked to in the clear.
+    pub tls: Option<TlsOptions>,
     pub handshake_timeout: Duration,
+}
+
+/// How to treat the server's certificate (see [`rfb_security::tls`]).
+#[derive(Debug, Clone)]
+pub struct TlsOptions {
+    /// The name the certificate must be valid for: the host the user typed.
+    pub server_name: String,
+    /// Fingerprints the user trusts for this server.
+    pub pins: Vec<Fingerprint>,
+    /// DER certificates of additional CAs to trust.
+    pub extra_roots: Vec<Vec<u8>>,
 }
 
 impl Default for ClientOptions {
@@ -29,6 +50,8 @@ impl Default for ClientOptions {
         Self {
             handshake: ClientConfig::default(),
             password: None,
+            username: None,
+            tls: None,
             handshake_timeout: HANDSHAKE_TIMEOUT,
         }
     }
@@ -47,7 +70,7 @@ pub struct ServerInfo {
 /// An established client connection.
 #[derive(Debug)]
 pub struct ClientSession<S> {
-    io: Io<S>,
+    io: Io<Transport<S>>,
     conn: ClientConn,
 }
 
@@ -59,24 +82,58 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
     /// [`Error::HandshakeTimeout`], [`Error::PasswordRequired`], I/O and
     /// protocol errors (including the server's rejection reason).
     pub async fn connect(stream: S, opts: ClientOptions) -> Result<(Self, ServerInfo), Error> {
-        let mut session = Self {
-            io: Io::new(stream),
-            conn: ClientConn::new(opts.handshake.clone()),
+        let mut config = opts.handshake.clone();
+        if opts.tls.is_none() {
+            config.security.retain(|t| *t != security::VENCRYPT);
+        }
+        // Prefer the subtype that matches what the user supplied.
+        config.vencrypt = match (&opts.username, &opts.password) {
+            (Some(_), _) => vec![
+                vencrypt::X509_PLAIN,
+                vencrypt::X509_VNC,
+                vencrypt::X509_NONE,
+            ],
+            (None, Some(_)) => vec![
+                vencrypt::X509_VNC,
+                vencrypt::X509_NONE,
+                vencrypt::X509_PLAIN,
+            ],
+            (None, None) => vec![
+                vencrypt::X509_NONE,
+                vencrypt::X509_VNC,
+                vencrypt::X509_PLAIN,
+            ],
         };
-        let info = timeout(
-            opts.handshake_timeout,
-            session.handshake(opts.password.as_deref()),
-        )
-        .await
-        .map_err(|_| Error::HandshakeTimeout)??;
+        let mut session = Self {
+            io: Io::new(Transport::Plain(stream)),
+            conn: ClientConn::new(config),
+        };
+        let info = timeout(opts.handshake_timeout, session.handshake(&opts))
+            .await
+            .map_err(|_| Error::HandshakeTimeout)??;
         Ok((session, info))
     }
 
-    async fn handshake(&mut self, password: Option<&[u8]>) -> Result<ServerInfo, Error> {
+    async fn handshake(&mut self, opts: &ClientOptions) -> Result<ServerInfo, Error> {
         loop {
             match self.next_event().await? {
+                ClientConnEvent::Handshake(ClientEvent::StartTls { .. }) => {
+                    let tls = opts
+                        .tls
+                        .as_ref()
+                        .ok_or(Error::Config("TLS requested but no TLS options"))?;
+                    self.start_tls(tls).await?;
+                    self.conn.tls_established()?;
+                }
+                ClientConnEvent::Handshake(ClientEvent::PlainCredentialsNeeded) => {
+                    let username = opts.username.as_deref().ok_or(Error::UsernameRequired)?;
+                    let password = opts.password.as_deref().ok_or(Error::PasswordRequired)?;
+                    self.conn
+                        .plain_credentials(username, password, &mut self.io.outbuf)?;
+                    self.io.flush().await?;
+                }
                 ClientConnEvent::Handshake(ClientEvent::VncAuthChallenge(challenge)) => {
-                    let password = password.ok_or(Error::PasswordRequired)?;
+                    let password = opts.password.as_deref().ok_or(Error::PasswordRequired)?;
                     let response = vnc_auth::response(password, &challenge);
                     self.conn.vnc_auth_reply(&response, &mut self.io.outbuf)?;
                     self.io.flush().await?;
@@ -97,6 +154,29 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
                 other => {
                     unreachable!("the connection yields only handshake events here: {other:?}")
                 }
+            }
+        }
+    }
+
+    /// Upgrade the stream to TLS. A certificate that is not trusted comes back
+    /// as [`Error::Untrusted`] with its fingerprint, so the caller can ask.
+    async fn start_tls(&mut self, opts: &TlsOptions) -> Result<(), Error> {
+        let (config, finding) =
+            tls::client_config(opts.pins.clone(), &opts.extra_roots).map_err(Error::Tls)?;
+        let name = rustls::pki_types::ServerName::try_from(opts.server_name.clone())
+            .map_err(|e| Error::Tls(format!("bad server name {:?}: {e}", opts.server_name)))?;
+        match self.io.stream.upgrade_client(config, name).await {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let seen = finding.lock().ok().and_then(|f| f.clone());
+                Err(match seen {
+                    Some(u) => Error::Untrusted {
+                        host: opts.server_name.clone(),
+                        fingerprint: u.fingerprint,
+                        problem: u.problem,
+                    },
+                    None => Error::Tls(e.to_string()),
+                })
             }
         }
     }
@@ -124,6 +204,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
     pub async fn send(&mut self, msg: &ClientMessage) -> Result<(), Error> {
         self.conn.send(msg, &mut self.io.outbuf)?;
         self.io.flush().await
+    }
+
+    /// Whether the session runs inside TLS.
+    #[must_use]
+    pub fn is_encrypted(&self) -> bool {
+        self.io.stream.is_tls()
     }
 
     /// Bytes read from the stream so far, handshake included.
