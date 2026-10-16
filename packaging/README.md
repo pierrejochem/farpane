@@ -14,17 +14,17 @@ Review the draft, then publish it.
 | Fedora, RHEL/Alma/Rocky 9+, openSUSE | x86_64, aarch64 | `.rpm` per app |
 | Arch, Manjaro, CachyOS | x86_64, aarch64 | `.pkg.tar.zst` per app (`pacman -U`) |
 | Any glibc ≥ 2.34 distro | x86_64, aarch64 | `.AppImage` per app, portable `.tar.gz` |
-| All | – | `SHA256SUMS`, GitHub build-provenance attestation (`gh attestation verify <file> -R OWNER/REPO`) |
+| All | – | `SHA256SUMS`, GitHub build-provenance attestation (`gh attestation verify <file> -R pierrejochem/farpane`) |
 
 Linux binaries are built in an AlmaLinux 9 container, so the glibc floor is 2.34.
 
 ## Before the first release
 
 1. Names are final (Farpane; binaries `farpane-viewer`/`farpane-server`; display names in
-   `packaging/linux/*.desktop`, the single source for the macOS app names). Still to fill in:
-   `maintainer`, `homepage`, `license` in `packaging/linux/nfpm-*.yaml`,
-   bundle IDs `org.example.farpane.*` (use your own reverse domain, e.g. `dev.farpane.*`) in `packaging/macos/*.Info.plist`,
-   Manufacturer in `packaging/windows/farpane.wxs`.
+   `packaging/linux/*.desktop`, the single source for the macOS app names). Maintainer, homepage and
+   licence in `packaging/linux/nfpm-*.yaml`, the bundle IDs `io.github.pierrejochem.farpane.*` in
+   `packaging/macos/*.Info.plist` and the Manufacturer in `packaging/windows/farpane.wxs` are set;
+   change the bundle IDs only before the first release, since macOS ties app data and permissions to them.
 2. Icons are final (concept 03, "Receding panes"): `icons/svg/` holds the masters (full and
    small versions, plus a tile-less, one-colour and light-tile mark), `icons/png/` has 16–1024 px,
    and `.ico` / `.icns` files are ready. Sizes of 48 px and below use the simplified small version.

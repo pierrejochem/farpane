@@ -18,8 +18,9 @@ members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-license = "MIT OR Apache-2.0" # TODO: confirm licence before the first release
-repository = "https://github.com/OWNER/farpane" # TODO: set once the GitHub organisation exists
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pierrejochem/farpane"
+homepage = "https://pierrejochem.github.io/farpane/"
 authors = ["Pierre Jochem"]
 
 [workspace.dependencies]

@@ -4,7 +4,7 @@
 <dict>
   <key>CFBundleName</key><string>Farpane Server</string>
   <key>CFBundleDisplayName</key><string>Farpane Server</string>
-  <key>CFBundleIdentifier</key><string>org.example.farpane.server</string>
+  <key>CFBundleIdentifier</key><string>io.github.pierrejochem.farpane.server</string>
   <key>CFBundleExecutable</key><string>farpane-server</string>
   <key>CFBundleIconFile</key><string>farpane-server</string>
   <key>CFBundlePackageType</key><string>APPL</string>

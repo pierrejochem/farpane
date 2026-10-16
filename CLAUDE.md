@@ -25,6 +25,7 @@ changing a subsystem; section numbers below refer to it.
 | `packaging/` | nfpm (deb/rpm/Arch), WiX MSI, macOS plists, icons. See `packaging/README.md`. |
 | `.github/workflows/` | `ci.yml` (fmt, clippy, test), `release.yml` (signed packages to a draft GitHub Release on tag `vX.Y.Z`). |
 | `docs/design/` | Design reference, UI mockup sources, glass backdrop. |
+| `docs/handbook/`, `site/` | The handbook (Markdown with front matter) and `site/build.py`, which builds it and the landing page into `_site/` (static HTML, canonical URLs, Open Graph, JSON-LD, `sitemap.xml`, `robots.txt`, 404). `.github/workflows/pages.yml` publishes it to https://pierrejochem.github.io/farpane/. Update the handbook when behaviour changes; `python3 site/build.py` needs the `markdown` package. |
 | `docs/brand/` | Icon masters (concept 03 "Receding panes"). |
 
 ## Commands
@@ -107,7 +108,7 @@ Pacing and scroll copies: for clients that announced Fence, the server sends a R
 ## Open items
 
 - Secure the name: EU trademark (classes 9, 42), placeholder crates, GitHub organisation, domain.
-- Licence, maintainer, homepage and bundle-ID domain are still TODO (`Cargo.toml`, `packaging/`).
+- Licence (MIT OR Apache-2.0), maintainer, homepage (https://pierrejochem.github.io/farpane/) and bundle IDs (`io.github.pierrejochem.farpane.*`) are set; do not change the bundle IDs after the first release.
 - Minimum OS versions (macOS 12.3+, glibc 2.34) are assumptions.
 - Signing accounts (Apple Developer, Azure Artifact Signing) come later; releases are unsigned until then.
 - Windows `.exe` icons need a `build.rs` with the `winresource` crate.
