@@ -29,6 +29,8 @@ pub enum ProtoError {
     /// We tried to send an encoding the peer never asked for in
     /// `SetEncodings`.
     EncodingNotRequested(i32),
+    /// An extension message was sent before the peer confirmed the extension.
+    ExtensionNotConfirmed(&'static str),
 }
 
 impl fmt::Display for ProtoError {
@@ -51,6 +53,7 @@ impl fmt::Display for ProtoError {
             Self::NoAcceptableSecurity => write!(f, "no acceptable security type"),
             Self::UnsupportedEncoding(e) => write!(f, "unsupported encoding {e}"),
             Self::EncodingNotRequested(e) => write!(f, "encoding {e} was not requested"),
+            Self::ExtensionNotConfirmed(what) => write!(f, "{what} not confirmed by the peer"),
         }
     }
 }

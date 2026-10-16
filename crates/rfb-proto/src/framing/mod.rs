@@ -6,7 +6,8 @@
 //! length. Decoding is `rfb-codec`'s job and sees only complete payloads.
 //!
 //! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE and the
-//! `Cursor`, `DesktopSize` and `LastRect` pseudo-encodings. `ZRLE` and zlib are
+//! `Cursor`, `DesktopSize`, `ExtendedDesktopSize` and `LastRect`
+//! pseudo-encodings. `ZRLE` and zlib are
 //! length-prefixed, so their tiles are walked only after inflating, in the
 //! codec. Anything else is fatal: the stream cannot be resynchronised.
 
@@ -55,6 +56,11 @@ pub fn frame(header: &RectHeader, pf: &PixelFormat, input: &[u8]) -> Result<usiz
             input,
         ),
         pseudo::DESKTOP_SIZE | pseudo::LAST_RECT => Ok(0),
+        // U8 screen count, 3 padding bytes, then 16 bytes per screen.
+        pseudo::EXT_DESKTOP_SIZE => {
+            let count = u64::from(Reader::new(input).u8()?);
+            fixed(4 + 16 * count, input)
+        }
         other => Err(ProtoError::UnsupportedEncoding(other)),
     }
 }

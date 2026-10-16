@@ -93,6 +93,47 @@ impl PixelFormat {
     }
 }
 
+/// One screen (monitor) inside the framebuffer, from `ExtendedDesktopSize`
+/// and `SetDesktopSize`: 16 bytes on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Screen {
+    /// Arbitrary but unique and stable for the life of the screen.
+    pub id: u32,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    /// Unused today; preserve what you do not understand.
+    pub flags: u32,
+}
+
+impl Screen {
+    /// Length on the wire.
+    pub const LEN: usize = 16;
+
+    /// # Errors
+    /// [`ProtoError::NeedMore`] on short input.
+    pub fn read(r: &mut Reader<'_>) -> Result<Self, ProtoError> {
+        Ok(Self {
+            id: r.u32()?,
+            x: r.u16()?,
+            y: r.u16()?,
+            width: r.u16()?,
+            height: r.u16()?,
+            flags: r.u32()?,
+        })
+    }
+
+    /// Append the wire form.
+    pub fn write(&self, out: &mut alloc::vec::Vec<u8>) {
+        out.extend_from_slice(&self.id.to_be_bytes());
+        for v in [self.x, self.y, self.width, self.height] {
+            out.extend_from_slice(&v.to_be_bytes());
+        }
+        out.extend_from_slice(&self.flags.to_be_bytes());
+    }
+}
+
 /// A rectangle in framebuffer coordinates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Rect {

@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use crate::{
     ProtoError,
     consts::{client_msg, limits},
-    types::{PixelFormat, Rect},
+    types::{PixelFormat, Rect, Screen},
     wire::Reader,
 };
 
@@ -29,6 +29,13 @@ pub enum ClientMessage {
     },
     /// Latin-1 text. Extended Clipboard (negative length) arrives in M3.
     ClientCutText(Vec<u8>),
+    /// Ask for a new framebuffer size and screen layout. Only valid after an
+    /// `ExtendedDesktopSize` rectangle was received.
+    SetDesktopSize {
+        width: u16,
+        height: u16,
+        screens: Vec<Screen>,
+    },
 }
 
 impl ClientMessage {
@@ -90,6 +97,28 @@ impl ClientMessage {
                     });
                 }
                 Self::ClientCutText(r.take(len as usize)?.to_vec())
+            }
+            client_msg::SET_DESKTOP_SIZE => {
+                r.skip(1)?;
+                let (width, height) = (r.u16()?, r.u16()?);
+                if width > limits::MAX_FB_DIMENSION || height > limits::MAX_FB_DIMENSION {
+                    return Err(ProtoError::LimitExceeded {
+                        field: "SetDesktopSize dimension",
+                        value: u64::from(width.max(height)),
+                        limit: u64::from(limits::MAX_FB_DIMENSION),
+                    });
+                }
+                let count = r.u8()?;
+                r.skip(1)?;
+                let mut screens = Vec::with_capacity(usize::from(count));
+                for _ in 0..count {
+                    screens.push(Screen::read(&mut r)?);
+                }
+                Self::SetDesktopSize {
+                    width,
+                    height,
+                    screens,
+                }
             }
             _ => {
                 return Err(ProtoError::Malformed {
@@ -153,6 +182,34 @@ impl ClientMessage {
                 out.extend_from_slice(&[client_msg::CLIENT_CUT_TEXT, 0, 0, 0]);
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(text);
+            }
+            Self::SetDesktopSize {
+                width,
+                height,
+                screens,
+            } => {
+                // `u8` already is the spec maximum (`MAX_SCREENS`, 255).
+                let count = u8::try_from(screens.len())
+                    .ok()
+                    .ok_or(ProtoError::LimitExceeded {
+                        field: "SetDesktopSize screens",
+                        value: screens.len() as u64,
+                        limit: u64::from(limits::MAX_SCREENS),
+                    })?;
+                if *width > limits::MAX_FB_DIMENSION || *height > limits::MAX_FB_DIMENSION {
+                    return Err(ProtoError::LimitExceeded {
+                        field: "SetDesktopSize dimension",
+                        value: u64::from((*width).max(*height)),
+                        limit: u64::from(limits::MAX_FB_DIMENSION),
+                    });
+                }
+                out.extend_from_slice(&[client_msg::SET_DESKTOP_SIZE, 0]);
+                out.extend_from_slice(&width.to_be_bytes());
+                out.extend_from_slice(&height.to_be_bytes());
+                out.extend_from_slice(&[count, 0]);
+                for screen in screens {
+                    screen.write(out);
+                }
             }
         }
         Ok(())
@@ -225,6 +282,26 @@ mod tests {
             (
                 ClientMessage::ClientCutText(b"hi\n".to_vec()),
                 vec![6, 0, 0, 0, 0, 0, 0, 3, b'h', b'i', b'\n'],
+            ),
+            // rfbproto.rst, SetDesktopSize: type 251, pad, width, height,
+            // number-of-screens, pad, then 16 bytes per screen.
+            (
+                ClientMessage::SetDesktopSize {
+                    width: 1280,
+                    height: 720,
+                    screens: vec![Screen {
+                        id: 7,
+                        x: 0,
+                        y: 0,
+                        width: 1280,
+                        height: 720,
+                        flags: 0xA,
+                    }],
+                },
+                vec![
+                    251, 0, 0x05, 0x00, 0x02, 0xD0, 1, 0, // header
+                    0, 0, 0, 7, 0, 0, 0, 0, 0x05, 0x00, 0x02, 0xD0, 0, 0, 0, 0x0A, // screen
+                ],
             ),
         ]
     }
