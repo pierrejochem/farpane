@@ -6,7 +6,7 @@ use std::{
     thread::JoinHandle,
 };
 
-use rfb_codec::Damage;
+use rfb_codec::{Cursor, Damage};
 use rfb_proto::types::Rect;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
@@ -51,6 +51,8 @@ pub enum UiEvent {
         width: u16,
         height: u16,
     },
+    /// The server's cursor shape (empty pixels mean "hidden").
+    Cursor(Cursor),
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
@@ -247,7 +249,8 @@ async fn handle_event(
                 ui.emit(UiEvent::Frame { rect: full, rgba });
             }
         }
-        ScreenEvent::Damage(Damage::None) => {}
+        ScreenEvent::Damage(Damage::None | Damage::Cursor(_)) => {}
+        ScreenEvent::Cursor(cursor) => ui.emit(UiEvent::Cursor(cursor)),
         ScreenEvent::UpdateEnd => screen.request_update(true).await?,
         ScreenEvent::Bell => ui.emit(UiEvent::Bell),
         ScreenEvent::CutText(text) => ui.emit(UiEvent::CutText(text)),

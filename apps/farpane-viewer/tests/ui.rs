@@ -275,3 +275,92 @@ async fn server_pixels_and_resizes_update_the_window() {
         .unwrap();
     until(&ctx, &mut app, "resize", |a| a.remote_size() == (400, 300)).await;
 }
+
+/// Number of textured (non-font) image meshes in a frame's output.
+fn image_meshes(output: &egui::FullOutput) -> usize {
+    output
+        .shapes
+        .iter()
+        .filter(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default()))
+        .count()
+}
+
+#[tokio::test]
+async fn the_servers_cursor_replaces_the_local_one_over_the_picture() {
+    let (ctx, mut app, mut server) = connected().await;
+    for _ in 0..3 {
+        server.next_message().await.unwrap();
+    }
+    let over = Pos2::new(SCREEN.x / 2.0, SCREEN.y / 2.0);
+    let hover = |ctx: &Context, app: &mut ViewerApp| {
+        let input = RawInput {
+            screen_rect: Some(UiRect::from_min_size(Pos2::ZERO, SCREEN)),
+            events: vec![Event::PointerMoved(over)],
+            focused: true,
+            ..RawInput::default()
+        };
+        ctx.run(input, |ctx| app.ui(ctx))
+    };
+    // No shape yet: the normal arrow, and only the picture is drawn.
+    let before = hover(&ctx, &mut app);
+    assert_eq!(
+        before.platform_output.cursor_icon,
+        egui::CursorIcon::Default
+    );
+    assert_eq!(app.remote_cursor_size(), None);
+    let pictures = image_meshes(&before);
+
+    // The server sends a 4 x 4 cursor.
+    let mut payload = vec![255u8; 4 * 4 * 4];
+    payload.extend([0b1111_0000; 4]);
+    server
+        .send_update(&[EncodedRect {
+            header: RectHeader {
+                rect: Rect {
+                    x: 1,
+                    y: 1,
+                    width: 4,
+                    height: 4,
+                },
+                encoding: rfb_proto::consts::pseudo::CURSOR,
+            },
+            payload: &payload,
+        }])
+        .await
+        .unwrap();
+    until(&ctx, &mut app, "cursor shape", |a| {
+        a.remote_cursor_size() == Some((4, 4))
+    })
+    .await;
+    let after = hover(&ctx, &mut app);
+    assert_eq!(
+        after.platform_output.cursor_icon,
+        egui::CursorIcon::None,
+        "OS cursor hidden"
+    );
+    assert_eq!(image_meshes(&after), pictures + 1, "the shape is drawn");
+
+    // An empty shape hides the cursor altogether.
+    server
+        .send_update(&[EncodedRect {
+            header: RectHeader {
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: 0,
+                    height: 0,
+                },
+                encoding: rfb_proto::consts::pseudo::CURSOR,
+            },
+            payload: &[],
+        }])
+        .await
+        .unwrap();
+    until(&ctx, &mut app, "hidden cursor", |a| {
+        a.remote_cursor_size() == Some((0, 0))
+    })
+    .await;
+    let hidden = hover(&ctx, &mut app);
+    assert_eq!(hidden.platform_output.cursor_icon, egui::CursorIcon::None);
+    assert_eq!(image_meshes(&hidden), pictures);
+}

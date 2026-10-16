@@ -265,3 +265,28 @@ async fn dropping_the_handle_stops_the_thread_even_while_connected() {
         .expect("drop must not hang")
         .unwrap();
 }
+
+#[tokio::test]
+async fn cursor_shapes_are_forwarded_to_the_ui() {
+    let (listener, addr) = listen().await;
+    let core = Core::spawn(|| {});
+    connect(&core, &addr);
+    let mut server = accept(&listener).await;
+    next(&core).await; // Connecting
+    next(&core).await; // Connected
+    for _ in 0..3 {
+        server.next_message().await.unwrap();
+    }
+    let payload = [1, 2, 3, 0, 0b1000_0000];
+    server
+        .send_update(&[EncodedRect {
+            header: hdr(pseudo::CURSOR, 0, 0, 1, 1),
+            payload: &payload,
+        }])
+        .await
+        .unwrap();
+    match next(&core).await {
+        UiEvent::Cursor(c) => assert_eq!(c.rgba, [3, 2, 1, 255]),
+        other => panic!("{other:?}"),
+    }
+}

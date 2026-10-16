@@ -8,8 +8,21 @@ use rfb_proto::{
 
 use crate::{DecodeError, Framebuffer, PixelConverter, inflate::Inflater};
 
+/// A mouse cursor shape sent by the server (`Cursor` pseudo-encoding), so the
+/// viewer can draw the pointer locally without waiting for a round trip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    /// The pixel that sits on the pointer position.
+    pub hotspot: (u16, u16),
+    pub width: u16,
+    pub height: u16,
+    /// `R, G, B, A` rows, `A` being 0 (transparent) or 255. Empty when the
+    /// cursor is hidden (width or height 0).
+    pub rgba: Vec<u8>,
+}
+
 /// What a decoded rectangle changed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Damage {
     /// Nothing to repaint (for example a pseudo-rectangle for the UI layer).
     None,
@@ -17,6 +30,8 @@ pub enum Damage {
     Rect(Rect),
     /// The framebuffer was resized and cleared; repaint everything.
     Resized,
+    /// The cursor shape changed. The picture is untouched.
+    Cursor(Cursor),
 }
 
 /// Per-connection decoding state. Create one per connection and call
@@ -97,7 +112,8 @@ impl Decoder {
                 fb.resize(rect.width, rect.height)?;
                 Ok(Damage::Resized)
             }
-            pseudo::LAST_RECT | pseudo::CURSOR => Ok(Damage::None),
+            pseudo::CURSOR => Ok(Damage::Cursor(self.cursor(&header.rect, payload)?)),
+            pseudo::LAST_RECT => Ok(Damage::None),
             other => Err(DecodeError::UnsupportedEncoding(other)),
         }
     }
@@ -122,6 +138,40 @@ impl Decoder {
             usize::from(rect.width) * usize::from(rect.height) * self.converter.bytes_per_pixel();
         let pixels = self.zlib.inflate(&payload[4..], expected)?;
         self.raw(fb, rect, &pixels)
+    }
+
+    /// `Cursor` pseudo-encoding: the rectangle's `x`, `y` are the hotspot and
+    /// `width` x `height` the cursor size. The payload is the pixels in the
+    /// session format, then a 1-bit-per-pixel mask in rows padded to whole
+    /// bytes, most significant bit first; a set bit means "opaque".
+    fn cursor(&self, rect: &Rect, payload: &[u8]) -> Result<Cursor, DecodeError> {
+        let (w, h) = (usize::from(rect.width), usize::from(rect.height));
+        let pixel_bytes = w * h * self.converter.bytes_per_pixel();
+        let mask_row = w.div_ceil(8);
+        if payload.len() != pixel_bytes + mask_row * h {
+            return Err(DecodeError::Malformed("Cursor payload size"));
+        }
+        let mut rgba = Vec::with_capacity(w * h * 4);
+        if w > 0 && h > 0 {
+            let (pixels, mask) = payload.split_at(pixel_bytes);
+            let mut bgrx = vec![0u8; w * 4];
+            for (row, src) in pixels
+                .chunks_exact(w * self.converter.bytes_per_pixel())
+                .enumerate()
+            {
+                self.converter.convert_row(src, &mut bgrx);
+                for (x, px) in bgrx.chunks_exact(4).enumerate() {
+                    let opaque = mask[row * mask_row + x / 8] >> (7 - x % 8) & 1 == 1;
+                    rgba.extend_from_slice(&[px[2], px[1], px[0], if opaque { 255 } else { 0 }]);
+                }
+            }
+        }
+        Ok(Cursor {
+            hotspot: (rect.x, rect.y),
+            width: rect.width,
+            height: rect.height,
+            rgba,
+        })
     }
 
     fn raw(&self, fb: &mut Framebuffer, rect: Rect, payload: &[u8]) -> Result<(), DecodeError> {

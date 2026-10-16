@@ -1,6 +1,6 @@
 use core::fmt;
 
-use rfb_codec::{Damage, DecodeError, Decoder, Framebuffer, enc};
+use rfb_codec::{Cursor, Damage, DecodeError, Decoder, Framebuffer, enc};
 use rfb_proto::{
     PixelFormat, conn::ClientConnEvent, consts::pseudo, msg::client::ClientMessage, types::Rect,
 };
@@ -9,13 +9,14 @@ use tokio::net::TcpStream;
 
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
-pub const DEFAULT_ENCODINGS: [i32; 7] = [
+pub const DEFAULT_ENCODINGS: [i32; 8] = [
     enc::ZRLE,
     enc::HEXTILE,
     enc::ZLIB,
     enc::CO_RRE,
     enc::COPY_RECT,
     enc::RAW,
+    pseudo::CURSOR,
     pseudo::DESKTOP_SIZE,
 ];
 
@@ -156,9 +157,10 @@ impl RemoteScreen {
         loop {
             match self.session.next_event().await? {
                 ClientConnEvent::Rect { header, payload } => {
-                    let damage = self.decoder.decode(&mut self.fb, &header, &payload)?;
-                    if damage != Damage::None {
-                        return Ok(ScreenEvent::Damage(damage));
+                    match self.decoder.decode(&mut self.fb, &header, &payload)? {
+                        Damage::None => {}
+                        Damage::Cursor(cursor) => return Ok(ScreenEvent::Cursor(cursor)),
+                        damage => return Ok(ScreenEvent::Damage(damage)),
                     }
                 }
                 ClientConnEvent::UpdateEnd => return Ok(ScreenEvent::UpdateEnd),
@@ -183,7 +185,7 @@ impl RemoteScreen {
             match self.next_event().await? {
                 ScreenEvent::Damage(d) => damage.push(d),
                 ScreenEvent::UpdateEnd => return Ok(damage),
-                ScreenEvent::Bell | ScreenEvent::CutText(_) => {}
+                ScreenEvent::Cursor(_) | ScreenEvent::Bell | ScreenEvent::CutText(_) => {}
             }
         }
     }
@@ -228,6 +230,8 @@ impl RemoteScreen {
 pub enum ScreenEvent {
     /// The picture changed (already applied).
     Damage(Damage),
+    /// The cursor shape changed (an empty one means "hide the cursor").
+    Cursor(Cursor),
     /// The server finished one `FramebufferUpdate`; request the next one.
     UpdateEnd,
     Bell,
