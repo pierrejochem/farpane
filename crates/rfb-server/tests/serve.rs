@@ -1489,6 +1489,88 @@ async fn scrolling_is_sent_as_a_copy_to_clients_that_can_use_it() {
     shows_top(&v, 20);
 }
 
+/// A pixel of a picture whose every column differs (scrolled sideways).
+#[allow(clippy::cast_possible_truncation)] // colour bytes
+fn column_pixel(col: usize, y: u16) -> [u8; 4] {
+    let v = col * 31 + usize::from(y) * 7;
+    [v as u8, (v >> 8) as u8 ^ 0x5A, (v / 3) as u8, 255]
+}
+
+/// Paints the picture shifted `left` columns.
+#[derive(Debug)]
+struct SideScroller {
+    state: Scroll,
+    painted: Option<usize>,
+}
+
+impl Source for SideScroller {
+    fn size(&self) -> (u16, u16) {
+        (160, 120)
+    }
+
+    fn capture(&mut self, fb: &mut Framebuffer) -> io::Result<Capture> {
+        let left = *self.state.0.lock().unwrap();
+        if self.painted == Some(left) {
+            return Ok(Capture::default());
+        }
+        let mut data = Vec::new();
+        for y in 0..120u16 {
+            for x in 0..160usize {
+                data.extend_from_slice(&column_pixel(left + x, y));
+            }
+        }
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 120,
+        };
+        fb.write_bgrx(whole, &data).unwrap();
+        self.painted = Some(left);
+        Ok(Capture {
+            damage: vec![whole],
+            ..Capture::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn sideways_scrolling_is_sent_as_a_copy_too() {
+    let state = Scroll::default();
+    let server = Arc::new(
+        Server::new(
+            SideScroller {
+                state: state.clone(),
+                painted: None,
+            },
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, enc::COPY_RECT]).await;
+    v.request(false).await;
+    v.update().await;
+    *state.0.lock().unwrap() = 20;
+    v.request(true).await;
+    let rects = v.update().await;
+    let copies: Vec<_> = rects.iter().filter(|r| r.1 == enc::COPY_RECT).collect();
+    assert_eq!(copies.len(), 1, "{rects:?}");
+    assert_eq!((copies[0].0.x, copies[0].0.width), (0, 140), "{rects:?}");
+    // Only the 20 new columns cost pixels.
+    let pixel_area: u32 = rects
+        .iter()
+        .filter(|r| r.1 != enc::COPY_RECT)
+        .map(|r| u32::from(r.0.width) * u32::from(r.0.height))
+        .sum();
+    assert_eq!(pixel_area, 20 * 120, "{rects:?}");
+    v.matches(whole(160, 120), |x, y| column_pixel(20 + usize::from(x), y));
+}
+
 #[tokio::test]
 async fn clients_without_copy_rect_get_pixels_and_the_picture_is_right_either_way() {
     let (server, scroll) = scrolling_server();

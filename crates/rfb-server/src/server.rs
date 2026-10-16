@@ -717,7 +717,10 @@ fn find_scroll(old: &[u8], new: &[u8], stride: usize, damage: &[Rect]) -> Vec<cr
     }
     candidates
         .into_iter()
-        .find_map(|r| crate::scroll::find_copy(old, new, stride, r))
+        .find_map(|r| {
+            crate::scroll::find_copy(old, new, stride, r)
+                .or_else(|| crate::scroll::find_copy_sideways(old, new, stride, r))
+        })
         .into_iter()
         .collect()
 }

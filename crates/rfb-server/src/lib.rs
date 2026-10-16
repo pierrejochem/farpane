@@ -15,7 +15,7 @@ mod throttle;
 
 pub use region::Region;
 pub use registry::{ClientInfo, Preview};
-pub use scroll::{Copy, find_copy};
+pub use scroll::{Copy, find_copy, find_copy_sideways};
 pub use server::{
     DEFAULT_APPROVAL_TIMEOUT, DEFAULT_MAX_CONNECTIONS, Decision, Event, PendingRequest, Permission,
     Server, Settings,

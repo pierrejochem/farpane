@@ -26,7 +26,7 @@ RFB 3.3, 3.7 and 3.8, in both roles (viewer and server).
 
 | Encoding | Decode (viewer) | Encode (server) |
 |---|---|---|
-| Raw, CopyRect | yes | yes (CopyRect for vertical scrolls) |
+| Raw, CopyRect | yes | yes (CopyRect for vertical and sideways scrolls) |
 | RRE, CoRRE | yes | no |
 | Hextile | yes | yes |
 | zlib | yes | no |
