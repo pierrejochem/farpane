@@ -2,7 +2,9 @@
 //! accounts, sign-in lockout and TLS certificate handling.
 
 pub mod auth;
+pub mod backend;
 pub mod config;
+pub mod dashboard;
 pub mod lockout;
 pub mod tlsconf;
 pub mod usercmd;

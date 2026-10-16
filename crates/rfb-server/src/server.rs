@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -20,6 +20,7 @@ use tokio::{
 
 use crate::{
     client,
+    registry::{ClientHandle, ClientInfo, Preview},
     source::{Input, Source},
     throttle::Throttle,
 };
@@ -42,6 +43,9 @@ pub(crate) struct Shared {
     pub updates: broadcast::Sender<Arc<Update>>,
     /// The pointer's current shape, for clients that join later.
     pub cursor: RwLock<Option<Arc<Cursor>>>,
+    /// Connected clients, for the dashboard.
+    pub registry: Mutex<Vec<Arc<ClientHandle>>>,
+    next_id: AtomicU64,
     pub input: Arc<dyn Input>,
     stop: AtomicBool,
     /// Why capturing stopped, if it did.
@@ -147,6 +151,8 @@ impl Server {
             fb: RwLock::new(fb),
             updates,
             cursor: RwLock::new(first.cursor.map(Arc::new)),
+            registry: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(1),
             input: Arc::new(input),
             stop: AtomicBool::new(false),
             failure: Mutex::new(None),
@@ -206,6 +212,80 @@ impl Server {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
+    }
+
+    /// The clients connected now, oldest first.
+    #[must_use]
+    pub fn clients(&self) -> Vec<ClientInfo> {
+        self.shared
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|h| h.info())
+            .collect()
+    }
+
+    fn handle(&self, id: u64) -> Option<Arc<ClientHandle>> {
+        self.shared
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|h| h.id == id)
+            .cloned()
+    }
+
+    /// End a client's connection. Returns whether there was such a client.
+    pub fn disconnect(&self, id: u64) -> bool {
+        self.handle(id).is_some_and(|h| {
+            h.kick.notify_one();
+            true
+        })
+    }
+
+    /// Let a client look only (or control again) from now on. Returns
+    /// whether there was such a client.
+    pub fn set_view_only(&self, id: u64, view_only: bool) -> bool {
+        self.handle(id).is_some_and(|h| {
+            h.view_only.store(view_only, Ordering::Relaxed);
+            true
+        })
+    }
+
+    /// A copy of the screen at most `max_edge` pixels on its longer side
+    /// (nearest-neighbour), for a live preview.
+    #[must_use]
+    pub fn preview(&self, max_edge: u16) -> Preview {
+        let fb = self
+            .shared
+            .fb
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (w, h) = (usize::from(fb.width()), usize::from(fb.height()));
+        let longest = w.max(h).max(1);
+        let edge = usize::from(max_edge.max(1));
+        let (pw, ph) = if longest <= edge {
+            (w, h)
+        } else {
+            ((w * edge / longest).max(1), (h * edge / longest).max(1))
+        };
+        let pixels = fb.pixels();
+        let stride = fb.stride();
+        let mut rgba = Vec::with_capacity(pw * ph * 4);
+        for y in 0..ph {
+            let sy = y * h / ph;
+            for x in 0..pw {
+                let at = sy * stride + (x * w / pw) * 4;
+                rgba.extend_from_slice(&[pixels[at + 2], pixels[at + 1], pixels[at], 0xFF]);
+            }
+        }
+        Preview {
+            // At most `max_edge`, which is a u16.
+            width: u16::try_from(pw).unwrap_or(u16::MAX),
+            height: u16::try_from(ph).unwrap_or(u16::MAX),
+            rgba,
+        }
     }
 
     /// Clients currently past the handshake.
@@ -293,12 +373,36 @@ impl Server {
             permission,
         });
         self.shared.clients.fetch_add(1, Ordering::Relaxed);
-        let result = client::run(
-            session,
-            Arc::clone(&self.shared),
-            permission == Permission::ViewOnly,
-        )
-        .await;
+        let handle = Arc::new(ClientHandle {
+            id: self.shared.next_id.fetch_add(1, Ordering::Relaxed),
+            peer,
+            user: user.clone(),
+            since: Instant::now(),
+            encryption: if session.is_encrypted() {
+                "TLS"
+            } else if session.is_ra2() {
+                "RSA-AES"
+            } else {
+                "none"
+            },
+            view_only: AtomicBool::new(permission == Permission::ViewOnly),
+            kick: tokio::sync::Notify::new(),
+            bytes_in: AtomicU64::new(0),
+            bytes_out: AtomicU64::new(0),
+            updates: AtomicU64::new(0),
+            encoding: AtomicI32::new(0),
+        });
+        self.shared
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Arc::clone(&handle));
+        let result = client::run(session, Arc::clone(&self.shared), Arc::clone(&handle)).await;
+        self.shared
+            .registry
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|h| h.id != handle.id);
         self.shared.clients.fetch_sub(1, Ordering::Relaxed);
         self.emit(&Event::Closed {
             peer,

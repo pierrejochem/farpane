@@ -7,11 +7,13 @@
 
 mod client;
 mod region;
+mod registry;
 mod server;
 mod source;
 mod throttle;
 
 pub use region::Region;
+pub use registry::{ClientInfo, Preview};
 pub use server::{Event, Permission, Server, Settings};
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
 pub use throttle::Throttle;

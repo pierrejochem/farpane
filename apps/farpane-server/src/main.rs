@@ -1,6 +1,6 @@
 //! Farpane Server: VNC-compatible remote desktop server.
 //!
-//! No dashboard window yet; it runs headless (`--headless` is what
+//! Opens the dashboard window unless `--headless` is given (which is what
 //! `packaging/linux/farpane-server.service` passes). Screen sources are the
 //! built-in test pattern and an X11 display.
 
@@ -13,7 +13,9 @@ use std::{
 };
 
 use farpane_server::{
+    backend::{EventLog, Level, LiveBackend},
     config::{self, TlsChoice},
+    dashboard::{Dashboard, Page},
     usercmd,
 };
 use rfb_security::tls::format_fingerprint;
@@ -45,6 +47,9 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --allow-no-auth        accept connections without credentials on a
                          non-loopback address (a bad idea without a tunnel)
   --view-only            ignore keyboard, pointer and clipboard input
+  --ui-screenshot FILE   save a picture of the dashboard and quit
+  --ui-delay SECONDS     wait this long before that picture (default 1.5)
+  --page NAME            start on overview, clients, users or log
 
 Users (farpane-server user add NAME) sign in with name and password inside
 TLS and have a role: admin, control or view. Passwords are never taken from
@@ -63,6 +68,10 @@ struct Args {
     config_dir: Option<PathBuf>,
     self_signed: bool,
     ra2: bool,
+    headless: bool,
+    ui_screenshot: Option<PathBuf>,
+    page: Page,
+    ui_delay: f64,
     tls_names: Vec<String>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
@@ -92,6 +101,10 @@ fn parse() -> Result<Args, String> {
         config_dir: None,
         self_signed: false,
         ra2: false,
+        headless: false,
+        ui_screenshot: None,
+        page: Page::Overview,
+        ui_delay: 1.5,
         tls_names: Vec::new(),
         tls_cert: None,
         tls_key: None,
@@ -99,7 +112,19 @@ fn parse() -> Result<Args, String> {
     let mut it = std::env::args().skip(1).peekable();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--headless" => {}
+            "--headless" => args.headless = true,
+            "--ui-screenshot" => {
+                args.ui_screenshot = Some(value(&mut it, "--ui-screenshot")?.into());
+            }
+            "--ui-delay" => {
+                args.ui_delay = value(&mut it, "--ui-delay")?
+                    .parse()
+                    .map_err(|_| "--ui-delay: seconds")?;
+            }
+            "--page" => {
+                let name = value(&mut it, "--page")?;
+                args.page = Page::parse(&name).ok_or("--page: overview, clients, users or log")?;
+            }
             "--listen" => {
                 args.listen = value(&mut it, "--listen")?
                     .parse()
@@ -263,9 +288,139 @@ fn open_source(args: &Args) -> Result<SourceAndInput, String> {
     }
 }
 
-#[tokio::main]
+/// Print a line and keep it for the dashboard's event log.
+fn note(events: &EventLog, level: Level, text: &str) {
+    log(text);
+    events.push(level, text);
+}
+
+/// Everything that is running once start-up is done.
+struct Running {
+    server: Arc<Server>,
+    listener: TcpListener,
+    listen: String,
+    source: String,
+    access: String,
+    fingerprints: Vec<(String, String)>,
+    events: EventLog,
+    config_dir: PathBuf,
+}
+
+/// Read the settings, open the screen and the port. The error is the exit
+/// code to give.
 #[allow(clippy::too_many_lines)] // straight-line start-up
-async fn main() -> ExitCode {
+async fn start(args: &Args) -> Result<Running, ExitCode> {
+    let config_dir = args
+        .config_dir
+        .clone()
+        .unwrap_or_else(config::default_config_dir);
+    let tls = tls_choice(args).map_err(|e| {
+        eprintln!("farpane-server: {e}");
+        ExitCode::from(2)
+    })?;
+    let events = EventLog::new();
+    let sink = events.clone();
+    let access = config::choose(
+        &config_dir,
+        args.password.clone(),
+        &tls,
+        args.ra2,
+        move |l| {
+            note(&sink, Level::Warning, &l);
+        },
+    )
+    .map_err(|e| {
+        eprintln!("farpane-server: {e}");
+        ExitCode::from(2)
+    })?;
+    let authenticated = access.authenticator.is_some() || args.password.is_some();
+    if !authenticated && !args.listen.ip().is_loopback() && !args.allow_no_auth {
+        eprintln!(
+            "farpane-server: refusing to listen on {} without credentials. Add a user \
+             (`farpane-server user add NAME`), set a password with --password-file or \
+             $FARPANE_PASSWORD, or pass --allow-no-auth.",
+            args.listen
+        );
+        return Err(ExitCode::from(2));
+    }
+    if access.identity.is_none() && authenticated && !args.listen.ip().is_loopback() {
+        note(
+            &events,
+            Level::Warning,
+            "warning: no TLS; the connection is not encrypted (use --tls-self-signed)",
+        );
+    }
+    if let Some(p) = &args.password {
+        if access.authenticator.is_none() && p.len() > 8 {
+            note(
+                &events,
+                Level::Warning,
+                "warning: VNC password authentication checks only the first 8 characters",
+            );
+        }
+    }
+    let (source, input, what) = open_source(args).map_err(|e| {
+        eprintln!("farpane-server: {e}");
+        ExitCode::FAILURE
+    })?;
+    let settings = Settings {
+        fps: args.fps,
+        view_only: args.view_only,
+    };
+    let mut server =
+        Server::new(source, input, access.template.clone(), settings).map_err(|e| {
+            eprintln!("farpane-server: cannot start: {e}");
+            ExitCode::FAILURE
+        })?;
+    if let Some(auth) = access.authenticator.clone() {
+        server.set_policy(move |user| auth.permission(user));
+    }
+    let sink = events.clone();
+    server.set_events(move |e| {
+        let level = match e {
+            Event::AuthFailed { .. } | Event::HandshakeFailed { .. } => Level::Warning,
+            _ => Level::Info,
+        };
+        note(&sink, level, &describe(e));
+    });
+    let listener = TcpListener::bind(args.listen).await.map_err(|e| {
+        eprintln!("farpane-server: cannot listen on {}: {e}", args.listen);
+        ExitCode::FAILURE
+    })?;
+    note(
+        &events,
+        Level::Info,
+        &format!(
+            "Farpane Server {} listening on {} ({what}; {})",
+            env!("CARGO_PKG_VERSION"),
+            args.listen,
+            access.description
+        ),
+    );
+    let mut fingerprints = Vec::new();
+    if let Some(fp) = &access.ra2_fingerprint {
+        let text = format_fingerprint(fp);
+        note(&events, Level::Info, &format!("RSA-AES key SHA-256 {text}"));
+        fingerprints.push(("RSA-AES key".to_owned(), text));
+    }
+    if let Some(id) = &access.identity {
+        let text = format_fingerprint(&id.fingerprint);
+        note(&events, Level::Info, &format!("certificate SHA-256 {text}"));
+        fingerprints.push(("Certificate".to_owned(), text));
+    }
+    Ok(Running {
+        server: Arc::new(server),
+        listener,
+        listen: args.listen.to_string(),
+        source: what,
+        access: access.description.clone(),
+        fingerprints,
+        events,
+        config_dir,
+    })
+}
+
+fn main() -> ExitCode {
     let mut raw = std::env::args().skip(1);
     if raw.next().as_deref() == Some("user") {
         return user_command();
@@ -281,99 +436,78 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let config_dir = args
-        .config_dir
-        .clone()
-        .unwrap_or_else(config::default_config_dir);
-    let tls = match tls_choice(&args) {
-        Ok(t) => t,
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
         Err(e) => {
-            eprintln!("farpane-server: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let access = match config::choose(&config_dir, args.password.clone(), &tls, args.ra2, |l| {
-        log(&l);
-    }) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("farpane-server: {e}");
-            return ExitCode::from(2);
-        }
-    };
-    let authenticated = access.authenticator.is_some() || args.password.is_some();
-    if !authenticated && !args.listen.ip().is_loopback() && !args.allow_no_auth {
-        eprintln!(
-            "farpane-server: refusing to listen on {} without credentials. Add a user \
-             (`farpane-server user add NAME`), set a password with --password-file or \
-             $FARPANE_PASSWORD, or pass --allow-no-auth.",
-            args.listen
-        );
-        return ExitCode::from(2);
-    }
-    if access.identity.is_none() && authenticated && !args.listen.ip().is_loopback() {
-        log("warning: no TLS; the connection is not encrypted (use --tls-self-signed)");
-    }
-    if let Some(p) = &args.password {
-        if access.authenticator.is_none() && p.len() > 8 {
-            log("warning: VNC password authentication checks only the first 8 characters");
-        }
-    }
-    let (source, input, what) = match open_source(&args) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("farpane-server: {e}");
+            eprintln!("farpane-server: cannot start the runtime: {e}");
             return ExitCode::FAILURE;
         }
     };
-    let settings = Settings {
-        fps: args.fps,
-        view_only: args.view_only,
+    let running = match rt.block_on(start(&args)) {
+        Ok(r) => r,
+        Err(code) => return code,
     };
-    let mut server = match Server::new(source, input, access.template.clone(), settings) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("farpane-server: cannot start: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    if let Some(auth) = access.authenticator.clone() {
-        server.set_policy(move |user| auth.permission(user));
-    }
-    server.set_events(|e| log(&describe(e)));
-    let server = Arc::new(server);
-    let listener = match TcpListener::bind(args.listen).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("farpane-server: cannot listen on {}: {e}", args.listen);
-            return ExitCode::FAILURE;
-        }
-    };
-    log(&format!(
-        "Farpane Server {} listening on {} ({what}; {})",
-        env!("CARGO_PKG_VERSION"),
-        args.listen,
-        access.description
-    ));
-    if let Some(fp) = &access.ra2_fingerprint {
-        log(&format!("RSA-AES key SHA-256 {}", format_fingerprint(fp)));
-    }
-    if let Some(id) = &access.identity {
-        log(&format!(
-            "certificate SHA-256 {}",
-            format_fingerprint(&id.fingerprint)
-        ));
-    }
-    tokio::select! {
-        result = Arc::clone(&server).listen(listener) => {
-            if let Err(e) = result {
-                eprintln!("farpane-server: {e}");
-                return ExitCode::FAILURE;
+    if args.headless {
+        return rt.block_on(async {
+            tokio::select! {
+                result = Arc::clone(&running.server).listen(running.listener) => {
+                    if let Err(e) = result {
+                        eprintln!("farpane-server: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+                _ = tokio::signal::ctrl_c() => {}
             }
-        }
-        _ = tokio::signal::ctrl_c() => {}
+            ExitCode::SUCCESS
+        });
     }
-    ExitCode::SUCCESS
+    // The window on this thread, the server on the runtime's.
+    let Running {
+        server,
+        listener,
+        listen,
+        source,
+        access,
+        fingerprints,
+        events,
+        config_dir,
+    } = running;
+    rt.spawn(Arc::clone(&server).listen(listener));
+    let backend = Arc::new(LiveBackend {
+        server,
+        listen,
+        source,
+        access,
+        fingerprints,
+    });
+    let mut dashboard = Dashboard::new(backend, events, config_dir.join("users.toml"), config_dir);
+    dashboard.set_screenshot(args.ui_screenshot.clone(), args.page, args.ui_delay);
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title("Farpane Server")
+            .with_app_id("farpane-server")
+            .with_inner_size([1100.0, 760.0])
+            .with_min_inner_size([760.0, 480.0]),
+        renderer: eframe::Renderer::Wgpu,
+        ..Default::default()
+    };
+    match eframe::run_native(
+        "Farpane Server",
+        options,
+        Box::new(move |_cc| Ok(Box::new(dashboard))),
+    ) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!(
+                "farpane-server: cannot open the window: {e}. Run with --headless on a machine \
+                 without a display."
+            );
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn user_command() -> ExitCode {
