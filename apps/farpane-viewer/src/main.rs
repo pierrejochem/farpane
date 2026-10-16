@@ -127,6 +127,7 @@ fn gui(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ui_screenshot: args.ui_screenshot.clone(),
         fullscreen: args.fullscreen,
         pin_toolbar: args.pin_toolbar,
+        settings_path: farpane_viewer::settings::default_path(),
     };
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
