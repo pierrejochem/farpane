@@ -134,7 +134,11 @@ impl ServerCertVerifier for Verifier {
                 } else if matches!(
                     &error,
                     Error::InvalidCertificate(CertificateError::UnknownIssuer)
-                ) {
+                ) || error.to_string().contains("CaUsedAsEndEntity")
+                {
+                    // A self-signed certificate that is flagged as a CA (many
+                    // servers make theirs that way) is still just a
+                    // self-signed one: the user may pin it.
                     CertProblem::Unknown
                 } else {
                     CertProblem::Invalid(error.to_string())

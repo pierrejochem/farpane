@@ -29,11 +29,17 @@ struct Identity {
 }
 
 fn identity(name: &str) -> Identity {
+    identity_with(name, false)
+}
+
+/// `ca`: the certificate says it is a CA (as many servers' self-signed ones do).
+fn identity_with(name: &str, ca: bool) -> Identity {
     let key = KeyPair::generate().unwrap();
-    let cert = CertificateParams::new(vec![name.to_owned()])
-        .unwrap()
-        .self_signed(&key)
-        .unwrap();
+    let mut params = CertificateParams::new(vec![name.to_owned()]).unwrap();
+    if ca {
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    }
+    let cert = params.self_signed(&key).unwrap();
     let der = cert.der().to_vec();
     let config = Arc::new(
         ServerConfig::builder_with_provider(Arc::new(ring::default_provider()))
@@ -399,4 +405,25 @@ async fn the_wire_shows_plaintext_without_tls_and_nothing_readable_with_it() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn a_self_signed_certificate_flagged_as_a_ca_is_still_pinnable() {
+    let id = identity_with("localhost", true);
+    let (c, s) = duplex(4096);
+    tokio::spawn(ServerSession::accept(s, server_opts(&id, ServerAuth::None)));
+    let err = ClientSession::connect(c, client_opts(Vec::new()))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Untrusted { problem: CertProblem::Unknown, fingerprint: fp, .. } if *fp == fingerprint(&id.der)),
+        "{err}"
+    );
+    // Pinned, it connects.
+    let (c, s) = duplex(4096);
+    let server = tokio::spawn(ServerSession::accept(s, server_opts(&id, ServerAuth::None)));
+    ClientSession::connect(c, client_opts(vec![fingerprint(&id.der)]))
+        .await
+        .unwrap();
+    server.await.unwrap().unwrap();
 }
