@@ -11,6 +11,12 @@ authors.workspace = true
 [dependencies]
 des = "0.9.0"
 rfb-proto.workspace = true
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+sha2 = "0.11.0"
+webpki-roots = "1.0.9"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rcgen = "0.14.7"
