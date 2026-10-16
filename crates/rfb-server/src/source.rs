@@ -16,6 +16,9 @@ pub struct Capture {
     /// The pointer's shape, if it changed since the previous call. The
     /// first call should report it. A cursor with no pixels hides it.
     pub cursor: Option<Cursor>,
+    /// New text on the machine's clipboard since the previous call (not text
+    /// a client just put there). Sent to every client.
+    pub clipboard: Option<String>,
 }
 
 /// A screen that can be captured. Called from one dedicated thread, a few
@@ -148,6 +151,7 @@ impl Source for TestPattern {
             return Ok(Capture {
                 damage: vec![whole],
                 cursor: Some(Self::arrow()),
+                clipboard: None,
             });
         }
         let old = self.square(self.frame - 1);
@@ -158,6 +162,7 @@ impl Source for TestPattern {
         Ok(Capture {
             damage: vec![old, new],
             cursor: None,
+            clipboard: None,
         })
     }
 }

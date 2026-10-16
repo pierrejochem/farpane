@@ -30,6 +30,8 @@ pub(crate) struct Update {
     pub rects: Vec<Rect>,
     /// The pointer has a new shape.
     pub cursor: Option<Arc<Cursor>>,
+    /// New text on the server's clipboard.
+    pub clipboard: Option<Arc<str>>,
     /// Capturing has stopped for good; clients should disconnect.
     pub ended: bool,
 }
@@ -371,7 +373,10 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
             })
         };
         match result {
-            Ok(capture) if capture.damage.is_empty() && capture.cursor.is_none() => {}
+            Ok(capture)
+                if capture.damage.is_empty()
+                    && capture.cursor.is_none()
+                    && capture.clipboard.is_none() => {}
             Ok(capture) => {
                 let cursor = capture.cursor.map(Arc::new);
                 if let Some(c) = &cursor {
@@ -384,6 +389,7 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: capture.damage,
                     cursor,
+                    clipboard: capture.clipboard.map(Arc::from),
                     ended: false,
                 }));
             }
@@ -395,6 +401,7 @@ fn capture_loop(mut source: impl Source, shared: &Arc<Shared>, interval: Duratio
                 let _ = shared.updates.send(Arc::new(Update {
                     rects: Vec::new(),
                     cursor: None,
+                    clipboard: None,
                     ended: true,
                 }));
                 return;

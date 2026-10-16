@@ -39,6 +39,7 @@ struct Plan {
     fail: bool,
     shade: u8,
     cursor: Option<rfb_codec::Cursor>,
+    clipboard: Option<String>,
 }
 
 struct Scripted {
@@ -75,14 +76,20 @@ impl Source for Scripted {
             return Ok(Capture {
                 damage: vec![r],
                 cursor: None,
+                clipboard: None,
             });
         }
         let cursor = plan.cursor.take();
+        let clipboard = plan.clipboard.take();
         let damage = std::mem::take(&mut plan.damage);
         for r in &damage {
             paint(fb, *r);
         }
-        Ok(Capture { damage, cursor })
+        Ok(Capture {
+            damage,
+            cursor,
+            clipboard,
+        })
     }
 }
 
@@ -935,4 +942,79 @@ async fn the_test_pattern_shows_an_arrow_in_every_pixel_format() {
             |c: &rfb_codec::Cursor| c.rgba.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
         assert_eq!(alphas(got), alphas(&arrow));
     }
+}
+
+#[tokio::test]
+async fn the_servers_clipboard_reaches_clients_in_latin1_or_as_utf8() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+
+    // A client without Extended Clipboard gets Latin-1, with `?` for the rest.
+    let (mut old, _old_task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    // One with it gets UTF-8 through notify, request, provide.
+    let (mut new, _new_task) = connect(
+        &server,
+        PixelFormat::RGB888,
+        &[enc::ZRLE, pseudo::EXT_CLIPBOARD],
+    )
+    .await;
+    let mut clip = ExtClipboard::new(Role::Client);
+    for _ in 0..50 {
+        let Ok(event) = timeout(Duration::from_millis(200), new.session.next_event()).await else {
+            break;
+        };
+        if let ClientConnEvent::ExtendedClipboard { flags, payload } = event.unwrap() {
+            for (flags, payload) in clip.on_message(flags, &payload).unwrap().send {
+                new.session
+                    .send(&ClientMessage::ExtendedClipboard { flags, payload })
+                    .await
+                    .unwrap();
+            }
+            break;
+        }
+    }
+    assert!(clip.is_active());
+
+    plan.0.lock().unwrap().clipboard = Some("caf\u{e9} 5\u{20ac}\n\u{4f60}".to_owned());
+
+    old.quiet(Duration::from_millis(400)).await;
+    assert!(
+        old.other
+            .iter()
+            .any(|e| matches!(e, ClientConnEvent::CutText(t) if t == b"caf\xe9 5?\n?")),
+        "{:?}",
+        old.other
+    );
+
+    let mut text = None;
+    for _ in 0..50 {
+        let Ok(event) = timeout(Duration::from_millis(200), new.session.next_event()).await else {
+            break;
+        };
+        if let ClientConnEvent::ExtendedClipboard { flags, payload } = event.unwrap() {
+            let reaction = clip.on_message(flags, &payload).unwrap();
+            for (flags, payload) in reaction.send {
+                new.session
+                    .send(&ClientMessage::ExtendedClipboard { flags, payload })
+                    .await
+                    .unwrap();
+            }
+            if reaction.received.is_some() {
+                text = reaction.received;
+                break;
+            }
+        }
+    }
+    assert_eq!(text.as_deref(), Some("caf\u{e9} 5\u{20ac}\r\n\u{4f60}"));
 }
