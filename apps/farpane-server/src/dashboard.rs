@@ -1391,43 +1391,74 @@ impl Dashboard {
         }
         let rows = self.users.list.clone();
         let mut actions: Vec<(Vec<String>, Option<String>)> = Vec::new();
-        egui::Grid::new("users")
-            .striped(true)
-            .num_columns(5)
-            .spacing([16.0, 8.0])
-            .show(ui, |ui| {
-                for head in ["User", "Name", "Role", "Account", ""] {
-                    ui.label(RichText::new(head).color(tokens.muted).small());
-                }
-                ui.end_row();
-                for u in &rows {
-                    ui.label(&u.name);
-                    ui.label(&u.display_name);
-                    let mut role = u.role;
-                    egui::ComboBox::from_id_salt(("role", &u.name))
-                        .selected_text(role.to_string())
-                        .show_ui(ui, |ui| {
-                            for r in [Role::Admin, Role::Control, Role::View] {
-                                ui.selectable_value(&mut role, r, r.to_string());
-                            }
-                        });
-                    if role != u.role {
-                        actions.push((vec!["role".into(), u.name.clone(), role.to_string()], None));
-                    }
-                    let mut enabled = u.enabled;
-                    if ui.checkbox(&mut enabled, "Enabled").changed() {
-                        let verb = if enabled { "enable" } else { "disable" };
-                        actions.push((vec![verb.into(), u.name.clone()], None));
-                    }
-                    if ui.button(format!("Remove {}", u.name)).clicked() {
-                        actions.push((vec!["remove".into(), u.name.clone()], None));
+        Self::card(ui, tokens, |ui| {
+            ui.label(heading(ui, "Accounts"));
+            ui.label(
+                RichText::new("Who may sign in, and what they may do")
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
+            ui.add_space(8.0);
+            egui::Grid::new("users")
+                .num_columns(5)
+                .spacing([24.0, 12.0])
+                .show(ui, |ui| {
+                    for head in ["User", "Name", "Role", "Account", ""] {
+                        ui.label(eyebrow(head, tokens));
                     }
                     ui.end_row();
-                }
-            });
-        ui.add_space(12.0);
+                    for u in &rows {
+                        ui.horizontal(|ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(vec2(28.0, 28.0), egui::Sense::hover());
+                            ui.painter().rect_filled(
+                                rect,
+                                style::radius(8.0),
+                                Color32::from(tokens.violet).gamma_multiply(0.85),
+                            );
+                            ui.painter().text(
+                                rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                u.name
+                                    .chars()
+                                    .take(1)
+                                    .flat_map(char::to_uppercase)
+                                    .collect::<String>(),
+                                egui::FontId::proportional(12.0),
+                                Color32::from(tokens.bg),
+                            );
+                            ui.label(RichText::new(&u.name).strong());
+                        });
+                        ui.label(&u.display_name);
+                        let mut role = u.role;
+                        egui::ComboBox::from_id_salt(("role", &u.name))
+                            .selected_text(role.to_string())
+                            .show_ui(ui, |ui| {
+                                for r in [Role::Admin, Role::Control, Role::View] {
+                                    ui.selectable_value(&mut role, r, r.to_string());
+                                }
+                            });
+                        if role != u.role {
+                            actions.push((
+                                vec!["role".into(), u.name.clone(), role.to_string()],
+                                None,
+                            ));
+                        }
+                        let mut enabled = u.enabled;
+                        if ui.checkbox(&mut enabled, "Enabled").changed() {
+                            let verb = if enabled { "enable" } else { "disable" };
+                            actions.push((vec![verb.into(), u.name.clone()], None));
+                        }
+                        if ui.button(format!("Remove {}", u.name)).clicked() {
+                            actions.push((vec!["remove".into(), u.name.clone()], None));
+                        }
+                        ui.end_row();
+                    }
+                });
+        });
         Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Add a user").strong());
+            ui.label(heading(ui, "Add a user"));
+            ui.add_space(6.0);
             egui::Grid::new("add-user")
                 .num_columns(2)
                 .spacing([12.0, 6.0])
@@ -1492,9 +1523,13 @@ impl Dashboard {
             return;
         }
         Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Right now").color(tokens.muted).small());
-            ui.label(&self.status.access);
-            ui.label(RichText::new(format!("Listening on {}", self.status.listen)).small());
+            ui.label(heading(ui, "Right now"));
+            ui.label(RichText::new(&self.status.access).strong());
+            ui.label(
+                RichText::new(format!("Listening on {}", self.status.listen))
+                    .color(tokens.muted)
+                    .size(12.5),
+            );
             for (label, fingerprint) in &self.status.fingerprints {
                 ui.label(
                     RichText::new(format!("{label} SHA-256 {fingerprint}"))
@@ -1503,13 +1538,8 @@ impl Dashboard {
                 );
             }
         });
-        ui.add_space(10.0);
         Self::card(ui, tokens, |ui| {
-            ui.label(
-                RichText::new("Settings (applied at the next start)")
-                    .color(tokens.muted)
-                    .small(),
-            );
+            ui.label(heading(ui, "Settings (applied at the next start)"));
             let mut tls = self.security.edit.tls == TlsMode::SelfSigned;
             if ui
                 .checkbox(&mut tls, "Encrypt with a self-signed certificate (TLS)")
@@ -1541,9 +1571,8 @@ impl Dashboard {
                 self.save_security();
             }
         });
-        ui.add_space(10.0);
         Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Keys").color(tokens.muted).small());
+            ui.label(heading(ui, "Keys"));
             for (which, label, button) in [
                 (
                     Forget::Certificate,
@@ -1571,9 +1600,8 @@ impl Dashboard {
                 });
             }
         });
-        ui.add_space(10.0);
         Self::card(ui, tokens, |ui| {
-            ui.label(RichText::new("Always on").color(tokens.muted).small());
+            ui.label(heading(ui, "Always on"));
             for line in [
                 "Passwords are stored as Argon2id hashes.",
                 "5 wrong passwords in 15 minutes lock a user name for 15 minutes.",

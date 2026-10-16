@@ -38,6 +38,8 @@ pub struct Snapshot {
     /// The latest Fence round trip, if the server supports Fence and has
     /// answered at least once.
     pub rtt: Option<Duration>,
+    /// The server takes part in the Extended Clipboard extension (UTF-8 text).
+    pub ext_clipboard: bool,
 }
 
 /// Accumulates counts between readings.
@@ -95,6 +97,7 @@ impl Collector {
             total_tx,
             encodings: self.shares(),
             rtt: self.rtt,
+            ext_clipboard: false,
         };
         self.last_at = now;
         self.last_rx = total_rx;
@@ -295,6 +298,7 @@ mod tests {
             total_tx: 0,
             encodings,
             rtt: None,
+            ext_clipboard: false,
         };
         let share = |encoding, bytes| EncodingShare {
             encoding,

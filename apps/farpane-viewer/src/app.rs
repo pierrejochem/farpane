@@ -1026,6 +1026,16 @@ impl ViewerApp {
                             ),
                             tokens.green.into(),
                         );
+                        if let Some((_, security)) = &self.session_info {
+                            let encrypted = (security.starts_with("VeNCrypt")
+                                || security.starts_with("RSA-AES"))
+                                && !security.contains("unencrypted");
+                            if encrypted {
+                                widgets::badge(ui, "Encrypted", tokens.green.into());
+                            } else {
+                                widgets::badge(ui, "Not encrypted", tokens.amber.into());
+                            }
+                        }
                         ctx.request_repaint_after(Duration::from_secs(1));
                     }
                     // In a narrow window the less used controls move into a
@@ -1169,6 +1179,9 @@ impl ViewerApp {
                             }
                             if self.stats.as_ref().is_some_and(|s| s.rtt.is_some()) {
                                 seen.push("Fence");
+                            }
+                            if self.stats.as_ref().is_some_and(|s| s.ext_clipboard) {
+                                seen.push("ExtClipboard");
                             }
                             if !seen.is_empty() && ui.available_width() > 420.0 {
                                 ui.label(text(seen.join(" · ")));

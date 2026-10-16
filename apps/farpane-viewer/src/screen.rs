@@ -373,11 +373,13 @@ impl RemoteScreen {
     /// Take a statistics reading: rates since the previous reading, totals,
     /// and the encoding mix since the connection started.
     pub fn sample_stats(&mut self, now: std::time::Instant) -> Snapshot {
-        self.stats.sample(
+        let mut reading = self.stats.sample(
             now,
             self.session.bytes_received(),
             self.session.bytes_sent(),
-        )
+        );
+        reading.ext_clipboard = self.clip.is_active();
+        reading
     }
 
     /// Measure the round trip: send a Fence request that the server answers

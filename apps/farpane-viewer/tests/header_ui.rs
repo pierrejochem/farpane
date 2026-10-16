@@ -96,3 +96,12 @@ async fn the_footer_can_be_switched_off() {
     let off = drawn_text(&frame(&ctx, &mut app, 1100.0));
     assert!(!off.contains("RFB 3.8"), "{off}");
 }
+
+#[tokio::test]
+async fn a_wide_window_says_whether_the_session_is_encrypted() {
+    let (ctx, mut app, _server) = connected().await;
+    // This test server has no TLS: the badge must not claim encryption.
+    let text = drawn_text(&frame(&ctx, &mut app, 1400.0));
+    assert!(text.contains("Not encrypted"), "{text}");
+    assert!(!text.contains("\nEncrypted"), "{text}");
+}
