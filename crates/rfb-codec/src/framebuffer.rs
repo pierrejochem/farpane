@@ -96,6 +96,15 @@ impl Framebuffer {
         &mut self.pixels[at..at + usize::from(rect.width) * BYTES_PER_PIXEL]
     }
 
+    /// Fill `rect` with one pixel. `rect` must have been checked.
+    pub(crate) fn fill_rect(&mut self, rect: Rect, pixel: [u8; 4]) {
+        for row in 0..rect.height {
+            for dst in self.row_mut(rect, row).chunks_exact_mut(BYTES_PER_PIXEL) {
+                dst.copy_from_slice(&pixel);
+            }
+        }
+    }
+
     /// Copy `rect`-sized pixels from `(sx, sy)` to `rect`, correct for
     /// overlapping areas. Both areas must have been checked.
     pub(crate) fn copy_within(&mut self, sx: u16, sy: u16, rect: Rect) {

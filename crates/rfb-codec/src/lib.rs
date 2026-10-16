@@ -8,14 +8,16 @@
 //! ([`Framebuffer`]); wire formats are converted on the way in
 //! ([`PixelConverter`]).
 //!
-//! Status: Raw and `CopyRect` decode. RRE, `CoRRE`, Hextile, zlib, ZRLE and
+//! Status: Raw, `CopyRect`, RRE, `CoRRE` and Hextile decode. zlib, ZRLE and
 //! TRLE follow in M2, Tight in M3. See `docs/design/farpane-reference.md`,
 //! sections 7, 15 and 22.
 
 mod decoder;
 mod error;
 mod framebuffer;
+mod hextile;
 mod pixel;
+mod rre;
 
 pub use decoder::{Damage, Decoder};
 pub use error::DecodeError;
