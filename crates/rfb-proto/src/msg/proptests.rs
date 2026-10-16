@@ -55,6 +55,8 @@ fn client_message() -> impl Strategy<Value = ClientMessage> {
         (any::<u8>(), any::<u16>(), any::<u16>())
             .prop_map(|(buttons, x, y)| ClientMessage::PointerEvent { buttons, x, y }),
         prop::collection::vec(any::<u8>(), 0..256).prop_map(ClientMessage::ClientCutText),
+        (any::<u32>(), prop::collection::vec(any::<u8>(), 0..256))
+            .prop_map(|(flags, payload)| ClientMessage::ExtendedClipboard { flags, payload }),
         (
             0..=crate::consts::limits::MAX_FB_DIMENSION,
             0..=crate::consts::limits::MAX_FB_DIMENSION,
@@ -88,6 +90,8 @@ fn server_message() -> impl Strategy<Value = ServerMessage> {
             .prop_map(|(first, colours)| ServerMessage::SetColourMapEntries { first, colours }),
         Just(ServerMessage::Bell),
         prop::collection::vec(any::<u8>(), 0..256).prop_map(ServerMessage::ServerCutText),
+        (any::<u32>(), prop::collection::vec(any::<u8>(), 0..256))
+            .prop_map(|(flags, payload)| ServerMessage::ExtendedClipboard { flags, payload }),
     ]
 }
 
