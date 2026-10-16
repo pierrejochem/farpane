@@ -124,6 +124,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
                             return Err(Error::AuthFailed);
                         }
                     }
+                    // This server never offers VeNCrypt, so these cannot
+                    // happen; a peer that somehow provokes one gets an error.
+                    ServerEvent::StartTls { .. } | ServerEvent::PlainCredentials { .. } => {
+                        return Err(Error::Proto(rfb_proto::ProtoError::NoAcceptableSecurity));
+                    }
                     ServerEvent::ClientInit { shared } => {
                         self.shared = shared;
                         self.conn.server_init(

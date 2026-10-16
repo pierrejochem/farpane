@@ -105,6 +105,28 @@ impl ClientConn {
         !matches!(self.state, State::Handshake | State::Failed)
     }
 
+    /// The TLS handshake finished (after [`ClientEvent::StartTls`]).
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if no TLS upgrade was requested.
+    pub fn tls_established(&mut self) -> Result<(), ProtoError> {
+        self.hs.tls_established()
+    }
+
+    /// Send `X509Plain` credentials; see [`ClientHandshake::plain_credentials`].
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if out of order, [`ProtoError::LimitExceeded`]
+    /// for overlong values.
+    pub fn plain_credentials(
+        &mut self,
+        username: &[u8],
+        password: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), ProtoError> {
+        self.hs.plain_credentials(username, password, out)
+    }
+
     /// Answer a VNC Auth challenge; see [`ClientHandshake::vnc_auth_reply`].
     ///
     /// # Errors
@@ -164,6 +186,14 @@ impl ClientConn {
                 let (n, ev) = self.hs.poll(buf, out)?;
                 buf.advance(n);
                 let Some(ev) = ev else { return Ok(None) };
+                // The server cannot have sent anything encrypted yet, so
+                // anything still buffered was injected in the clear and would
+                // be read as if it came through TLS (a STARTTLS injection).
+                if matches!(ev, ClientEvent::StartTls { .. }) && !buf.is_empty() {
+                    return Err(ProtoError::Malformed {
+                        ctx: "data received before the TLS handshake",
+                    });
+                }
                 if let ClientEvent::ServerInit {
                     width,
                     height,
@@ -300,6 +330,7 @@ mod tests {
             ServerConfig {
                 max_version: ProtocolVersion::V3_8,
                 security: vec![security::NONE],
+                ..ServerConfig::default()
             },
             &mut s_out,
         );

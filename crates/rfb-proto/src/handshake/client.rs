@@ -3,7 +3,7 @@ use alloc::{string::String, vec, vec::Vec};
 use super::{read_string, try_read};
 use crate::{
     PixelFormat, ProtoError, ProtocolVersion,
-    consts::{limits, security},
+    consts::{limits, security, vencrypt},
 };
 
 /// Client handshake settings.
@@ -15,6 +15,11 @@ pub struct ClientConfig {
     pub shared: bool,
     /// Allowed security types, most preferred first.
     pub security: Vec<u8>,
+    /// `VeNCrypt` subtypes we accept, most preferred first. Only the
+    /// certificate-validated ones (`X509*`) can be offered: anonymous TLS
+    /// (`TLS*`) cannot be told from a man in the middle, and `Plain` sends the
+    /// password unencrypted.
+    pub vencrypt: Vec<u32>,
 }
 
 impl Default for ClientConfig {
@@ -22,7 +27,13 @@ impl Default for ClientConfig {
         Self {
             max_version: ProtocolVersion::V3_8,
             shared: true,
-            security: vec![security::VNC_AUTH, security::NONE],
+            // TLS first: a server that offers it gets a protected session.
+            security: vec![security::VENCRYPT, security::VNC_AUTH, security::NONE],
+            vencrypt: vec![
+                vencrypt::X509_NONE,
+                vencrypt::X509_VNC,
+                vencrypt::X509_PLAIN,
+            ],
         }
     }
 }
@@ -32,6 +43,12 @@ impl Default for ClientConfig {
 pub enum ClientEvent {
     /// VNC Auth: answer with [`ClientHandshake::vnc_auth_reply`].
     VncAuthChallenge([u8; 16]),
+    /// `VeNCrypt` agreed on a TLS subtype: upgrade the transport to TLS now,
+    /// then call [`ClientHandshake::tls_established`]. Nothing may be sent or
+    /// read in the clear after this point.
+    StartTls { subtype: u32 },
+    /// `X509Plain`: answer with [`ClientHandshake::plain_credentials`].
+    PlainCredentialsNeeded,
     /// Handshake complete; the connection is now in the message loop.
     ServerInit {
         width: u16,
@@ -51,6 +68,14 @@ enum State {
     AwaitReply,
     AwaitSecurityResult,
     AwaitServerInit,
+    VencryptVersion,
+    VencryptAck,
+    VencryptSubtypes,
+    VencryptSelectAck,
+    /// Waiting for the caller to finish the TLS handshake.
+    AwaitTls,
+    /// Waiting for the caller to supply a username and password.
+    AwaitCredentials,
     Done,
     Failed,
 }
@@ -61,6 +86,10 @@ pub struct ClientHandshake {
     cfg: ClientConfig,
     state: State,
     version: ProtocolVersion,
+    /// The `VeNCrypt` subtype chosen, once there is one.
+    subtype: Option<u32>,
+    /// `PlainCredentialsNeeded` was reported for the current wait.
+    credentials_asked: bool,
 }
 
 enum Progress {
@@ -77,6 +106,8 @@ impl ClientHandshake {
             cfg,
             state: State::AwaitVersion,
             version,
+            subtype: None,
+            credentials_asked: false,
         }
     }
 
@@ -132,6 +163,69 @@ impl ClientHandshake {
         out.extend_from_slice(response);
         self.state = State::AwaitSecurityResult;
         Ok(())
+    }
+
+    /// The TLS handshake finished; continue with the subtype's own
+    /// authentication.
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if no TLS upgrade was requested.
+    pub fn tls_established(&mut self) -> Result<(), ProtoError> {
+        if self.state != State::AwaitTls {
+            return Err(ProtoError::Malformed {
+                ctx: "tls_established out of order",
+            });
+        }
+        self.state = match self.subtype {
+            Some(vencrypt::X509_NONE) => State::AwaitSecurityResult,
+            Some(vencrypt::X509_VNC) => State::AwaitChallenge,
+            Some(vencrypt::X509_PLAIN) => State::AwaitCredentials,
+            _ => return Err(ProtoError::NoAcceptableSecurity),
+        };
+        Ok(())
+    }
+
+    /// Send the `X509Plain` credentials (over the TLS channel) after
+    /// [`ClientEvent::PlainCredentialsNeeded`].
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if out of order,
+    /// [`ProtoError::LimitExceeded`] for an overlong username or password.
+    pub fn plain_credentials(
+        &mut self,
+        username: &[u8],
+        password: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), ProtoError> {
+        if self.state != State::AwaitCredentials {
+            return Err(ProtoError::Malformed {
+                ctx: "credentials out of order",
+            });
+        }
+        let length = |field: &'static str, bytes: &[u8]| {
+            u32::try_from(bytes.len())
+                .ok()
+                .filter(|&n| n <= limits::MAX_CREDENTIAL_LEN)
+                .ok_or(ProtoError::LimitExceeded {
+                    field,
+                    value: bytes.len() as u64,
+                    limit: u64::from(limits::MAX_CREDENTIAL_LEN),
+                })
+        };
+        let (username_len, password_len) =
+            (length("username", username)?, length("password", password)?);
+        out.extend_from_slice(&username_len.to_be_bytes());
+        out.extend_from_slice(&password_len.to_be_bytes());
+        out.extend_from_slice(username);
+        out.extend_from_slice(password);
+        self.state = State::AwaitSecurityResult;
+        Ok(())
+    }
+
+    /// The `VeNCrypt` subtype in use, once agreed.
+    #[must_use]
+    pub fn vencrypt_subtype(&self) -> Option<u32> {
+        self.subtype
     }
 
     // Closures, not method paths: `Reader<'a>` methods are not higher-ranked.
@@ -253,7 +347,17 @@ impl ClientHandshake {
                 self.state = State::Done;
                 Ok(Progress::Event(n, ev))
             }
-            State::AwaitReply | State::Done => Ok(Progress::Idle),
+            State::VencryptVersion
+            | State::VencryptAck
+            | State::VencryptSubtypes
+            | State::VencryptSelectAck => self.vencrypt_step(input, out),
+            State::AwaitCredentials if !self.credentials_asked => {
+                self.credentials_asked = true;
+                Ok(Progress::Event(0, ClientEvent::PlainCredentialsNeeded))
+            }
+            State::AwaitReply | State::AwaitTls | State::AwaitCredentials | State::Done => {
+                Ok(Progress::Idle)
+            }
             State::Failed => Err(ProtoError::Malformed {
                 ctx: "handshake already failed",
             }),
@@ -269,9 +373,93 @@ impl ClientHandshake {
             }
             security::NONE => self.send_client_init(out),
             security::VNC_AUTH => self.state = State::AwaitChallenge,
+            security::VENCRYPT if self.version != ProtocolVersion::V3_3 => {
+                self.state = State::VencryptVersion;
+            }
             _ => return Err(ProtoError::NoAcceptableSecurity),
         }
         Ok(())
+    }
+
+    /// `VeNCrypt` 0.2 negotiation (spec, section "`VeNCrypt`").
+    // Closures, not method paths: `Reader<'a>` methods are not higher-ranked.
+    #[allow(clippy::redundant_closure_for_method_calls)]
+    fn vencrypt_step(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<Progress, ProtoError> {
+        match self.state {
+            State::VencryptVersion => {
+                let Some(((major, minor), n)) = try_read(input, |r| Ok((r.u8()?, r.u8()?)))? else {
+                    return Ok(Progress::Idle);
+                };
+                // We speak 0.2 only: older servers cannot be served, newer
+                // ones are told 0.2.
+                if (major, minor) < (0, 2) {
+                    return Err(ProtoError::SecurityFailed(Some(
+                        "server only speaks VeNCrypt older than 0.2".into(),
+                    )));
+                }
+                out.extend_from_slice(&[0, 2]);
+                self.state = State::VencryptAck;
+                Ok(Progress::Consumed(n))
+            }
+            State::VencryptAck => {
+                let Some((ack, n)) = try_read(input, |r| r.u8())? else {
+                    return Ok(Progress::Idle);
+                };
+                if ack != 0 {
+                    return Err(ProtoError::SecurityFailed(Some(
+                        "server did not accept our VeNCrypt version".into(),
+                    )));
+                }
+                self.state = State::VencryptSubtypes;
+                Ok(Progress::Consumed(n))
+            }
+            State::VencryptSubtypes => {
+                let Some((offered, n)) = try_read(input, |r| {
+                    let count = usize::from(r.u8()?);
+                    let mut list = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        list.push(r.u32()?);
+                    }
+                    Ok(list)
+                })?
+                else {
+                    return Ok(Progress::Idle);
+                };
+                let chosen = self
+                    .cfg
+                    .vencrypt
+                    .iter()
+                    .copied()
+                    .find(|t| {
+                        offered.contains(t)
+                            && matches!(
+                                *t,
+                                vencrypt::X509_NONE | vencrypt::X509_VNC | vencrypt::X509_PLAIN
+                            )
+                    })
+                    .ok_or(ProtoError::NoAcceptableSecurity)?;
+                out.extend_from_slice(&chosen.to_be_bytes());
+                self.subtype = Some(chosen);
+                self.state = State::VencryptSelectAck;
+                Ok(Progress::Consumed(n))
+            }
+            State::VencryptSelectAck => {
+                let Some((ack, n)) = try_read(input, |r| r.u8())? else {
+                    return Ok(Progress::Idle);
+                };
+                // Note the polarity: for the subtype the server answers 1 for
+                // success, unlike the version ack where 0 is success.
+                if ack != 1 {
+                    return Err(ProtoError::SecurityFailed(Some(
+                        "server refused the VeNCrypt subtype".into(),
+                    )));
+                }
+                self.state = State::AwaitTls;
+                let subtype = self.subtype.ok_or(ProtoError::NoAcceptableSecurity)?;
+                Ok(Progress::Event(n, ClientEvent::StartTls { subtype }))
+            }
+            _ => Ok(Progress::Idle),
+        }
     }
 
     fn send_client_init(&mut self, out: &mut Vec<u8>) {

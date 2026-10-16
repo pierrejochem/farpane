@@ -133,6 +133,9 @@ pub mod limits {
     pub const MAX_EXT_CLIPBOARD_INFLATED: u32 = 16 * 1024 * 1024;
     pub const MAX_FENCE_PAYLOAD: u8 = 64;
     pub const MAX_SCREENS: u8 = 255;
+    /// Longest username or password accepted in `VeNCrypt` `X509Plain`.
+    /// Not from the spec; real credentials are far shorter.
+    pub const MAX_CREDENTIAL_LEN: u32 = 4096;
     /// Largest single rectangle payload the framers will wait for. Bounds
     /// buffering when a peer announces a huge Raw or length-prefixed rect.
     /// Not from the spec; a Raw 5120 x 5120 x 32 bpp rect (100 MB) fits.
