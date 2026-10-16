@@ -12,7 +12,7 @@
 //! - [`version`]: the 12-byte `ProtocolVersion` handshake message.
 //! - [`types::PixelFormat`]: the 16-byte pixel format structure.
 //! - [`wire`]: a bounds-checked big-endian reader.
-//! - [`conn`]: `ClientConn`, the handshake plus the message loop (M2).
+//! - [`conn`]: `ClientConn` and `ServerConn`, the handshake plus the message loop (M2).
 //! - [`framing`]: finds the end of each rectangle payload (M2, in progress).
 //! - [`msg`]: the core client and server messages.
 //! - [`handshake`]: client and server handshake state machines for 3.3, 3.7

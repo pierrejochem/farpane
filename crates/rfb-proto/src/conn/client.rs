@@ -15,7 +15,7 @@ use crate::{
 
 /// What the caller must act on. Events come out one per `poll` call.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ConnEvent {
+pub enum ClientConnEvent {
     /// A handshake event: the VNC Auth challenge, or `ServerInit` which ends
     /// the handshake.
     Handshake(ClientEvent),
@@ -128,7 +128,7 @@ impl ClientConn {
         &mut self,
         buf: &mut BytesMut,
         out: &mut Vec<u8>,
-    ) -> Result<Option<ConnEvent>, ProtoError> {
+    ) -> Result<Option<ClientConnEvent>, ProtoError> {
         let r = self.step(buf, out);
         if r.is_err() {
             self.state = State::Failed;
@@ -158,7 +158,7 @@ impl ClientConn {
         &mut self,
         buf: &mut BytesMut,
         out: &mut Vec<u8>,
-    ) -> Result<Option<ConnEvent>, ProtoError> {
+    ) -> Result<Option<ClientConnEvent>, ProtoError> {
         match self.state {
             State::Handshake => {
                 let (n, ev) = self.hs.poll(buf, out)?;
@@ -174,12 +174,12 @@ impl ClientConn {
                     (self.width, self.height, self.pf) = (*width, *height, *pixel_format);
                     self.state = State::Idle;
                 }
-                Ok(Some(ConnEvent::Handshake(ev)))
+                Ok(Some(ClientConnEvent::Handshake(ev)))
             }
             State::Idle => self.message(buf),
             State::Update { remaining: 0 } => {
                 self.state = State::Idle;
-                Ok(Some(ConnEvent::UpdateEnd))
+                Ok(Some(ClientConnEvent::UpdateEnd))
             }
             State::Update { remaining } => self.rect(buf, remaining),
             State::Failed => Err(ProtoError::Malformed {
@@ -188,7 +188,7 @@ impl ClientConn {
         }
     }
 
-    fn message(&mut self, buf: &mut BytesMut) -> Result<Option<ConnEvent>, ProtoError> {
+    fn message(&mut self, buf: &mut BytesMut) -> Result<Option<ClientConnEvent>, ProtoError> {
         let (msg, used) = match ServerMessage::parse(buf) {
             Ok(v) => v,
             Err(ProtoError::NeedMore(_)) => return Ok(None),
@@ -198,13 +198,13 @@ impl ClientConn {
         Ok(Some(match msg {
             ServerMessage::UpdateBegin { rects } => {
                 self.state = State::Update { remaining: rects };
-                ConnEvent::UpdateBegin { rects }
+                ClientConnEvent::UpdateBegin { rects }
             }
             ServerMessage::SetColourMapEntries { first, colours } => {
-                ConnEvent::ColourMap { first, colours }
+                ClientConnEvent::ColourMap { first, colours }
             }
-            ServerMessage::Bell => ConnEvent::Bell,
-            ServerMessage::ServerCutText(t) => ConnEvent::CutText(t),
+            ServerMessage::Bell => ClientConnEvent::Bell,
+            ServerMessage::ServerCutText(t) => ClientConnEvent::CutText(t),
         }))
     }
 
@@ -212,7 +212,7 @@ impl ClientConn {
         &mut self,
         buf: &mut BytesMut,
         remaining: u16,
-    ) -> Result<Option<ConnEvent>, ProtoError> {
+    ) -> Result<Option<ClientConnEvent>, ProtoError> {
         let header = match RectHeader::parse(buf) {
             Ok(h) => h,
             Err(ProtoError::NeedMore(_)) => return Ok(None),
@@ -221,7 +221,7 @@ impl ClientConn {
         if header.encoding == pseudo::LAST_RECT {
             buf.advance(RectHeader::LEN);
             self.state = State::Idle;
-            return Ok(Some(ConnEvent::UpdateEnd));
+            return Ok(Some(ClientConnEvent::UpdateEnd));
         }
         if !is_pseudo(header.encoding) && !header.rect.fits(self.width, self.height) {
             return Err(ProtoError::Malformed {
@@ -249,7 +249,7 @@ impl ClientConn {
         self.state = State::Update {
             remaining: remaining - 1,
         };
-        Ok(Some(ConnEvent::Rect { header, payload }))
+        Ok(Some(ClientConnEvent::Rect { header, payload }))
     }
 }
 
@@ -332,7 +332,7 @@ mod tests {
         cli: &mut ClientConn,
         bytes: &[u8],
         chunk: usize,
-    ) -> Result<Vec<ConnEvent>, ProtoError> {
+    ) -> Result<Vec<ClientConnEvent>, ProtoError> {
         let mut buf = BytesMut::new();
         let mut events = Vec::new();
         let mut out = Vec::new();
@@ -363,18 +363,18 @@ mod tests {
             assert_eq!(
                 ev,
                 vec![
-                    ConnEvent::Bell,
-                    ConnEvent::UpdateBegin { rects: 2 },
-                    ConnEvent::Rect {
+                    ClientConnEvent::Bell,
+                    ClientConnEvent::UpdateBegin { rects: 2 },
+                    ClientConnEvent::Rect {
                         header: hdr(enc::RAW, 1, 1, 2, 3),
                         payload: Bytes::from(raw.clone()),
                     },
-                    ConnEvent::Rect {
+                    ClientConnEvent::Rect {
                         header: hdr(enc::COPY_RECT, 10, 10, 5, 5),
                         payload: Bytes::from_static(&[0, 1, 0, 2]),
                     },
-                    ConnEvent::UpdateEnd,
-                    ConnEvent::CutText(b"hi".to_vec()),
+                    ClientConnEvent::UpdateEnd,
+                    ClientConnEvent::CutText(b"hi".to_vec()),
                 ],
                 "chunk {chunk}"
             );
@@ -386,7 +386,10 @@ mod tests {
         let (mut cli, tail) = session(&msg(&ServerMessage::UpdateBegin { rects: 0 }));
         assert_eq!(
             collect(&mut cli, &tail, 1).unwrap(),
-            vec![ConnEvent::UpdateBegin { rects: 0 }, ConnEvent::UpdateEnd]
+            vec![
+                ClientConnEvent::UpdateBegin { rects: 0 },
+                ClientConnEvent::UpdateEnd
+            ]
         );
     }
 
@@ -400,8 +403,8 @@ mod tests {
         let (mut cli, tail) = session(&tail);
         let ev = collect(&mut cli, &tail, 1).unwrap();
         assert_eq!(ev.len(), 4, "{ev:?}");
-        assert_eq!(ev[2], ConnEvent::UpdateEnd);
-        assert_eq!(ev[3], ConnEvent::Bell);
+        assert_eq!(ev[2], ClientConnEvent::UpdateEnd);
+        assert_eq!(ev[3], ClientConnEvent::Bell);
     }
 
     #[test]
@@ -458,7 +461,7 @@ mod tests {
         tail.extend_from_slice(&hdr(enc::RAW, 0, 0, 4, 2).to_bytes());
         tail.extend_from_slice(&[1; 4 * 2 * 2]);
         let ev = collect(&mut cli, &tail, 1).unwrap();
-        assert!(matches!(&ev[1], ConnEvent::Rect { payload, .. } if payload.len() == 16));
+        assert!(matches!(&ev[1], ClientConnEvent::Rect { payload, .. } if payload.len() == 16));
     }
 
     #[test]
