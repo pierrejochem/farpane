@@ -1,0 +1,30 @@
+[package]
+name = "farpane-grab"
+description = "Keyboard capture for remote desktop windows: Wayland shortcut inhibition and X11 keyboard grabs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
+wayland-client = "0.31.15"
+wayland-protocols = { version = "0.32.12", features = ["client", "unstable"] }
+x11rb = "0.14.0"
+
+# This crate is the one place in the workspace where `unsafe` is allowed (the
+# workspace denies it): it turns the raw window and display pointers that
+# winit hands out into protocol objects. See the crate documentation for the
+# justification. Everything else matches the workspace lints.
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+undocumented_unsafe_blocks = "deny"
