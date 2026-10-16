@@ -144,23 +144,93 @@ impl RemoteScreen {
         Ok(())
     }
 
-    /// Wait for one complete `FramebufferUpdate`, decode it into the picture
-    /// and return what changed. Bells, clipboard text and colour maps that
-    /// arrive meanwhile are ignored for now.
+    /// Wait for the next thing worth reacting to. Decoding happens before
+    /// this returns, so the picture is already up to date for a
+    /// [`ScreenEvent::Damage`]. Cancel safe: dropping the future (for example
+    /// in a `select!`) loses nothing.
     ///
     /// # Errors
     /// Session errors (including the server hanging up) and decode errors;
     /// after an error the connection is unusable.
-    pub async fn next_update(&mut self) -> Result<Vec<Damage>, ConnectError> {
-        let mut damage = Vec::new();
+    pub async fn next_event(&mut self) -> Result<ScreenEvent, ConnectError> {
         loop {
             match self.session.next_event().await? {
                 ClientConnEvent::Rect { header, payload } => {
-                    damage.push(self.decoder.decode(&mut self.fb, &header, &payload)?);
+                    let damage = self.decoder.decode(&mut self.fb, &header, &payload)?;
+                    if damage != Damage::None {
+                        return Ok(ScreenEvent::Damage(damage));
+                    }
                 }
-                ClientConnEvent::UpdateEnd => return Ok(damage),
-                _ => {}
+                ClientConnEvent::UpdateEnd => return Ok(ScreenEvent::UpdateEnd),
+                ClientConnEvent::Bell => return Ok(ScreenEvent::Bell),
+                ClientConnEvent::CutText(text) => return Ok(ScreenEvent::CutText(text)),
+                ClientConnEvent::Handshake(_)
+                | ClientConnEvent::UpdateBegin { .. }
+                | ClientConnEvent::ColourMap { .. } => {}
             }
         }
     }
+
+    /// Wait for one complete `FramebufferUpdate`, decode it into the picture
+    /// and return what changed. Not cancel safe: use [`RemoteScreen::next_event`]
+    /// inside a `select!`.
+    ///
+    /// # Errors
+    /// As [`RemoteScreen::next_event`].
+    pub async fn next_update(&mut self) -> Result<Vec<Damage>, ConnectError> {
+        let mut damage = Vec::new();
+        loop {
+            match self.next_event().await? {
+                ScreenEvent::Damage(d) => damage.push(d),
+                ScreenEvent::UpdateEnd => return Ok(damage),
+                ScreenEvent::Bell | ScreenEvent::CutText(_) => {}
+            }
+        }
+    }
+
+    /// Send a key press or release (an X11 keysym).
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn key(&mut self, keysym: u32, down: bool) -> Result<(), ConnectError> {
+        Ok(self
+            .session
+            .send(&ClientMessage::KeyEvent { down, keysym })
+            .await?)
+    }
+
+    /// Send the pointer position (remote framebuffer pixels) and button mask
+    /// (bit 0 left, 1 middle, 2 right, 3 wheel up, 4 wheel down, ...).
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn pointer(&mut self, buttons: u8, x: u16, y: u16) -> Result<(), ConnectError> {
+        Ok(self
+            .session
+            .send(&ClientMessage::PointerEvent { buttons, x, y })
+            .await?)
+    }
+
+    /// Send clipboard text (Latin-1 as the legacy message requires).
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn cut_text(&mut self, latin1: Vec<u8>) -> Result<(), ConnectError> {
+        Ok(self
+            .session
+            .send(&ClientMessage::ClientCutText(latin1))
+            .await?)
+    }
+}
+
+/// Something that happened on the connection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScreenEvent {
+    /// The picture changed (already applied).
+    Damage(Damage),
+    /// The server finished one `FramebufferUpdate`; request the next one.
+    UpdateEnd,
+    Bell,
+    /// Clipboard text from the server (Latin-1 bytes).
+    CutText(Vec<u8>),
 }
