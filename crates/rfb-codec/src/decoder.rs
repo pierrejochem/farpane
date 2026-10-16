@@ -127,6 +127,10 @@ impl Decoder {
                 crate::zrle::decode(fb, &self.converter, rect, payload, &mut self.zrle)?;
                 Ok(Damage::Rect(rect))
             }
+            enc::TRLE => {
+                crate::trle::decode(fb, &self.converter, rect, payload)?;
+                Ok(Damage::Rect(rect))
+            }
             enc::TIGHT => {
                 crate::tight::decode(fb, &self.converter, rect, payload, &mut self.tight)?;
                 Ok(Damage::Rect(rect))

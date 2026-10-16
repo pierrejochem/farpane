@@ -49,6 +49,7 @@ pub fn parse_encodings(list: &str) -> Result<Vec<i32>, String> {
             "zlib" => Ok(enc::ZLIB),
             "zrle" => Ok(enc::ZRLE),
             "tight" => Ok(enc::TIGHT),
+            "trle" => Ok(enc::TRLE),
             "cursor" => Ok(pseudo::CURSOR),
             "desktopsize" => Ok(pseudo::DESKTOP_SIZE),
             "extdesktopsize" => Ok(pseudo::EXT_DESKTOP_SIZE),

@@ -21,12 +21,14 @@ use crate::stats::{Collector, Snapshot};
 
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
-pub const DEFAULT_ENCODINGS: [i32; 12] = [
+pub const DEFAULT_ENCODINGS: [i32; 13] = [
     enc::ZRLE,
     // No JPEG quality level is requested, so a server sends only the
     // lossless Tight methods.
     enc::TIGHT,
     enc::HEXTILE,
+    // Uncompressed tiles: cheaper to decode than ZRLE, bigger on the wire.
+    enc::TRLE,
     enc::ZLIB,
     enc::CO_RRE,
     enc::COPY_RECT,

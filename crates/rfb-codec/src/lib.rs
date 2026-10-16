@@ -8,9 +8,9 @@
 //! ([`Framebuffer`]); wire formats are converted on the way in
 //! ([`PixelConverter`]).
 //!
-//! Status: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE and Tight
-//! (without JPEG) decode, plus the `Cursor` and `DesktopSize`
-//! pseudo-encodings. TRLE follows in M2. See `docs/design/farpane-reference.md`,
+//! Status: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, TRLE and
+//! Tight (without JPEG) decode, plus the `Cursor` and `DesktopSize`
+//! pseudo-encodings. See `docs/design/farpane-reference.md`,
 //! sections 7, 15 and 22.
 
 pub mod clipboard;
@@ -23,10 +23,12 @@ mod inflate;
 mod pixel;
 mod rre;
 mod tight;
+mod tiles;
+mod trle;
 mod zrle;
 
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
-pub use encode::{ZrleEncoder, encode_cursor, encode_raw};
+pub use encode::{ZrleEncoder, encode_cursor, encode_raw, encode_trle};
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;
 pub use pixel::{PixelConverter, PixelPacker};

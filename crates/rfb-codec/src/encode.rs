@@ -123,13 +123,37 @@ pub(crate) fn tiles(
     rect: Rect,
     packer: &PixelPacker,
 ) -> Result<Vec<u8>, DecodeError> {
+    tiles_of(fb, rect, packer, TILE, false)
+}
+
+/// TRLE: 16 x 16 tiles without zlib, each free to reuse the palette of the
+/// last tile that had one (RFC 6143 section 7.7.5).
+///
+/// # Errors
+/// [`DecodeError::OutOfBounds`] if `rect` is not inside the picture.
+pub fn encode_trle(
+    fb: &Framebuffer,
+    rect: Rect,
+    packer: &PixelPacker,
+) -> Result<Vec<u8>, DecodeError> {
+    tiles_of(fb, rect, packer, 16, true)
+}
+
+fn tiles_of(
+    fb: &Framebuffer,
+    rect: Rect,
+    packer: &PixelPacker,
+    size: u16,
+    allow_reuse: bool,
+) -> Result<Vec<u8>, DecodeError> {
     fb.check(rect)?;
     let mut out = Vec::new();
-    let mut pixels: Vec<[u8; 4]> = Vec::with_capacity(usize::from(TILE) * usize::from(TILE));
-    for ty in (0..rect.height).step_by(usize::from(TILE)) {
-        let th = (rect.height - ty).min(TILE);
-        for tx in (0..rect.width).step_by(usize::from(TILE)) {
-            let tw = (rect.width - tx).min(TILE);
+    let mut last_palette: Vec<[u8; 4]> = Vec::new();
+    let mut pixels: Vec<[u8; 4]> = Vec::with_capacity(usize::from(size) * usize::from(size));
+    for ty in (0..rect.height).step_by(usize::from(size)) {
+        let th = (rect.height - ty).min(size);
+        for tx in (0..rect.width).step_by(usize::from(size)) {
+            let tw = (rect.width - tx).min(size);
             let tile = Rect {
                 x: rect.x + tx,
                 y: rect.y + ty,
@@ -143,7 +167,13 @@ pub(crate) fn tiles(
                     pixels.push([px[0], px[1], px[2], 0xFF]);
                 }
             }
-            encode_tile(&pixels, usize::from(tw), packer, &mut out);
+            encode_tile(
+                &pixels,
+                usize::from(tw),
+                packer,
+                &mut out,
+                allow_reuse.then_some(&mut last_palette),
+            );
         }
     }
     Ok(out)
@@ -176,7 +206,17 @@ fn push_run_length(out: &mut Vec<u8>, len: usize) {
     out.push(u8::try_from(rest).unwrap_or(254));
 }
 
-fn encode_tile(pixels: &[[u8; 4]], width: usize, packer: &PixelPacker, out: &mut Vec<u8>) {
+/// Encode one tile. `reuse` is `Some` for TRLE: it holds the palette of the
+/// last tile that had one, which this tile may reuse (subencodings 127 and
+/// 129) and which it replaces when it brings a palette of its own.
+#[allow(clippy::too_many_lines)] // one decision tree, clearer unsplit
+fn encode_tile(
+    pixels: &[[u8; 4]],
+    width: usize,
+    packer: &PixelPacker,
+    out: &mut Vec<u8>,
+    reuse: Option<&mut Vec<[u8; 4]>>,
+) {
     let cp = packer.cpixel_len();
     // The distinct colours, in order of first use, while there are few.
     let mut palette: Vec<[u8; 4]> = Vec::new();
@@ -195,32 +235,50 @@ fn encode_tile(pixels: &[[u8; 4]], width: usize, packer: &PixelPacker, out: &mut
     }
     let runs = runs(pixels);
     let rows = pixels.len() / width;
-    let raw_size = pixels.len() * cp;
-    let plain_rle = runs.iter().map(|&(_, n)| cp + run_bytes(n)).sum::<usize>();
+    let run_cost = |&(_, len): &(_, usize)| if len == 1 { 1 } else { 1 + run_bytes(len) };
+    let packed_cost = |n: usize| rows * (width * packed_bits(n)).div_ceil(8);
     let n = palette.len();
-    let small = n <= 127;
-    let packed_size = (2..=16).contains(&n).then(|| {
-        let bits = packed_bits(n);
-        n * cp + rows * (width * bits).div_ceil(8)
-    });
-    let palette_rle = small.then(|| {
-        n * cp
-            + runs
-                .iter()
-                .map(|&(_, len)| if len == 1 { 1 } else { 1 + run_bytes(len) })
-                .sum::<usize>()
-    });
-    let best = [
-        (raw_size, Kind::Raw),
-        (plain_rle, Kind::PlainRle),
-        (packed_size.unwrap_or(usize::MAX), Kind::Packed),
-        (palette_rle.unwrap_or(usize::MAX), Kind::PaletteRle),
-    ]
-    .into_iter()
-    .min_by_key(|&(size, _)| size)
-    .map_or(Kind::Raw, |(_, kind)| kind);
-    let index = |px: &[u8; 4]| palette.iter().position(|p| p == px).unwrap_or(0);
-    let palette_len = u8::try_from(n).unwrap_or(0);
+    let mut options = vec![
+        (pixels.len() * cp, Kind::Raw),
+        (
+            runs.iter().map(|&(_, n)| cp + run_bytes(n)).sum::<usize>(),
+            Kind::PlainRle,
+        ),
+    ];
+    if (2..=16).contains(&n) {
+        options.push((n * cp + packed_cost(n), Kind::Packed));
+    }
+    if n <= 127 {
+        options.push((
+            n * cp + runs.iter().map(run_cost).sum::<usize>(),
+            Kind::PaletteRle,
+        ));
+    }
+    // The previous palette, if every colour of this tile is in it.
+    let reusable = reuse
+        .as_ref()
+        .filter(|last| !last.is_empty() && pixels.iter().all(|px| last.contains(px)))
+        .map(|last| (*last).clone());
+    if let Some(last) = &reusable {
+        if (2..=16).contains(&last.len()) {
+            options.push((packed_cost(last.len()), Kind::PackedReuse));
+        }
+        options.push((
+            runs.iter().map(run_cost).sum::<usize>(),
+            Kind::PaletteRleReuse,
+        ));
+    }
+    let best = options
+        .into_iter()
+        .min_by_key(|&(size, _)| size)
+        .map_or(Kind::Raw, |(_, kind)| kind);
+    // The palette the indexes refer to.
+    let used: &[[u8; 4]] = match (best, &reusable) {
+        (Kind::PackedReuse | Kind::PaletteRleReuse, Some(last)) => last,
+        _ => &palette,
+    };
+    let index = |px: &[u8; 4]| used.iter().position(|p| p == px).unwrap_or(0);
+    let palette_len = u8::try_from(used.len()).unwrap_or(0);
     match best {
         Kind::Raw => {
             out.push(0);
@@ -235,34 +293,42 @@ fn encode_tile(pixels: &[[u8; 4]], width: usize, packer: &PixelPacker, out: &mut
                 push_run_length(out, len);
             }
         }
-        Kind::Packed => {
-            out.push(palette_len);
-            for &px in &palette {
-                packer.pack_cpixel(px, out);
+        Kind::Packed | Kind::PackedReuse => {
+            if best == Kind::PackedReuse {
+                out.push(127);
+            } else {
+                out.push(palette_len);
+                for &px in used {
+                    packer.pack_cpixel(px, out);
+                }
             }
-            let bits = packed_bits(n);
+            let bits = packed_bits(used.len());
             for row in pixels.chunks_exact(width) {
                 let mut byte = 0u8;
-                let mut used = 0;
+                let mut filled = 0;
                 for px in row {
                     // `index` is below 16.
                     byte = byte << bits | u8::try_from(index(px)).unwrap_or(0);
-                    used += bits;
-                    if used == 8 {
+                    filled += bits;
+                    if filled == 8 {
                         out.push(byte);
                         byte = 0;
-                        used = 0;
+                        filled = 0;
                     }
                 }
-                if used > 0 {
-                    out.push(byte << (8 - used));
+                if filled > 0 {
+                    out.push(byte << (8 - filled));
                 }
             }
         }
-        Kind::PaletteRle => {
-            out.push(128 | palette_len);
-            for &px in &palette {
-                packer.pack_cpixel(px, out);
+        Kind::PaletteRle | Kind::PaletteRleReuse => {
+            if best == Kind::PaletteRleReuse {
+                out.push(129);
+            } else {
+                out.push(128 | palette_len);
+                for &px in used {
+                    packer.pack_cpixel(px, out);
+                }
             }
             for &(px, len) in &runs {
                 let i = u8::try_from(index(&px)).unwrap_or(0);
@@ -275,14 +341,24 @@ fn encode_tile(pixels: &[[u8; 4]], width: usize, packer: &PixelPacker, out: &mut
             }
         }
     }
+    // A tile with a palette of its own becomes the one to reuse.
+    if matches!(best, Kind::Packed | Kind::PaletteRle) {
+        if let Some(last) = reuse {
+            last.clone_from(&palette);
+        }
+    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Raw,
     PlainRle,
     Packed,
     PaletteRle,
+    /// TRLE subencoding 127.
+    PackedReuse,
+    /// TRLE subencoding 129.
+    PaletteRleReuse,
 }
 
 /// Bits per pixel of a packed palette of `n` colours (2 to 16).
@@ -392,6 +468,47 @@ mod tests {
             [c as u8, (c >> 8) as u8, 77]
         });
         assert_eq!(first_tile_kind(&fb), 128);
+    }
+
+    #[test]
+    fn trle_reuses_the_previous_palette_when_that_is_shorter() {
+        // Two 16 x 16 tiles of one-pixel stripes in the same two colours.
+        let fb = framebuffer(32, 16, |x, _| if x % 2 == 0 { [0, 0, 0] } else { [255; 3] });
+        let packer = PixelPacker::new(&PixelFormat::RGB888).unwrap();
+        let out = tiles_of(&fb, whole(&fb), &packer, 16, true).unwrap();
+        // First tile: 2, palette (2 x 3 bytes), 16 rows x 2 bytes. Then 127 and
+        // the packed pixels alone.
+        assert_eq!(out[0], 2);
+        let second = 1 + 6 + 32;
+        assert_eq!(out[second], 127, "{out:?}");
+        assert_eq!(out.len(), second + 1 + 32);
+        // ZRLE (no reuse) repeats the palette instead.
+        let zrle = tiles_of(&fb, whole(&fb), &packer, 16, false).unwrap();
+        assert_eq!(zrle[second], 2);
+        // Three colours in runs of five, the same in both tiles.
+        let fb = framebuffer(32, 16, |x, y| {
+            let c = (((x % 16) / 5 + y) % 3) as u8 * 100;
+            [c, c, 7]
+        });
+        let out = tiles_of(&fb, whole(&fb), &packer, 16, true).unwrap();
+        // (Three colours pack into 2 bits per pixel, which wins here: 127.)
+        assert!(out.contains(&127) || out.contains(&129), "{out:?}");
+    }
+
+    #[test]
+    fn a_tile_with_a_new_colour_cannot_reuse_and_brings_its_own_palette() {
+        let fb = framebuffer(32, 16, |x, _| {
+            if x < 16 {
+                if x % 2 == 0 { [0, 0, 0] } else { [255; 3] }
+            } else if x % 2 == 0 {
+                [0, 0, 0]
+            } else {
+                [9, 9, 9] // not in the first tile's palette
+            }
+        });
+        let packer = PixelPacker::new(&PixelFormat::RGB888).unwrap();
+        let out = tiles_of(&fb, whole(&fb), &packer, 16, true).unwrap();
+        assert_eq!(out[1 + 6 + 32], 2, "{out:?}");
     }
 
     #[test]
