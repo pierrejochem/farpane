@@ -23,6 +23,8 @@ png = "0.18.1"
 eframe = { version = "0.32.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
 egui = { version = "0.32.3", default-features = false }
 egui-wgpu = "0.32.3"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
 
 [lints]
 workspace = true
@@ -30,3 +32,6 @@ workspace = true
 [lib]
 name = "farpane_viewer"
 path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3.27.0"
