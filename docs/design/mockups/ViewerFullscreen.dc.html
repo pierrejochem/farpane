@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane Viewer – Fullscreen</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#000}
+.theme-glass{--text:#f4f4f5;--muted:rgba(255,255,255,.62);--faint:rgba(255,255,255,.5);--line:rgba(255,255,255,.12);--inset:rgba(255,255,255,.06);--inset-hi:rgba(255,255,255,.14);--sel:rgba(255,255,255,.16);--pill:linear-gradient(135deg,rgba(255,255,255,.08),transparent 42%),rgba(28,28,31,.62);--pill-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 18px 40px -12px rgba(0,0,0,.85);--blur:blur(22px) saturate(130%);--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--switch-off:rgba(255,255,255,.18);--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.theme-slate{--text:#e6edf3;--muted:#9aa7b5;--faint:#8593a3;--line:#2a3644;--inset:#16202b;--inset-hi:#1c2835;--sel:#24313f;--pill:#111821;--pill-shadow:0 12px 32px -10px rgba(0,0,0,.8);--blur:none;--accent:#38bdf8;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:#38bdf8;--btn-fg:#06202e;--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--switch-off:#2a3644;--font:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif}
+.theme-light{--text:#14171c;--muted:#525b68;--faint:#69727f;--line:#e2e5ea;--inset:#f2f4f7;--inset-hi:#e8ebf0;--sel:#ffffff;--pill:#ffffff;--pill-shadow:0 1px 2px rgba(16,24,40,.08),0 12px 32px -10px rgba(16,24,40,.35);--blur:none;--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--green:#0f7b55;--blue:#0b69a3;--amber:#9a5b05;--switch-off:#d3d8df;--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.pill{background:var(--pill);border:1px solid var(--line);box-shadow:var(--pill-shadow);color:var(--text);font-family:var(--font);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.inset{background:var(--inset);border:1px solid var(--line);color:var(--text);cursor:pointer}
+.inset:hover{background:var(--inset-hi)}
+.btn-primary{background:var(--btn-bg);color:var(--btn-fg);border:0;cursor:pointer}
+.seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--inset);border:1px solid var(--line)}
+.seg button{padding:5px 11px;border:0;border-radius:7px;background:none;color:var(--muted);font:500 12px var(--font);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--sel);color:var(--text)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--tone);background:color-mix(in srgb,var(--tone) 13%,transparent);border:1px solid color-mix(in srgb,var(--tone) 35%,transparent)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.t-green{--tone:var(--green)}.t-accent{--tone:var(--accent-text)}.t-amber{--tone:var(--amber)}
+.muted{color:var(--muted)}
+.mono{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+.kbd{display:inline-block;padding:1px 6px;border-radius:5px;border:1px solid var(--line);background:var(--inset);font:600 11px ui-monospace,Menlo,monospace}
+.switch{flex:none;width:36px;height:22px;padding:0;border-radius:99px;border:1px solid var(--line);background:var(--switch-off);position:relative;cursor:pointer}
+.switch[aria-checked="true"]{background:var(--accent)}
+.switch span{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.switch[aria-checked="true"] span{left:16px}
+.icon-btn{width:36px;height:36px;border-radius:10px;display:grid;place-items:center}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+:focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px}
+
+.acc-ember{--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(232,73,47,.8),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-cyan{--accent:#0ea5e9;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:linear-gradient(180deg,#38bdf8,#0ea5e9);--btn-fg:#04202c;--btn-shadow:0 8px 20px -8px rgba(14,165,233,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-violet{--accent:#8b5cf6;--accent-hi:#a78bfa;--accent-text:#c4b5fd;--btn-bg:linear-gradient(180deg,#8b5cf6,#7c3aed);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(139,92,246,.75),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-green{--accent:#10b981;--accent-hi:#34d399;--accent-text:#6ee7b7;--btn-bg:linear-gradient(180deg,#34d399,#10b981);--btn-fg:#022c22;--btn-shadow:0 8px 20px -8px rgba(16,185,129,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-amber{--accent:#f59e0b;--accent-hi:#fbbf24;--accent-text:#fcd34d;--btn-bg:linear-gradient(180deg,#fbbf24,#f59e0b);--btn-fg:#2a1a02;--btn-shadow:0 8px 20px -8px rgba(245,158,11,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.theme-light.acc-ember{--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(201,60,37,.6)}
+.theme-light.acc-cyan{--accent:#0284c7;--accent-hi:#0284c7;--accent-text:#075985;--btn-bg:linear-gradient(180deg,#0284c7,#0369a1);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(3,105,161,.6)}
+.theme-light.acc-violet{--accent:#7c3aed;--accent-hi:#7c3aed;--accent-text:#6d28d9;--btn-bg:linear-gradient(180deg,#7c3aed,#6d28d9);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(109,40,217,.6)}
+.theme-light.acc-green{--accent:#059669;--accent-hi:#059669;--accent-text:#047857;--btn-bg:linear-gradient(180deg,#059669,#047857);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(4,120,87,.6)}
+.theme-light.acc-amber{--accent:#d97706;--accent-hi:#d97706;--accent-text:#92400e;--btn-bg:linear-gradient(180deg,#f59e0b,#d97706);--btn-fg:#1f1300;--btn-shadow:0 6px 16px -8px rgba(180,83,9,.55)}
+.reduce-tr .card,.reduce-tr .card-solid,.reduce-tr .pill{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.reduce-tr.theme-glass .card{background:#1b1b1e}
+.reduce-tr.theme-glass .card-solid{background:#1b1b1e}
+.reduce-tr.theme-glass{--pill:#1b1b1e}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{transition:none!important;animation:none!important}
+</style>
+</helmet>
+<div class="theme-{{theme}} {{prefCls}}" style="position: relative; height: 900px; overflow: hidden; background: #101826; font-family: var(--font); font-size: 14px; line-height: 1.45">
+
+  <div role="img" aria-label="Remote desktop of Build server filling the whole screen" style="position: absolute; inset: 0">
+    <div style="position: absolute; left: 0; right: 0; top: 0; height: 30px; background: rgba(0,0,0,.6); display: flex; align-items: center; padding: 0 14px; gap: 18px; font-size: 12.5px; color: #a3aab5"><span>Activities</span><span>Terminal</span><span class="mono" style="margin-left: auto">09:14</span></div>
+    <div style="position: absolute; left: 5%; top: 9%; width: 55%; height: 66%; border-radius: 10px; background: #0b0f17; border: 1px solid #2a3344; overflow: hidden">
+      <div style="height: 30px; background: #1a2130; display: flex; align-items: center; padding: 0 12px; font-size: 12.5px; color: #cbd5e1">Terminal — cargo build</div>
+      <div class="mono" style="padding: 14px 16px; font-size: 13px; line-height: 1.75; color: #a7f3d0; white-space: pre-line">$ cargo build --release
+   Compiling rfb-proto v0.1.0
+   Compiling rfb-codec v0.1.0
+   Compiling farpane-server v0.1.0
+    Finished release in 41.2s
+$ ./target/release/farpane-server --headless</div>
+    </div>
+    <div style="position: absolute; right: 5%; top: 22%; width: 33%; height: 56%; border-radius: 10px; background: #141b29; border: 1px solid #2a3344">
+      <div style="height: 30px; background: #1a2130; border-radius: 10px 10px 0 0; display: flex; align-items: center; padding: 0 12px; font-size: 12.5px; color: #cbd5e1">Files</div>
+      <div style="padding: 16px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px">
+        <div style="height: 56px; border-radius: 7px; background: #1e3a5f"></div><div style="height: 56px; border-radius: 7px; background: #1e3a5f"></div><div style="height: 56px; border-radius: 7px; background: #1e3a5f"></div>
+        <div style="height: 56px; border-radius: 7px; background: #1e3a5f"></div><div style="height: 56px; border-radius: 7px; background: #1e3a5f"></div><div style="height: 56px; border-radius: 7px; background: #334155"></div>
+      </div>
+    </div>
+    <div style="position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 10px; padding: 8px 12px; border-radius: 16px; background: rgba(0,0,0,.45)">
+      <div style="width: 40px; height: 40px; border-radius: 10px; background: #1e3a5f"></div><div style="width: 40px; height: 40px; border-radius: 10px; background: #334155"></div><div style="width: 40px; height: 40px; border-radius: 10px; background: #1e3a5f"></div><div style="width: 40px; height: 40px; border-radius: 10px; background: #3b2f5c"></div>
+    </div>
+  </div>
+
+  <div style="position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 2">
+    <sc-if value="{{barOpen}}" hint-placeholder-val="{{true}}">
+      <div role="toolbar" aria-label="Fullscreen controls" class="pill" style="margin-top: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 16px; max-width: calc(100vw - 32px); box-sizing: border-box">
+        <div style="display: flex; flex-direction: column; padding: 0 6px; min-width: 120px">
+          <span style="font-weight: 600; font-size: 13px">Build server</span>
+          <span class="mono muted" style="font-size: 11px">2560×1440 · native</span>
+        </div>
+        <sc-if value="{{grab}}" hint-placeholder-val="{{true}}"><span class="badge t-accent" title="System shortcuts go to the remote machine"><span class="dot"></span>Keyboard captured</span></sc-if>
+        <sc-if value="{{noGrab}}" hint-placeholder-val="{{false}}"><span class="badge t-amber"><span class="dot"></span>Shortcuts stay local</span></sc-if>
+        <div role="group" aria-label="Displays" class="seg">
+          <button type="button" aria-pressed="{{oneScreen}}" onClick="{{pickOne}}">This display</button>
+          <button type="button" aria-pressed="{{allScreens}}" onClick="{{pickAll}}">Span all</button>
+        </div>
+        <button type="button" class="inset" style="height: 36px; padding: 0 12px; border-radius: 10px; font: 600 12px var(--font)">Ctrl+Alt+Del</button>
+        <div class="muted" style="display: flex; align-items: center; gap: 8px; font-size: 12px; padding: 0 4px"><span aria-hidden="true">Capture keys</span><button type="button" class="switch" role="switch" aria-checked="{{grab}}" aria-label="Capture system shortcuts" onClick="{{toggleGrab}}"><span></span></button></div>
+        <button type="button" class="inset icon-btn" aria-pressed="{{statsOpen}}" aria-label="Toggle stats overlay" onClick="{{toggleStats}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"></path></svg></button>
+        <button type="button" class="inset icon-btn" aria-pressed="{{pinned}}" aria-label="Pin toolbar" onClick="{{togglePin}}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3h6l-1 6 4 4H6l4-4zM12 13v8"></path></svg></button>
+        <a href="ViewerSession.dc.html" class="inset icon-btn" aria-label="Exit fullscreen" style="text-decoration: none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 3v6H3M15 3v6h6M9 21v-6H3M15 21v-6h6"></path></svg></a>
+        <a href="Main.dc.html" class="btn-primary" style="height: 36px; padding: 0 14px; display: flex; align-items: center; border-radius: 10px; text-decoration: none; font-size: 12.5px; font-weight: 600">Disconnect</a>
+      </div>
+    </sc-if>
+    <button type="button" class="pill" onClick="{{toggleBar}}" aria-expanded="{{barOpen}}" aria-label="Show or hide the toolbar" style="width: 64px; height: 18px; border-radius: 0 0 10px 10px; border-top: 0; margin-top: {{tabGap}}; display: grid; place-items: center; cursor: pointer; padding: 0"><svg width="14" height="10" viewBox="0 0 24 14" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{chevron}}"></path></svg></button>
+  </div>
+
+  <sc-if value="{{statsOpen}}" hint-placeholder-val="{{true}}">
+    <aside aria-label="Session statistics" class="pill" style="position: absolute; right: 16px; top: 46px; z-index: 2; border-radius: 12px; padding: 8px 12px; display: flex; gap: 14px; font-size: 12px">
+      <span><span class="muted">FPS</span> <strong class="mono">60</strong></span>
+      <span><span class="muted">RTT</span> <strong class="mono">11 ms</strong></span>
+      <span><span class="muted">Rate</span> <strong class="mono">12.1 Mbit/s</strong></span>
+      <span><span class="muted">Enc</span> <strong class="mono">Tight q8</strong></span>
+    </aside>
+  </sc-if>
+
+  <sc-if value="{{hintOpen}}" hint-placeholder-val="{{true}}">
+    <div role="status" class="pill" style="position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); z-index: 2; border-radius: 14px; padding: 12px 16px; display: flex; align-items: center; gap: 14px; font-size: 13px; max-width: calc(100% - 32px); box-sizing: border-box">
+      <span>Fullscreen · system shortcuts go to <strong>Build server</strong>.</span>
+      <span class="muted">Release keys <span class="kbd">Ctrl</span> <span class="kbd">Alt</span> <span class="kbd">Shift</span> · exit <span class="kbd">F11</span></span>
+      <button type="button" class="inset" onClick="{{hideHint}}" style="height: 30px; padding: 0 10px; border-radius: 8px; font: 600 12px var(--font)">Got it</button>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["glass","slate","light","system"],"default":"glass"},"$preview":{"width":1440,"height":900}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: null, sys: 'dark', barOpen: true, pinned: false, grab: true, statsOpen: true, hintOpen: true, span: false };
+  }
+  componentDidMount() {
+    this.loadPrefs();
+    try { this.setState({ osTr: window.matchMedia('(prefers-reduced-transparency: reduce)').matches, osMo: window.matchMedia('(prefers-reduced-motion: reduce)').matches }); } catch (e) {}
+    this.onStore = (e) => { if (e.key && e.key.indexOf('farpane-') === 0) this.loadPrefs(); };
+    window.addEventListener('storage', this.onStore);
+    try {
+      this.mq = window.matchMedia('(prefers-color-scheme: light)');
+      this.onMq = () => this.setState({ sys: this.mq.matches ? 'light' : 'dark' });
+      this.onMq(); this.mq.addEventListener('change', this.onMq);
+    } catch (e) {}
+    this.hintTimer = setTimeout(() => this.setState({ hintOpen: false }), 6000);
+  }
+  loadPrefs() {
+    const g = (k) => { try { return window.localStorage.getItem(k); } catch (e) { return null; } };
+    this.setState({ theme: g('farpane-theme') || this.state.theme, accent: g('farpane-accent') || 'default', reduceTr: g('farpane-reduce-tr'), motion: g('farpane-reduce-motion'), scale: g('farpane-scale') || '1' });
+  }
+  setPref(k, v) {
+    try { if (v == null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, v); } catch (e) {}
+    this.loadPrefs();
+  }
+  prefCls() {
+    const s = this.state, c = [];
+    if (s.accent && s.accent !== 'default') c.push('acc-' + s.accent);
+    if (s.reduceTr === 'on' || (s.reduceTr == null && s.osTr)) c.push('reduce-tr');
+    if (s.motion === 'on' || (s.motion == null && s.osMo)) c.push('reduce-motion');
+    return c.join(' ');
+  }
+  componentWillUnmount() {
+    window.removeEventListener('storage', this.onStore);
+    try { this.mq.removeEventListener('change', this.onMq); } catch (e) {}
+    clearTimeout(this.hintTimer);
+  }
+  renderVals() {
+    const s = this.state;
+    const pref = s.theme ?? this.props.theme ?? 'glass';
+    const theme = pref === 'system' ? (s.sys === 'light' ? 'light' : 'glass') : pref;
+    const zoom = this.state.scale || '1';
+    return {
+      theme,
+      prefCls: this.prefCls(),
+      zoom,
+      minH940: Math.round(940 / parseFloat(zoom)) + 'px',
+      barOpen: s.barOpen,
+      tabGap: s.barOpen ? '0px' : '0px',
+      chevron: s.barOpen ? 'M3 11l9-8 9 8' : 'M3 3l9 8 9-8',
+      toggleBar: () => this.setState({ barOpen: !s.barOpen }),
+      pinned: s.pinned,
+      togglePin: () => this.setState({ pinned: !s.pinned }),
+      grab: s.grab, noGrab: !s.grab,
+      toggleGrab: () => this.setState({ grab: !s.grab }),
+      statsOpen: s.statsOpen,
+      toggleStats: () => this.setState({ statsOpen: !s.statsOpen }),
+      hintOpen: s.hintOpen,
+      hideHint: () => this.setState({ hintOpen: false }),
+      oneScreen: !s.span, allScreens: s.span,
+      pickOne: () => this.setState({ span: false }),
+      pickAll: () => this.setState({ span: true })
+    };
+  }
+}
+</script>
+</body>
+</html>

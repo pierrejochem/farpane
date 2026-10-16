@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Farpane Viewer
+GenericName=Remote Desktop Viewer
+Comment=Remote desktop viewer (VNC/RFB client) with a dashboard UI
+Exec=farpane-viewer %u
+Icon=farpane-viewer
+Terminal=false
+Categories=Network;RemoteAccess;
+MimeType=x-scheme-handler/vnc;

@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane mark</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="display: inline-block; line-height: 0; width: {{px}}; height: {{px}}">
+  <svg viewBox="0 0 1024 1024" width="{{size}}" height="{{size}}" role="img" aria-label="{{label}}">
+    <defs>
+      <linearGradient id="t-{{uid}}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="{{c.tileTop}}"></stop><stop offset="1" stop-color="{{c.tileBottom}}"></stop></linearGradient>
+      <linearGradient id="g-{{uid}}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{{c.gA}}"></stop><stop offset="1" stop-color="{{c.gB}}"></stop></linearGradient>
+    </defs>
+    <sc-if value="{{hasTile}}" hint-placeholder-val="{{true}}">
+      <rect width="1024" height="1024" rx="228" fill="url(#t-{{uid}})"></rect>
+      <rect x="2" y="2" width="1020" height="1020" rx="226" fill="none" stroke="{{c.rim}}" stroke-width="4"></rect>
+    </sc-if>
+
+    <sc-if value="{{isGrid}}" hint-placeholder-val="{{true}}">
+      <rect x="232" y="232" width="160" height="160" rx="36" fill="url(#g-{{uid}})"></rect>
+      <rect x="232" y="432" width="160" height="160" rx="36" fill="url(#g-{{uid}})"></rect>
+      <rect x="232" y="632" width="160" height="160" rx="36" fill="url(#g-{{uid}})"></rect>
+      <rect x="432" y="232" width="160" height="160" rx="36" fill="url(#g-{{uid}})"></rect>
+      <rect x="432" y="432" width="160" height="160" rx="36" fill="url(#g-{{uid}})"></rect>
+      <rect x="632" y="232" width="160" height="160" rx="36" fill="{{c.far}}"></rect>
+      <sc-if value="{{showGhosts}}" hint-placeholder-val="{{true}}">
+        <rect x="638" y="438" width="148" height="148" rx="31" fill="none" stroke="{{c.ghost}}" stroke-width="12"></rect>
+        <rect x="438" y="638" width="148" height="148" rx="31" fill="none" stroke="{{c.ghost}}" stroke-width="12"></rect>
+        <rect x="638" y="638" width="148" height="148" rx="31" fill="none" stroke="{{c.ghost}}" stroke-width="12"></rect>
+      </sc-if>
+    </sc-if>
+
+    <sc-if value="{{isWindow}}" hint-placeholder-val="{{false}}">
+      <sc-if value="{{showGhosts}}" hint-placeholder-val="{{true}}">
+        <path d="M236 236 L560 300 M788 236 L710 300 M788 788 L710 450 M236 788 L560 450" stroke="{{c.ghost}}" stroke-width="10" stroke-linecap="round"></path>
+      </sc-if>
+      <rect x="200" y="200" width="624" height="624" rx="132" fill="none" stroke="url(#g-{{uid}})" stroke-width="76"></rect>
+      <rect x="560" y="300" width="150" height="150" rx="30" fill="{{c.far}}"></rect>
+    </sc-if>
+
+    <sc-if value="{{tunnelFull}}" hint-placeholder-val="{{false}}">
+      <g transform="translate(16 0)">
+        <rect x="232" y="272" width="520" height="520" rx="114" fill="none" stroke="url(#g-{{uid}})" stroke-width="44" opacity="{{op.a}}"></rect>
+        <rect x="365" y="265" width="390" height="390" rx="86" fill="none" stroke="url(#g-{{uid}})" stroke-width="36" opacity="{{op.b}}"></rect>
+        <rect x="495" y="255" width="270" height="270" rx="60" fill="none" stroke="url(#g-{{uid}})" stroke-width="30" opacity="{{op.c}}"></rect>
+        <rect x="620" y="240" width="160" height="160" rx="36" fill="{{c.far}}"></rect>
+      </g>
+    </sc-if>
+    <sc-if value="{{tunnelSmall}}" hint-placeholder-val="{{false}}">
+      <g transform="translate(22 -22)">
+        <rect x="196" y="320" width="508" height="508" rx="116" fill="none" stroke="url(#g-{{uid}})" stroke-width="88" opacity="{{op.sa}}"></rect>
+        <rect x="392" y="260" width="372" height="372" rx="86" fill="none" stroke="url(#g-{{uid}})" stroke-width="72" opacity="{{op.sb}}"></rect>
+        <rect x="588" y="196" width="240" height="240" rx="56" fill="{{c.far}}"></rect>
+      </g>
+    </sc-if>
+  </svg>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"concept":{"editor":"enum","options":["tunnel","grid","window"],"default":"tunnel"},"tile":{"editor":"enum","options":["dark","light","ember","none","mono"],"default":"dark"},"size":{"editor":"int","default":256,"min":16,"max":1024},"ghosts":{"editor":"boolean","default":true},"$preview":{"width":256,"height":256}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.uid = Math.random().toString(36).slice(2, 9); }
+  renderVals() {
+    const concept = this.props.concept ?? 'tunnel';
+    const tile = this.props.tile ?? 'dark';
+    const size = Number(this.props.size ?? 256);
+    const sets = {
+      dark:  { tileTop: '#202025', tileBottom: '#0b0b0e', rim: 'rgba(255,255,255,0.08)', gA: '#F4623A', gB: '#D23B21', far: '#FFB59C', ghost: 'rgba(255,255,255,0.22)' },
+      light: { tileTop: '#FFFFFF', tileBottom: '#F0ECE6', rim: 'rgba(20,20,25,0.08)', gA: '#E8492F', gB: '#BF3219', far: '#F59A7C', ghost: 'rgba(20,20,25,0.16)' },
+      ember: { tileTop: '#F66A43', tileBottom: '#C7381F', rim: 'rgba(255,255,255,0.18)', gA: '#FFFFFF', gB: '#FFE4DA', far: '#2B0D06', ghost: 'rgba(255,255,255,0.38)' },
+      none:  { tileTop: 'transparent', tileBottom: 'transparent', rim: 'transparent', gA: '#F4623A', gB: '#D23B21', far: '#FFB59C', ghost: 'rgba(127,127,127,0.35)' },
+      mono:  { tileTop: 'transparent', tileBottom: 'transparent', rim: 'transparent', gA: '#16161A', gB: '#16161A', far: '#16161A', ghost: 'rgba(22,22,26,0.28)' }
+    };
+    const names = { grid: 'Farpane mark: six window panes forming the letter F', window: 'Farpane mark: a distant pane seen through a window', tunnel: 'Farpane mark: panes receding into the distance' };
+    return {
+      uid: this.uid,
+      size, px: size + 'px',
+      c: sets[tile] || sets.dark,
+      hasTile: tile !== 'none' && tile !== 'mono',
+      isGrid: concept === 'grid', isWindow: concept === 'window',
+      tunnelFull: concept === 'tunnel' && size > 48, tunnelSmall: concept === 'tunnel' && size <= 48,
+      op: tile === 'light' ? { a: 0.55, b: 0.78, c: 0.95, sa: 0.65, sb: 0.92 } : (tile === 'mono' ? { a: 0.4, b: 0.65, c: 0.88, sa: 0.5, sb: 0.82 } : { a: 0.38, b: 0.62, c: 0.86, sa: 0.5, sb: 0.8 }),
+      showGhosts: (this.props.ghosts ?? true) && size > 40,
+      label: names[concept] || names.grid
+    };
+  }
+}
+</script>
+</body>
+</html>

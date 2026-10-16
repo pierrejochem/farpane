@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Farpane Server
+GenericName=Remote Desktop Server
+Comment=Remote desktop server (VNC/RFB) with a dashboard UI
+Exec=farpane-server
+Icon=farpane-server
+Terminal=false
+Categories=Network;RemoteAccess;

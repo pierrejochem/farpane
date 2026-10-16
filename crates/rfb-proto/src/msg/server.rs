@@ -1,0 +1,239 @@
+//! Server-to-client messages (core set, RFB 3.8 section 7.6).
+//!
+//! `FramebufferUpdate` is split: this module parses the message header and
+//! each rectangle header. Finding the end of a rectangle payload is the job of
+//! the framers (milestone M2).
+
+use alloc::vec::Vec;
+
+use crate::{
+    ProtoError,
+    consts::{limits, server_msg},
+    types::Rect,
+    wire::Reader,
+};
+
+/// Header of one rectangle inside a `FramebufferUpdate`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RectHeader {
+    pub rect: Rect,
+    pub encoding: i32,
+}
+
+impl RectHeader {
+    /// Length on the wire.
+    pub const LEN: usize = 12;
+
+    /// # Errors
+    /// [`ProtoError::NeedMore`] on short input.
+    pub fn parse(buf: &[u8]) -> Result<Self, ProtoError> {
+        let mut r = Reader::new(buf);
+        Ok(Self {
+            rect: Rect {
+                x: r.u16()?,
+                y: r.u16()?,
+                width: r.u16()?,
+                height: r.u16()?,
+            },
+            encoding: r.i32()?,
+        })
+    }
+
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; Self::LEN] {
+        let mut b = [0u8; Self::LEN];
+        b[0..2].copy_from_slice(&self.rect.x.to_be_bytes());
+        b[2..4].copy_from_slice(&self.rect.y.to_be_bytes());
+        b[4..6].copy_from_slice(&self.rect.width.to_be_bytes());
+        b[6..8].copy_from_slice(&self.rect.height.to_be_bytes());
+        b[8..12].copy_from_slice(&self.encoding.to_be_bytes());
+        b
+    }
+}
+
+/// A server-to-client message. Rectangle headers and payloads follow
+/// [`ServerMessage::UpdateBegin`] and are read separately.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerMessage {
+    /// Header of a `FramebufferUpdate`: the number of rectangles that follow.
+    UpdateBegin {
+        rects: u16,
+    },
+    SetColourMapEntries {
+        first: u16,
+        colours: Vec<[u16; 3]>,
+    },
+    Bell,
+    /// Latin-1 text. Extended Clipboard (negative length) arrives in M3.
+    ServerCutText(Vec<u8>),
+}
+
+impl ServerMessage {
+    /// Parse one message from the start of `buf`; returns it with the number
+    /// of bytes consumed.
+    ///
+    /// # Errors
+    /// [`ProtoError::NeedMore`] on a partial message,
+    /// [`ProtoError::Malformed`] on an unknown message type,
+    /// [`ProtoError::LimitExceeded`] if the cut text is too long.
+    pub fn parse(buf: &[u8]) -> Result<(Self, usize), ProtoError> {
+        let mut r = Reader::new(buf);
+        let msg = match r.u8()? {
+            server_msg::FRAMEBUFFER_UPDATE => {
+                r.skip(1)?;
+                Self::UpdateBegin { rects: r.u16()? }
+            }
+            server_msg::SET_COLOUR_MAP_ENTRIES => {
+                r.skip(1)?;
+                let first = r.u16()?;
+                let n = r.u16()?;
+                let mut colours = Vec::with_capacity(usize::from(n));
+                for _ in 0..n {
+                    colours.push([r.u16()?, r.u16()?, r.u16()?]);
+                }
+                Self::SetColourMapEntries { first, colours }
+            }
+            server_msg::BELL => Self::Bell,
+            server_msg::SERVER_CUT_TEXT => {
+                r.skip(3)?;
+                let len = r.u32()?;
+                if len > limits::MAX_CUT_TEXT_LEN {
+                    return Err(ProtoError::LimitExceeded {
+                        field: "ServerCutText length",
+                        value: u64::from(len),
+                        limit: u64::from(limits::MAX_CUT_TEXT_LEN),
+                    });
+                }
+                Self::ServerCutText(r.take(len as usize)?.to_vec())
+            }
+            _ => {
+                return Err(ProtoError::Malformed {
+                    ctx: "server message type",
+                });
+            }
+        };
+        Ok((msg, r.position()))
+    }
+
+    /// Append the wire form to `out`.
+    ///
+    /// # Errors
+    /// [`ProtoError::LimitExceeded`] if the cut text or colour list is too
+    /// long to encode.
+    pub fn write(&self, out: &mut Vec<u8>) -> Result<(), ProtoError> {
+        match self {
+            Self::UpdateBegin { rects } => {
+                out.extend_from_slice(&[server_msg::FRAMEBUFFER_UPDATE, 0]);
+                out.extend_from_slice(&rects.to_be_bytes());
+            }
+            Self::SetColourMapEntries { first, colours } => {
+                let n = u16::try_from(colours.len()).map_err(|_| ProtoError::LimitExceeded {
+                    field: "SetColourMapEntries count",
+                    value: colours.len() as u64,
+                    limit: u64::from(u16::MAX),
+                })?;
+                out.extend_from_slice(&[server_msg::SET_COLOUR_MAP_ENTRIES, 0]);
+                out.extend_from_slice(&first.to_be_bytes());
+                out.extend_from_slice(&n.to_be_bytes());
+                for c in colours {
+                    for v in c {
+                        out.extend_from_slice(&v.to_be_bytes());
+                    }
+                }
+            }
+            Self::Bell => out.push(server_msg::BELL),
+            Self::ServerCutText(text) => {
+                let len = u32::try_from(text.len())
+                    .ok()
+                    .filter(|&n| n <= limits::MAX_CUT_TEXT_LEN)
+                    .ok_or(ProtoError::LimitExceeded {
+                        field: "ServerCutText length",
+                        value: text.len() as u64,
+                        limit: u64::from(limits::MAX_CUT_TEXT_LEN),
+                    })?;
+                out.extend_from_slice(&[server_msg::SERVER_CUT_TEXT, 0, 0, 0]);
+                out.extend_from_slice(&len.to_be_bytes());
+                out.extend_from_slice(text);
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec;
+
+    use super::*;
+
+    fn vectors() -> Vec<(ServerMessage, Vec<u8>)> {
+        vec![
+            (ServerMessage::UpdateBegin { rects: 3 }, vec![0, 0, 0, 3]),
+            (
+                ServerMessage::SetColourMapEntries {
+                    first: 1,
+                    colours: vec![[0xFFFF, 0, 0x0102]],
+                },
+                vec![1, 0, 0, 1, 0, 1, 0xFF, 0xFF, 0, 0, 1, 2],
+            ),
+            (ServerMessage::Bell, vec![2]),
+            (
+                ServerMessage::ServerCutText(b"ab".to_vec()),
+                vec![3, 0, 0, 0, 0, 0, 0, 2, b'a', b'b'],
+            ),
+        ]
+    }
+
+    #[test]
+    fn golden_and_round_trip() {
+        for (msg, bytes) in vectors() {
+            let mut out = Vec::new();
+            msg.write(&mut out).unwrap();
+            assert_eq!(out, bytes, "serialise {msg:?}");
+            assert_eq!(ServerMessage::parse(&bytes), Ok((msg, bytes.len())));
+        }
+    }
+
+    #[test]
+    fn split_input_needs_more_until_complete() {
+        for (msg, bytes) in vectors() {
+            for cut in 0..bytes.len() {
+                assert!(
+                    matches!(
+                        ServerMessage::parse(&bytes[..cut]),
+                        Err(ProtoError::NeedMore(n)) if n > 0
+                    ),
+                    "{msg:?} cut at {cut}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_type_is_fatal() {
+        assert!(matches!(
+            ServerMessage::parse(&[99]),
+            Err(ProtoError::Malformed { .. })
+        ));
+    }
+
+    #[test]
+    fn rect_header_golden_and_round_trip() {
+        let h = RectHeader {
+            rect: Rect {
+                x: 1,
+                y: 2,
+                width: 3,
+                height: 4,
+            },
+            encoding: -223,
+        };
+        let bytes = [0, 1, 0, 2, 0, 3, 0, 4, 0xFF, 0xFF, 0xFF, 0x21];
+        assert_eq!(h.to_bytes(), bytes);
+        assert_eq!(RectHeader::parse(&bytes), Ok(h));
+        assert_eq!(
+            RectHeader::parse(&bytes[..11]),
+            Err(ProtoError::NeedMore(1))
+        );
+    }
+}

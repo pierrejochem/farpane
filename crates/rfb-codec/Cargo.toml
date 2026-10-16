@@ -1,0 +1,15 @@
+[package]
+name = "rfb-codec"
+description = "RFB pixel encoders and decoders (Raw, CopyRect, Hextile, ZRLE, Tight, H.264)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-proto.workspace = true
+
+[lints]
+workspace = true

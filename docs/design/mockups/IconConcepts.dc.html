@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane icon concepts</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1000px; box-sizing: border-box; padding: 64px 72px; background: #F4F2EE; color: #16161A; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; gap: 40px">
+  <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 24px">
+    <div>
+      <div style="font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: #6B6660">Farpane · brand icon</div>
+      <h1 style="margin: 6px 0 0; font-family: Sora, Inter, sans-serif; font-size: 40px; font-weight: 700; letter-spacing: -.02em">Three concepts</h1>
+    </div>
+    <p style="margin: 0; max-width: 520px; font-size: 15px; line-height: 1.5; color: #4A4640">Each mark plays on the name: a <strong>pane</strong> that is <strong>far</strong> away. Shown as an app tile, then at 64, 32 and 16 px on dark and light.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; flex: 1">
+    <sc-for list="{{concepts}}" as="k" hint-placeholder-count="3">
+      <section style="background: #FFFFFF; border-radius: 24px; padding: 28px; display: flex; flex-direction: column; gap: 20px; box-shadow: 0 1px 2px rgba(20,20,25,.06), 0 16px 40px -24px rgba(20,20,25,.25); outline: {{k.outline}}; outline-offset: 4px">
+        <div style="display: flex; align-items: center; justify-content: space-between">
+          <span style="font-family: Sora, Inter, sans-serif; font-size: 13px; font-weight: 600; color: #6B6660">{{k.num}}</span>
+          <sc-if value="{{k.recommended}}" hint-placeholder-val="{{false}}"><span style="padding: 4px 10px; border-radius: 99px; background: #FDE7E1; color: #A8301A; font-size: 12px; font-weight: 600">Chosen</span></sc-if>
+        </div>
+        <div style="display: flex; justify-content: center">
+          <dc-import name="Mark" concept="{{k.id}}" tile="dark" size="240" hint-size="240px,240px"></dc-import>
+        </div>
+        <div>
+          <h2 style="margin: 0; font-family: Sora, Inter, sans-serif; font-size: 22px; font-weight: 600; letter-spacing: -.01em">{{k.name}}</h2>
+          <p style="margin: 6px 0 0; font-size: 14px; line-height: 1.5; color: #4A4640">{{k.idea}}</p>
+        </div>
+        <div style="margin-top: auto; display: flex; flex-direction: column; gap: 10px">
+          <div style="display: flex; align-items: center; gap: 18px; padding: 14px 16px; border-radius: 14px; background: #0E0E11">
+            <dc-import name="Mark" concept="{{k.id}}" tile="dark" size="64" hint-size="64px,64px"></dc-import>
+            <dc-import name="Mark" concept="{{k.id}}" tile="dark" size="32" hint-size="32px,32px"></dc-import>
+            <dc-import name="Mark" concept="{{k.id}}" tile="dark" size="16" hint-size="16px,16px"></dc-import>
+            <span style="margin-left: auto; font-size: 12px; color: rgba(255,255,255,.6)">{{k.small}}</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 18px; padding: 14px 16px; border-radius: 14px; background: #ECE8E2">
+            <dc-import name="Mark" concept="{{k.id}}" tile="light" size="64" hint-size="64px,64px"></dc-import>
+            <dc-import name="Mark" concept="{{k.id}}" tile="light" size="32" hint-size="32px,32px"></dc-import>
+            <dc-import name="Mark" concept="{{k.id}}" tile="light" size="16" hint-size="16px,16px"></dc-import>
+          </div>
+        </div>
+      </section>
+    </sc-for>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      concepts: [
+        { id: 'grid', num: '01', name: 'Pane monogram', recommended: false, outline: 'none',
+          idea: 'A 3×3 window of panes. Six solid panes spell an F; the top-right one, the far pane, is lit. The three missing panes stay as ghosts, so it reads as both a window and a letter.',
+          small: 'Holds up at 16 px' },
+        { id: 'window', num: '02', name: 'Window to far', recommended: false, outline: 'none',
+          idea: 'A thick window frame with a small pane in the distance behind it. Perspective lines link the two, like looking down a corridor to a remote screen.',
+          small: 'Lines drop out below 40 px' },
+        { id: 'tunnel', num: '03', name: 'Receding panes', recommended: true, outline: '2px solid #E8492F',
+          idea: 'Four frames shrinking towards the top right, ending in one solid pane: a connection travelling to a distant screen.',
+          small: 'Simplified version at 48 px and below' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

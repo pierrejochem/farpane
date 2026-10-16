@@ -1,0 +1,57 @@
+# nfpm config for the server. Run from the repo root:
+#   VERSION=0.3.0 NFPM_ARCH=amd64 nfpm package -f packaging/linux/nfpm-farpane-server.yaml -p deb -t dist/
+name: farpane-server
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: net
+priority: optional
+maintainer: "Farpane maintainers <maintainers@example.org>"   # TODO: set before first release
+description: |
+  Remote desktop server for the VNC/RFB protocol, written in Rust,
+  with a dashboard UI for clients, security settings and live statistics.
+vendor: Farpane
+homepage: https://github.com/OWNER/REPO                       # TODO
+license: MIT OR Apache-2.0                                    # TODO: match Cargo.toml
+
+contents:
+  - src: target/release/farpane-server
+    dst: /usr/bin/farpane-server
+    file_info: { mode: 0755 }
+  - src: packaging/linux/farpane-server.desktop
+    dst: /usr/share/applications/farpane-server.desktop
+  - src: packaging/icons/png/farpane-server-16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-24.png
+    dst: /usr/share/icons/hicolor/24x24/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-64.png
+    dst: /usr/share/icons/hicolor/64x64/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/farpane-server.png
+  - src: packaging/icons/png/farpane-server-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/farpane-server.png
+  - src: packaging/icons/svg/farpane-server.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/farpane-server.svg
+  # Optional headless mode in the user's session (screen sharing needs the
+  # session's Wayland/X11 display, so this is a *user* unit, not a system one):
+  #   systemctl --user enable --now farpane-server
+  - src: packaging/linux/farpane-server.service
+    dst: /usr/lib/systemd/user/farpane-server.service
+
+overrides:
+  deb:
+    depends: ["libc6 (>= 2.34)", "libpipewire-0.3-0"]
+    recommends: ["xdg-desktop-portal", "libxkbcommon0", "libwayland-client0", "libegl1", "libvulkan1"]
+  rpm:
+    depends: ["glibc >= 2.34", "pipewire-libs"]
+    recommends: ["xdg-desktop-portal", "libxkbcommon", "libwayland-client", "mesa-libEGL", "vulkan-loader"]
+  archlinux:
+    depends: ["glibc", "libpipewire", "xdg-desktop-portal", "libxkbcommon", "wayland", "libglvnd", "vulkan-icd-loader"]

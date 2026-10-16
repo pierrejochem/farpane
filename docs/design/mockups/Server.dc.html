@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane Server – Dashboard</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050505}
+.theme-glass{--bg:#050505;--text:#f4f4f5;--muted:rgba(255,255,255,.62);--faint:rgba(255,255,255,.5);--line:rgba(255,255,255,.09);--inset:rgba(255,255,255,.05);--inset-hi:rgba(255,255,255,.12);--sel:rgba(255,255,255,.14);--card-bg:linear-gradient(135deg,rgba(255,255,255,.07),transparent 42%),rgba(34,34,37,.5);--card-solid:rgba(26,26,29,.92);--card-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 18px 40px -18px rgba(0,0,0,.8);--blur:blur(22px) saturate(130%);--radius:18px;--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(232,73,47,.8),inset 0 1px 0 rgba(255,255,255,.25);--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--red:#f87171;--violet:#a78bfa;--switch-off:rgba(255,255,255,.14);--grid:rgba(255,255,255,.06);--series2:#38bdf8;--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.theme-slate{--bg:#0b1015;--text:#e6edf3;--muted:#9aa7b5;--faint:#8593a3;--line:#1f2933;--inset:#16202b;--inset-hi:#1c2835;--sel:#24313f;--card-bg:#111821;--card-solid:#0f151c;--card-shadow:none;--blur:none;--radius:14px;--accent:#38bdf8;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:#38bdf8;--btn-fg:#06202e;--btn-shadow:none;--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--red:#f87171;--violet:#a78bfa;--switch-off:#2a3644;--grid:#1f2933;--series2:#a78bfa;--font:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif}
+.theme-light{--bg:#f3f4f6;--text:#14171c;--muted:#525b68;--faint:#69727f;--line:#e2e5ea;--inset:#f2f4f7;--inset-hi:#e8ebf0;--sel:#ffffff;--card-bg:#ffffff;--card-solid:#ffffff;--card-shadow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -12px rgba(16,24,40,.14);--blur:none;--radius:16px;--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(201,60,37,.6);--green:#0f7b55;--blue:#0b69a3;--amber:#9a5b05;--red:#be3a32;--violet:#6d4fd6;--switch-off:#d3d8df;--grid:#eceef2;--series2:#0b69a3;--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.scene{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.45}
+.theme-glass.scene{background:#050505 url(/_blob/5cc1bcf3849c5d846f68d22d68cbb4f3) center/cover no-repeat}
+.card{background:var(--card-bg);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--card-shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.card-solid{background:var(--card-solid);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--card-shadow)}
+.theme-glass .card-solid{box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 24px 60px -12px rgba(0,0,0,.9);-webkit-backdrop-filter:blur(28px);backdrop-filter:blur(28px)}
+.btn-primary{background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow);border:0;cursor:pointer}
+.btn-primary:hover{filter:brightness(1.08)}
+.inset{background:var(--inset);border:1px solid var(--line);color:var(--text);cursor:pointer}
+.inset:hover{background:var(--inset-hi)}
+.seg{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--inset);border:1px solid var(--line)}
+.seg button{padding:5px 12px;border:0;border-radius:7px;background:none;color:var(--muted);font:500 12px var(--font);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--sel);color:var(--text)}
+.theme-light .seg button[aria-pressed="true"]{box-shadow:0 1px 2px rgba(16,24,40,.14)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--tone);background:color-mix(in srgb,var(--tone) 13%,transparent);border:1px solid color-mix(in srgb,var(--tone) 35%,transparent)}
+.chip{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;color:var(--tone);background:color-mix(in srgb,var(--tone) 14%,transparent);border:1px solid color-mix(in srgb,var(--tone) 30%,transparent)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.t-green{--tone:var(--green)}.t-blue{--tone:var(--blue)}.t-amber{--tone:var(--amber)}.t-red{--tone:var(--red)}.t-violet{--tone:var(--violet)}.t-grey{--tone:var(--muted)}.t-accent{--tone:var(--accent-text)}
+.muted{color:var(--muted)}.faint{color:var(--faint)}
+.mono{font-family:ui-monospace,'SF Mono',Menlo,Consolas,monospace}
+.eyebrow{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.nav-a{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;border:1px solid transparent;color:var(--muted);text-decoration:none;font-weight:500}
+.nav-a:hover{background:var(--inset);color:var(--text)}
+.nav-a.active{background:var(--sel);border-color:var(--line);color:var(--text)}
+.theme-glass .nav-a.active{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
+.theme-light .nav-a.active{background:var(--inset)}
+.nav-a.active svg{color:var(--accent-hi)}
+.brand-mark{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow)}
+.switch{flex:none;width:40px;height:24px;padding:0;border-radius:99px;border:1px solid var(--line);background:var(--switch-off);position:relative;cursor:pointer}
+.switch[aria-checked="true"]{background:var(--accent)}
+.switch span{position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+.switch[aria-checked="true"] span{left:18px}
+.th{padding:10px;text-align:left;font-size:10.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.td{padding:13px 10px;border-top:1px solid var(--line);white-space:nowrap}
+.bar{height:6px;border-radius:99px;background:var(--inset);overflow:hidden}
+.bar span{display:block;height:100%;border-radius:99px;background:var(--blue)}
+.s-out{stroke:var(--accent-hi)}.f-out{stop-color:var(--accent-hi)}.s-in{stroke:var(--series2)}.f-in{stop-color:var(--series2)}.s-grid{stroke:var(--grid)}
+.lg-out{background:var(--accent-hi)}.lg-in{background:var(--series2)}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+a{color:var(--accent-text)}
+input::placeholder{color:var(--faint)}
+:focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px}
+
+.acc-ember{--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(232,73,47,.8),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-cyan{--accent:#0ea5e9;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:linear-gradient(180deg,#38bdf8,#0ea5e9);--btn-fg:#04202c;--btn-shadow:0 8px 20px -8px rgba(14,165,233,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-violet{--accent:#8b5cf6;--accent-hi:#a78bfa;--accent-text:#c4b5fd;--btn-bg:linear-gradient(180deg,#8b5cf6,#7c3aed);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(139,92,246,.75),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-green{--accent:#10b981;--accent-hi:#34d399;--accent-text:#6ee7b7;--btn-bg:linear-gradient(180deg,#34d399,#10b981);--btn-fg:#022c22;--btn-shadow:0 8px 20px -8px rgba(16,185,129,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-amber{--accent:#f59e0b;--accent-hi:#fbbf24;--accent-text:#fcd34d;--btn-bg:linear-gradient(180deg,#fbbf24,#f59e0b);--btn-fg:#2a1a02;--btn-shadow:0 8px 20px -8px rgba(245,158,11,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.theme-light.acc-ember{--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(201,60,37,.6)}
+.theme-light.acc-cyan{--accent:#0284c7;--accent-hi:#0284c7;--accent-text:#075985;--btn-bg:linear-gradient(180deg,#0284c7,#0369a1);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(3,105,161,.6)}
+.theme-light.acc-violet{--accent:#7c3aed;--accent-hi:#7c3aed;--accent-text:#6d28d9;--btn-bg:linear-gradient(180deg,#7c3aed,#6d28d9);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(109,40,217,.6)}
+.theme-light.acc-green{--accent:#059669;--accent-hi:#059669;--accent-text:#047857;--btn-bg:linear-gradient(180deg,#059669,#047857);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(4,120,87,.6)}
+.theme-light.acc-amber{--accent:#d97706;--accent-hi:#d97706;--accent-text:#92400e;--btn-bg:linear-gradient(180deg,#f59e0b,#d97706);--btn-fg:#1f1300;--btn-shadow:0 6px 16px -8px rgba(180,83,9,.55)}
+.reduce-tr .card,.reduce-tr .card-solid,.reduce-tr .pill{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.reduce-tr.theme-glass .card{background:#1b1b1e}
+.reduce-tr.theme-glass .card-solid{background:#1b1b1e}
+.reduce-tr.theme-glass{--pill:#1b1b1e}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{transition:none!important;animation:none!important}
+</style>
+</helmet>
+<div class="theme-{{theme}} {{prefCls}} scene" style="min-height: 1180px">
+<div style="zoom: {{zoom}}; display: flex; flex-wrap: wrap; gap: 18px; max-width: 1320px; margin: 0 auto; padding: 20px; align-items: flex-start; box-sizing: border-box">
+
+  <nav aria-label="Main" class="card" style="flex: 1 1 250px; max-width: 250px; min-height: 1140px; box-sizing: border-box; padding: 22px 14px 14px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 0 8px 22px">
+      <dc-import name="Mark" concept="tunnel" tile="ember" size="38" hint-size="38px,38px"></dc-import>
+      <div><div style="font-weight: 600; font-size: 15px">Farpane Server</div><div class="muted" style="font-size: 12px">build-01</div></div>
+    </div>
+    <a href="#overview" class="nav-a active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"></rect><rect x="14" y="3" width="7" height="5" rx="1.5"></rect><rect x="14" y="12" width="7" height="9" rx="1.5"></rect><rect x="3" y="16" width="7" height="5" rx="1.5"></rect></svg>Overview<span class="badge t-accent" style="margin-left: auto; font-size: 10.5px; padding: 1px 8px">Live</span></a>
+    <a href="#clients" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18.5 20a6.5 6.5 0 0 0-3-5.5"></path></svg>Clients<span style="margin-left: auto; font-size: 12px">3</span></a>
+    <a href="#security" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"></path></svg>Security &amp; keys</a>
+    <a href="#displays" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="2" y="4" width="13" height="10" rx="1.5"></rect><rect x="17" y="7" width="5" height="10" rx="1"></rect><path d="M6 20h5"></path></svg>Displays</a>
+    <a href="#log" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01"></path></svg>Event log</a>
+    <a href="Appearance.dc.html" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"></path></svg>Appearance</a>
+    <div class="eyebrow" style="padding: 14px 10px 8px">Listeners</div>
+    <div style="display: flex; justify-content: space-between; padding: 6px 12px; font-size: 12.5px"><span class="muted">RFB</span><span class="mono">0.0.0.0:5900</span></div>
+    <div style="display: flex; justify-content: space-between; padding: 6px 12px; font-size: 12.5px"><span class="muted">WebSocket</span><span class="mono">0.0.0.0:5800</span></div>
+    <div style="margin-top: auto; padding: 14px 8px 4px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 12px">
+      <div style="width: 32px; height: 32px; border-radius: 9px; background: #7c5cff; color: #fff; display: grid; place-items: center; font-size: 11.5px; font-weight: 700">PJ</div>
+      <div><div style="font-weight: 600; font-size: 13.5px">Pierre</div><div class="muted" style="font-size: 11.5px">Session owner</div></div>
+    </div>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+    <div class="card" style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 16px">
+      <label for="srch" class="vh">Search clients and events</label>
+      <div class="inset faint" style="flex: 1 1 220px; max-width: 320px; display: flex; align-items: center; gap: 10px; padding: 0 12px; height: 40px; border-radius: 10px; cursor: text">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+        <input id="srch" type="search" placeholder="Search clients and events" style="flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: 13px var(--font)">
+      </div>
+      <div style="margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+        <span class="badge t-green"><span class="dot"></span>Sharing</span>
+        <div role="group" aria-label="Theme" class="seg">
+          <sc-for list="{{themeBtns}}" as="b" hint-placeholder-count="3">
+            <button type="button" aria-pressed="{{b.on}}" onClick="{{b.pick}}">{{b.label}}</button>
+          </sc-for>
+        </div>
+        <div role="group" aria-label="Time range" class="seg">
+          <button type="button" aria-pressed="false">1 m</button>
+          <button type="button" aria-pressed="true">5 m</button>
+          <button type="button" aria-pressed="false">1 h</button>
+        </div>
+        <button type="button" class="btn-primary" style="height: 36px; padding: 0 16px; border-radius: 10px; font: 600 13px var(--font)">Pause sharing</button>
+      </div>
+    </div>
+
+    <section aria-label="Overview" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px">
+      <sc-for list="{{stats}}" as="s" hint-placeholder-count="4">
+        <div class="card" style="padding: 18px 20px">
+          <div style="display: flex; align-items: center; justify-content: space-between">
+            <span class="muted" style="font-size: 12.5px">{{s.label}}</span>
+            <span class="chip {{s.tone}}"><span class="dot" style="width: 8px; height: 8px"></span></span>
+          </div>
+          <div style="margin: 10px 0 12px; font-size: 26px; font-weight: 600; letter-spacing: -.02em">{{s.value}}<span class="muted" style="font-size: 13px; font-weight: 500; margin-left: 6px">{{s.unit}}</span></div>
+          <div style="display: flex; align-items: center; gap: 9px; flex-wrap: wrap">
+            <span class="badge {{s.tone}}">{{s.delta}}</span>
+            <span class="faint" style="font-size: 12px">{{s.foot}}</span>
+          </div>
+        </div>
+      </sc-for>
+    </section>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start">
+      <section class="card" aria-labelledby="bw-h" style="flex: 2 1 520px; min-width: 0; padding: 22px 24px 18px">
+        <div style="display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px">
+          <div>
+            <h2 id="bw-h" style="margin: 0; font-size: 16px; font-weight: 600; letter-spacing: -.01em">Traffic</h2>
+            <p class="muted" style="margin: 4px 0 0; font-size: 12.5px">Outgoing frames vs. incoming input, Mbit/s</p>
+          </div>
+          <div class="muted" style="display: flex; gap: 16px; font-size: 12.5px">
+            <span><span class="lg-out" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px"></span>Outgoing</span>
+            <span><span class="lg-in" style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px"></span>Incoming</span>
+          </div>
+        </div>
+        <svg viewBox="0 0 1000 260" width="100%" height="230" preserveAspectRatio="none" role="img" aria-label="Over the last five minutes outgoing traffic ranged from 12 to 31 megabits per second, peaking at 31; incoming input stayed below 2">
+          <defs>
+            <linearGradient id="fo" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="f-out" stop-opacity="0.42"></stop><stop offset="1" class="f-out" stop-opacity="0.03"></stop></linearGradient>
+            <linearGradient id="fi" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="f-in" stop-opacity="0.35"></stop><stop offset="1" class="f-in" stop-opacity="0.02"></stop></linearGradient>
+          </defs>
+          <path class="s-grid" d="M0 65 H1000 M0 130 H1000 M0 195 H1000" stroke-width="1" vector-effect="non-scaling-stroke"></path>
+          <path d="M0 170 C60 160 90 150 125 140 S200 128 250 110 S330 40 375 46 S450 100 500 112 S580 104 625 96 S700 80 750 86 S830 104 875 98 S950 84 1000 88 L1000 260 L0 260 Z" fill="url(#fo)"></path>
+          <path class="s-out" d="M0 170 C60 160 90 150 125 140 S200 128 250 110 S330 40 375 46 S450 100 500 112 S580 104 625 96 S700 80 750 86 S830 104 875 98 S950 84 1000 88" fill="none" stroke-width="2.5" vector-effect="non-scaling-stroke"></path>
+          <path d="M0 238 C80 236 140 232 200 234 S320 228 380 224 S500 232 560 230 S700 222 760 226 S900 230 1000 228 L1000 260 L0 260 Z" fill="url(#fi)"></path>
+          <path class="s-in" d="M0 238 C80 236 140 232 200 234 S320 228 380 224 S500 232 560 230 S700 222 760 226 S900 230 1000 228" fill="none" stroke-width="2.5" stroke-dasharray="6 4" vector-effect="non-scaling-stroke"></path>
+        </svg>
+        <div class="faint" style="position: relative; height: 26px; font-size: 11px">
+          <span style="position: absolute; left: 0">−5 m</span><span style="position: absolute; left: 25%">−4 m</span><span style="position: absolute; left: 50%">−3 m</span><span style="position: absolute; left: 75%">−1 m</span><span style="position: absolute; right: 0">now</span>
+        </div>
+        <div style="height: 1px; background: var(--line); margin: 6px 0 14px"></div>
+        <div class="muted" style="display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 12.5px">
+          <span>Peak <strong style="color: var(--text); font-weight: 600">31.2 Mbit/s</strong></span>
+          <span>Average <strong style="color: var(--text); font-weight: 600">18.4 Mbit/s</strong></span>
+          <span>Frames sent <strong style="color: var(--text); font-weight: 600">16,940</strong></span>
+          <span style="margin-left: auto">Encoder <strong style="color: var(--green); font-weight: 600">healthy</strong></span>
+        </div>
+      </section>
+
+      <div style="flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+        <sc-if value="{{pending}}" hint-placeholder-val="{{true}}">
+          <section class="card-solid" aria-labelledby="req-h" style="padding: 20px; border-left: 3px solid var(--accent-hi)">
+            <div class="eyebrow" style="color: var(--accent-text)">Approval needed</div>
+            <h2 id="req-h" style="margin: 4px 0 0; font-size: 16px; font-weight: 600">Connection request</h2>
+            <p class="muted" style="margin: 8px 0 0; font-size: 13px"><strong style="color: var(--text)">anna</strong> from <span class="mono">192.0.2.44</span> via RA2-256 wants to view and control this screen.</p>
+            <div style="display: flex; gap: 8px; margin-top: 16px">
+              <button type="button" onClick="{{close}}" class="btn-primary" style="flex: 1; height: 40px; border-radius: 10px; font: 600 13px var(--font)">Allow</button>
+              <button type="button" onClick="{{close}}" class="inset" style="flex: 1; height: 40px; border-radius: 10px; font: 600 13px var(--font)">View only</button>
+              <button type="button" onClick="{{close}}" class="inset" style="flex: 1; height: 40px; border-radius: 10px; font: 600 13px var(--font)">Deny</button>
+            </div>
+          </section>
+        </sc-if>
+
+        <section class="card" aria-labelledby="sec-h" style="padding: 22px 24px">
+          <h2 id="sec-h" style="margin: 0; font-size: 16px; font-weight: 600">Security</h2>
+          <p class="muted" style="margin: 4px 0 0; font-size: 12.5px">Offered sign-in methods</p>
+          <div style="display: grid; gap: 16px; margin-top: 18px">
+            <sc-for list="{{secTypes}}" as="s" hint-placeholder-count="4">
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px">
+                <div><div style="font-weight: 600; font-size: 13.5px">{{s.name}}</div><div class="{{s.noteClass}}" style="font-size: 11.5px; color: var(--tone, var(--muted))">{{s.note}}</div></div>
+                <button type="button" class="switch" role="switch" aria-checked="{{s.on}}" aria-label="{{s.name}}" onClick="{{s.toggle}}"><span></span></button>
+              </div>
+            </sc-for>
+          </div>
+          <div style="display: grid; gap: 8px; margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--line); font-size: 12px">
+            <div style="display: flex; justify-content: space-between; gap: 12px"><span class="muted">Certificate</span><span>CN=build-01 · until 2027-04-30</span></div>
+            <div style="display: flex; justify-content: space-between; gap: 12px"><span class="muted">Allowed networks</span><span class="mono">10.0.0.0/8, 192.0.2.0/24</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <section class="card" aria-labelledby="cl-h" style="padding: 22px 24px">
+      <div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-bottom: 10px">
+        <div><h2 id="cl-h" style="margin: 0; font-size: 16px; font-weight: 600">Connected clients</h2><p class="muted" style="margin: 4px 0 0; font-size: 12.5px">Shared session, 3 viewers</p></div>
+        <button type="button" class="inset" style="align-self: flex-start; padding: 5px 11px; border-radius: 10px; font: 600 12px var(--font)">Disconnect all</button>
+      </div>
+      <div style="overflow-x: auto; margin: 0 -8px">
+        <table style="width: 100%; min-width: 820px; border-collapse: collapse">
+          <thead><tr>
+            <th scope="col" class="th">Client</th>
+            <th scope="col" class="th">Security</th>
+            <th scope="col" class="th">Encoding</th>
+            <th scope="col" class="th">Bitrate</th>
+            <th scope="col" class="th">Round trip</th>
+            <th scope="col" class="th">Access</th>
+            <th scope="col" class="th"><span class="vh">Actions</span></th>
+          </tr></thead>
+          <tbody>
+            <sc-for list="{{clients}}" as="c" hint-placeholder-count="3">
+              <tr>
+                <td class="td"><div style="display: flex; align-items: center; gap: 12px"><div style="width: 32px; height: 32px; border-radius: 9px; background: {{c.avatar}}; color: #fff; display: grid; place-items: center; font-size: 11.5px; font-weight: 700">{{c.ini}}</div><div><div style="font-weight: 600; font-size: 13.5px">{{c.user}}</div><div class="faint" style="font-size: 11.5px">{{c.addr}} · {{c.app}}</div></div></div></td>
+                <td class="td"><span class="badge t-green">{{c.sec}}</span></td>
+                <td class="td mono" style="font-size: 12.5px">{{c.enc}}</td>
+                <td class="td" style="width: 160px"><div style="font-size: 12.5px; margin-bottom: 6px">{{c.rate}}</div><div class="bar"><span style="width: {{c.pct}}"></span></div></td>
+                <td class="td" style="font-size: 13px">{{c.rtt}}</td>
+                <td class="td"><span class="badge {{c.accTone}}"><span class="dot"></span>{{c.access}}</span></td>
+                <td class="td" style="text-align: right"><button type="button" class="inset" style="padding: 5px 11px; border-radius: 10px; font: 600 12px var(--font)">Disconnect</button></td>
+              </tr>
+            </sc-for>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="log-h" style="padding: 22px 24px">
+      <div style="display: flex; justify-content: space-between; gap: 12px; margin-bottom: 18px">
+        <h2 id="log-h" style="margin: 0; font-size: 16px; font-weight: 600">Event log</h2>
+        <button type="button" class="inset" style="padding: 5px 11px; border-radius: 10px; font: 600 12px var(--font)">Export JSON</button>
+      </div>
+      <ul style="list-style: none; margin: 0; padding: 0; display: grid; gap: 16px">
+        <sc-for list="{{log}}" as="e" hint-placeholder-count="5">
+          <li style="display: flex; gap: 12px">
+            <span class="{{e.tone}}" style="flex: none; width: 24px; height: 24px; margin-top: 1px; border-radius: 7px; display: grid; place-items: center; background: var(--inset); border: 1px solid var(--line); color: var(--tone)"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="{{e.icon}}"></path></svg></span>
+            <div style="min-width: 0"><div style="font-weight: 500; font-size: 13px">{{e.msg}}</div><div class="faint" style="font-size: 11.5px">{{e.t}} · {{e.kind}}</div></div>
+          </li>
+        </sc-for>
+      </ul>
+    </section>
+  </main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["glass","slate","light","system"],"default":"glass"},"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { theme: null, sys: 'dark', pending: true, sec: { x509: true, ra2: true, tls: false, vnc: false } };
+  }
+  componentDidMount() {
+    this.loadPrefs();
+    try { this.setState({ osTr: window.matchMedia('(prefers-reduced-transparency: reduce)').matches, osMo: window.matchMedia('(prefers-reduced-motion: reduce)').matches }); } catch (e) {}
+    this.onStore = (e) => { if (e.key && e.key.indexOf('farpane-') === 0) this.loadPrefs(); };
+    window.addEventListener('storage', this.onStore);
+    try {
+      this.mq = window.matchMedia('(prefers-color-scheme: light)');
+      this.onMq = () => this.setState({ sys: this.mq.matches ? 'light' : 'dark' });
+      this.onMq(); this.mq.addEventListener('change', this.onMq);
+    } catch (e) {}
+  }
+  loadPrefs() {
+    const g = (k) => { try { return window.localStorage.getItem(k); } catch (e) { return null; } };
+    this.setState({ theme: g('farpane-theme') || this.state.theme, accent: g('farpane-accent') || 'default', reduceTr: g('farpane-reduce-tr'), motion: g('farpane-reduce-motion'), scale: g('farpane-scale') || '1' });
+  }
+  setPref(k, v) {
+    try { if (v == null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, v); } catch (e) {}
+    this.loadPrefs();
+  }
+  prefCls() {
+    const s = this.state, c = [];
+    if (s.accent && s.accent !== 'default') c.push('acc-' + s.accent);
+    if (s.reduceTr === 'on' || (s.reduceTr == null && s.osTr)) c.push('reduce-tr');
+    if (s.motion === 'on' || (s.motion == null && s.osMo)) c.push('reduce-motion');
+    return c.join(' ');
+  }
+  componentWillUnmount() {
+    window.removeEventListener('storage', this.onStore);
+    try { this.mq.removeEventListener('change', this.onMq); } catch (e) {}
+  }
+  pickTheme(t) { this.setState({ theme: t }); try { window.localStorage.setItem('farpane-theme', t); } catch (e) {} }
+  renderVals() {
+    const pref = this.state.theme ?? this.props.theme ?? 'glass';
+    const theme = pref === 'system' ? (this.state.sys === 'light' ? 'light' : 'glass') : pref;
+    const stat = (label, value, unit, delta, foot, tone) => ({ label, value, unit, delta, foot, tone });
+    const sec = this.state.sec;
+    const sw = (k, name, note, noteClass) => ({ name, note, noteClass, on: sec[k], toggle: () => this.setState({ sec: { ...sec, [k]: !sec[k] } }) });
+    const OK = 'M5 12l5 5 9-10', BAD = 'M7 7l10 10M17 7L7 17', DOT = 'M12 12h.01';
+    const zoom = this.state.scale || '1';
+    return {
+      theme,
+      prefCls: this.prefCls(),
+      zoom,
+      minH940: Math.round(940 / parseFloat(zoom)) + 'px',
+      themeBtns: [['glass', 'Glass'], ['slate', 'Slate'], ['light', 'Light']].map(([id, label]) => ({ label, on: pref === id, pick: () => this.pickTheme(id) })),
+      pending: this.state.pending,
+      close: () => this.setState({ pending: false }),
+      stats: [
+        stat('Connected clients', '3', 'of 10', '+1', 'since 09:00', 't-blue'),
+        stat('Outgoing traffic', '21.6', 'Mbit/s', '−8 %', 'vs. 5 min ago', 't-green'),
+        stat('Update latency', '18', 'ms', 'p95 31 ms', 'capture → send', 't-violet'),
+        stat('Failed sign-ins', '2', 'today', 'watch', '1 address', 't-amber')
+      ],
+      secTypes: [
+        sw('x509', 'VeNCrypt · X.509 + password', 'TLS with certificate · recommended', 't-grey'),
+        sw('ra2', 'RA2-256 (RSA-AES)', 'Encrypted · TigerVNC 1.13+, RealVNC', 't-grey'),
+        sw('tls', 'Anonymous TLS', 'Open to man-in-the-middle', 't-amber'),
+        sw('vnc', 'VNC password (legacy)', 'Unencrypted · 8-character limit', 't-red')
+      ],
+      clients: [
+        { user: 'pierre', ini: 'PJ', avatar: '#7c5cff', addr: '10.0.4.12', app: 'Farpane Viewer 0.3', sec: 'X.509', enc: 'ZRLE', rate: '14.2 Mbit/s', pct: '72%', rtt: '3 ms', access: 'Control', accTone: 't-green' },
+        { user: 'ci-bot', ini: 'CI', avatar: '#0e7490', addr: '10.0.7.30', app: 'noVNC 1.6', sec: 'X.509', enc: 'Tight · q6', rate: '5.1 Mbit/s', pct: '26%', rtt: '9 ms', access: 'View only', accTone: 't-blue' },
+        { user: 'anna', ini: 'AK', avatar: '#b4532a', addr: '192.0.2.18', app: 'TigerVNC 1.15', sec: 'RA2-256', enc: 'Tight · q8', rate: '2.3 Mbit/s', pct: '12%', rtt: '41 ms', access: 'Control', accTone: 't-green' }
+      ],
+      log: [
+        { t: '09:14:02', kind: 'resize', tone: 't-violet', icon: DOT, msg: 'pierre set layout 3840×2160 with 2 screens' },
+        { t: '09:12:47', kind: 'connect', tone: 't-green', icon: OK, msg: 'anna connected from 192.0.2.18 via RA2-256' },
+        { t: '09:10:15', kind: 'auth failed', tone: 't-red', icon: BAD, msg: '198.51.100.23 entered a wrong password (2 of 5)' },
+        { t: '09:05:31', kind: 'connect', tone: 't-green', icon: OK, msg: 'ci-bot connected over WebSocket, view only' },
+        { t: '09:01:09', kind: 'start', tone: 't-green', icon: OK, msg: 'Server started · PipeWire portal capture, 1 display' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

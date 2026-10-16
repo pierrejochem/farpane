@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Farpane Viewer</string>
+  <key>CFBundleDisplayName</key><string>Farpane Viewer</string>
+  <key>CFBundleIdentifier</key><string>org.example.farpane.viewer</string>
+  <key>CFBundleExecutable</key><string>farpane-viewer</string>
+  <key>CFBundleIconFile</key><string>farpane-viewer</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <key>CFBundleURLTypes</key>
+  <array><dict>
+    <key>CFBundleURLName</key><string>VNC URL</string>
+    <key>CFBundleURLSchemes</key><array><string>vnc</string></array>
+  </dict></array>
+</dict>
+</plist>

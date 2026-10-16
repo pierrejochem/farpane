@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rfb-proto",
+    "crates/rfb-codec",
+    "crates/rfb-security",
+    "crates/farpane-ui",
+    "apps/farpane-viewer",
+    "apps/farpane-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0" # TODO: confirm licence before the first release
+repository = "https://github.com/OWNER/farpane" # TODO: set once the GitHub organisation exists
+authors = ["Pierre Jochem"]
+
+[workspace.dependencies]
+bytes = { version = "1", default-features = false }
+rfb-proto = { path = "crates/rfb-proto" }
+rfb-codec = { path = "crates/rfb-codec" }
+rfb-security = { path = "crates/rfb-security" }
+farpane-ui = { path = "crates/farpane-ui" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

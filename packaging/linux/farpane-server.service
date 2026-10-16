@@ -1,0 +1,13 @@
+[Unit]
+Description=Farpane remote desktop server (headless, current user session)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+# --headless: run without the dashboard window (flag name is a placeholder).
+ExecStart=/usr/bin/farpane-server --headless
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=graphical-session.target
