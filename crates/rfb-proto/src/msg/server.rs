@@ -166,6 +166,8 @@ mod tests {
 
     use super::*;
 
+    /// Golden vectors checked against rfbproto.rst: FramebufferUpdate,
+    /// SetColourMapEntries, Bell and ServerCutText sections (2026-10-16).
     fn vectors() -> Vec<(ServerMessage, Vec<u8>)> {
         vec![
             (ServerMessage::UpdateBegin { rects: 3 }, vec![0, 0, 0, 3]),
@@ -228,6 +230,7 @@ mod tests {
             },
             encoding: -223,
         };
+        // rfbproto.rst, FramebufferUpdate: x, y, w, h (U16), encoding (S32).
         let bytes = [0, 1, 0, 2, 0, 3, 0, 4, 0xFF, 0xFF, 0xFF, 0x21];
         assert_eq!(h.to_bytes(), bytes);
         assert_eq!(RectHeader::parse(&bytes), Ok(h));
