@@ -21,6 +21,7 @@ use rfb_server::ClientInfo;
 
 use crate::{
     backend::{Backend, EventLog, Level, Status},
+    settings::{self, ServerSettings, TlsMode},
     usercmd,
     users::{Role, User, UserStore},
 };
@@ -31,11 +32,18 @@ pub enum Page {
     Overview,
     Clients,
     Users,
+    Security,
     Log,
 }
 
 impl Page {
-    const ALL: [Self; 4] = [Self::Overview, Self::Clients, Self::Users, Self::Log];
+    const ALL: [Self; 5] = [
+        Self::Overview,
+        Self::Clients,
+        Self::Users,
+        Self::Security,
+        Self::Log,
+    ];
 
     /// `overview`, `clients`, `users` or `log`.
     #[must_use]
@@ -44,6 +52,7 @@ impl Page {
             "overview" => Some(Self::Overview),
             "clients" => Some(Self::Clients),
             "users" => Some(Self::Users),
+            "security" => Some(Self::Security),
             "log" => Some(Self::Log),
             _ => None,
         }
@@ -54,6 +63,7 @@ impl Page {
             Self::Overview => "Overview",
             Self::Clients => "Clients",
             Self::Users => "Users",
+            Self::Security => "Security",
             Self::Log => "Event log",
         }
     }
@@ -98,6 +108,29 @@ impl UsersPanel {
     }
 }
 
+/// Which key a pending "make a new one" is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Forget {
+    Certificate,
+    Ra2Key,
+}
+
+/// Form state of the Security page.
+#[derive(Debug, Default)]
+struct SecurityPanel {
+    loaded: bool,
+    /// A problem with `server.toml`, shown instead of the form.
+    problem: Option<String>,
+    edit: ServerSettings,
+    listen_text: String,
+    /// Waiting for the user to confirm forgetting a key.
+    confirm: Option<Forget>,
+    /// The result of the last action: (was it fine, what to say).
+    message: Option<(bool, String)>,
+    /// Whether any account exists (a reachable server needs one).
+    has_users: bool,
+}
+
 /// The dashboard's state.
 pub struct Dashboard {
     backend: Arc<dyn Backend>,
@@ -119,6 +152,7 @@ pub struct Dashboard {
     preview: Option<TextureHandle>,
     last_preview: f64,
     users: UsersPanel,
+    security: SecurityPanel,
     /// A line at the bottom of the window (exports, errors).
     notice: Option<String>,
     /// `--ui-screenshot`: where to save a picture of the window, and the
@@ -228,6 +262,7 @@ impl Dashboard {
             preview: None,
             last_preview: f64::NEG_INFINITY,
             users: UsersPanel::new(),
+            security: SecurityPanel::default(),
             notice: None,
             screenshot: None,
             screenshot_requested: false,
@@ -321,9 +356,82 @@ impl Dashboard {
                 }
             }
         }
+        if self.page == Page::Security && !self.security.loaded {
+            self.load_security();
+        }
         if self.page == Page::Users && now - self.users.last_load >= 1.0 {
             self.reload_users(now);
         }
+    }
+
+    fn settings_path(&self) -> PathBuf {
+        self.export_dir.join("server.toml")
+    }
+
+    fn load_security(&mut self) {
+        self.security.loaded = true;
+        self.security.has_users =
+            UserStore::load(&self.users_file).is_ok_and(|s| s.has_enabled_users());
+        match ServerSettings::load(&self.settings_path()) {
+            Ok(s) => {
+                self.security.listen_text = s.listen.clone().unwrap_or_default();
+                self.security.edit = s;
+                self.security.problem = None;
+            }
+            Err(e) => self.security.problem = Some(e.to_string()),
+        }
+    }
+
+    /// Save the Security page's settings (they apply at the next start).
+    pub fn save_security(&mut self) {
+        let listen = self.security.listen_text.trim().to_owned();
+        if !listen.is_empty() && listen.parse::<std::net::SocketAddr>().is_err() {
+            self.security.message = Some((
+                false,
+                format!("\"{listen}\" is not an address and port, such as 127.0.0.1:5900"),
+            ));
+            return;
+        }
+        let mut s = self.security.edit.clone();
+        s.listen = (!listen.is_empty()).then_some(listen);
+        self.security.message = Some(match s.save(&self.settings_path()) {
+            Ok(()) => {
+                self.log.push(
+                    Level::Info,
+                    "security settings saved (they apply at the next start)",
+                );
+                self.security.edit = s;
+                (true, "Saved. Restart the server to apply.".to_owned())
+            }
+            Err(e) => (false, e.to_string()),
+        });
+    }
+
+    /// Forget a key so that a new one is made at the next start.
+    pub fn forget_key(&mut self, which: Forget) {
+        let (what, result) = match which {
+            Forget::Certificate => (
+                "certificate",
+                settings::forget_certificate(&self.export_dir),
+            ),
+            Forget::Ra2Key => ("RSA-AES key", settings::forget_ra2_key(&self.export_dir)),
+        };
+        self.security.confirm = None;
+        self.security.message = Some(match result {
+            Ok(()) => {
+                self.log.push(
+                    Level::Warning,
+                    format!("the {what} was forgotten; a new one is made at the next start"),
+                );
+                (
+                    true,
+                    format!(
+                        "The {what} was removed. A new one is made at the next start; viewers will ask to trust it again."
+                    ),
+                )
+            }
+            Err(e) => (false, e.to_string()),
+        });
     }
 
     fn reload_users(&mut self, now: f64) {
@@ -446,6 +554,7 @@ impl Dashboard {
                             Page::Overview => self.overview(ui, &tokens),
                             Page::Clients => self.clients_page(ui, &tokens),
                             Page::Users => self.users_page(ui, &tokens),
+                            Page::Security => self.security_page(ui, &tokens),
                             Page::Log => self.log_page(ui, &tokens),
                         }
                     });
@@ -784,6 +893,114 @@ impl Dashboard {
                 self.users.display_name.clear();
                 self.users.password.clear();
             }
+        }
+    }
+
+    #[allow(clippy::too_many_lines)] // four cards, one page
+    fn security_page(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        if let Some(problem) = &self.security.problem {
+            ui.label(
+                RichText::new(format!("The settings file cannot be read: {problem}"))
+                    .color(tokens.red),
+            );
+            return;
+        }
+        Self::card(ui, tokens, |ui| {
+            ui.label(RichText::new("Right now").color(tokens.muted).small());
+            ui.label(&self.status.access);
+            ui.label(RichText::new(format!("Listening on {}", self.status.listen)).small());
+            for (label, fingerprint) in &self.status.fingerprints {
+                ui.label(
+                    RichText::new(format!("{label} SHA-256 {fingerprint}"))
+                        .monospace()
+                        .small(),
+                );
+            }
+        });
+        ui.add_space(10.0);
+        Self::card(ui, tokens, |ui| {
+            ui.label(
+                RichText::new("Settings (applied at the next start)")
+                    .color(tokens.muted)
+                    .small(),
+            );
+            let mut tls = self.security.edit.tls == TlsMode::SelfSigned;
+            if ui
+                .checkbox(&mut tls, "Encrypt with a self-signed certificate (TLS)")
+                .changed()
+            {
+                self.security.edit.tls = if tls {
+                    TlsMode::SelfSigned
+                } else {
+                    TlsMode::Off
+                };
+            }
+            ui.checkbox(&mut self.security.edit.ra2, "Offer RSA-AES (needs users)");
+            ui.checkbox(&mut self.security.edit.view_only, "View only for everyone");
+            ui.horizontal(|ui| {
+                ui.label("Listen on");
+                ui.text_edit_singleline(&mut self.security.listen_text);
+            });
+            let listen = self.security.listen_text.trim();
+            let beyond_here = listen
+                .parse::<std::net::SocketAddr>()
+                .is_ok_and(|a| !a.ip().is_loopback());
+            if beyond_here && !self.security.has_users {
+                ui.label(
+                    RichText::new("Reachable from other machines but no users exist: add users first (Users page), or the server will refuse to start.")
+                        .color(tokens.amber),
+                );
+            }
+            if ui.button("Save settings").clicked() {
+                self.save_security();
+            }
+        });
+        ui.add_space(10.0);
+        Self::card(ui, tokens, |ui| {
+            ui.label(RichText::new("Keys").color(tokens.muted).small());
+            for (which, label, button) in [
+                (
+                    Forget::Certificate,
+                    "TLS certificate",
+                    "Make a new certificate",
+                ),
+                (Forget::Ra2Key, "RSA-AES key", "Make a new RSA-AES key"),
+            ] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    if self.security.confirm == Some(which) {
+                        ui.label(
+                            RichText::new("Viewers that trusted the old one will warn.")
+                                .color(tokens.amber),
+                        );
+                        if ui.button("Yes, forget it").clicked() {
+                            self.forget_key(which);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            self.security.confirm = None;
+                        }
+                    } else if ui.button(button).clicked() {
+                        self.security.confirm = Some(which);
+                    }
+                });
+            }
+        });
+        ui.add_space(10.0);
+        Self::card(ui, tokens, |ui| {
+            ui.label(RichText::new("Always on").color(tokens.muted).small());
+            for line in [
+                "Passwords are stored as Argon2id hashes.",
+                "5 wrong passwords in 15 minutes lock a user name for 15 minutes.",
+                "An address that keeps failing waits 1 to 30 seconds before its next attempt.",
+                "Signing in by name needs TLS or RSA-AES, so passwords are never sent in the clear.",
+            ] {
+                ui.label(line);
+            }
+        });
+        if let Some((ok, text)) = &self.security.message {
+            let colour = if *ok { tokens.green } else { tokens.red };
+            ui.add_space(6.0);
+            ui.label(RichText::new(text).color(colour));
         }
     }
 

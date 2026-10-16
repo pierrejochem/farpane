@@ -316,3 +316,136 @@ fn traffic_rates_come_from_the_byte_counters_between_samples() {
         "out/in is 500: {seen:?}"
     );
 }
+
+#[test]
+fn an_invalid_listen_address_is_refused_and_nothing_is_saved() {
+    let (rig, mut h) = rig(vec![]);
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    h.get_by_label("user accounts, TLS");
+    h.get_by_label_contains("Always on");
+    assert!(
+        !rig.dir.path().join("server.toml").exists(),
+        "nothing saved yet"
+    );
+    let listen = h.get_by_role(NodeRole::TextInput);
+    listen.focus();
+    listen.type_text("not an address");
+    h.run_steps(2);
+    h.get_by_label("Save settings").click();
+    settle(&mut h);
+    h.get_by_label_contains("is not an address and port");
+    assert!(!rig.dir.path().join("server.toml").exists());
+}
+
+#[test]
+fn the_security_page_saves_what_was_ticked_and_typed() {
+    use farpane_server::settings::{ServerSettings, TlsMode};
+    let (rig, mut h) = rig(vec![]);
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    h.get_by_label("Encrypt with a self-signed certificate (TLS)")
+        .click();
+    h.get_by_label("Offer RSA-AES (needs users)").click();
+    let listen = h.get_by_role(NodeRole::TextInput);
+    listen.focus();
+    listen.type_text("127.0.0.1:5999");
+    h.run_steps(2);
+    h.get_by_label("Save settings").click();
+    settle(&mut h);
+    let saved = ServerSettings::load(&rig.dir.path().join("server.toml")).unwrap();
+    assert_eq!(saved.listen.as_deref(), Some("127.0.0.1:5999"));
+    assert_eq!(saved.tls, TlsMode::SelfSigned);
+    assert!(saved.ra2 && !saved.view_only);
+}
+
+#[test]
+fn saved_settings_appear_again_and_a_valid_address_is_stored() {
+    use farpane_server::settings::{ServerSettings, TlsMode};
+    let (rig, mut h) = rig(vec![]);
+    ServerSettings {
+        listen: Some("127.0.0.1:5999".into()),
+        tls: TlsMode::SelfSigned,
+        ra2: true,
+        ..ServerSettings::default()
+    }
+    .save(&rig.dir.path().join("server.toml"))
+    .unwrap();
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    // Turn view-only on and save: the other saved values stay.
+    h.get_by_label("View only for everyone").click();
+    h.get_by_label("Save settings").click();
+    settle(&mut h);
+    h.get_by_label("Saved. Restart the server to apply.");
+    let saved = ServerSettings::load(&rig.dir.path().join("server.toml")).unwrap();
+    assert_eq!(saved.listen.as_deref(), Some("127.0.0.1:5999"));
+    assert_eq!(saved.tls, TlsMode::SelfSigned);
+    assert!(saved.ra2 && saved.view_only);
+    assert!(
+        rig.log
+            .lines()
+            .iter()
+            .any(|l| l.text.contains("security settings saved"))
+    );
+}
+
+#[test]
+fn forgetting_a_key_asks_first_and_removes_only_that_key() {
+    let (rig, mut h) = rig(vec![]);
+    let names = vec!["localhost".to_owned()];
+    farpane_server::tlsconf::load_or_generate(&rig.dir.path().join("tls"), &names).unwrap();
+    farpane_server::tlsconf::load_or_generate_ra2(rig.dir.path()).unwrap();
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    h.get_by_label("Make a new certificate").click();
+    settle(&mut h);
+    h.get_by_label_contains("Viewers that trusted the old one will warn.");
+    // Cancel: nothing happens.
+    h.get_by_label("Cancel").click();
+    settle(&mut h);
+    assert!(rig.dir.path().join("tls/cert.pem").exists());
+    // Confirm: the certificate goes, the RSA-AES key stays.
+    h.get_by_label("Make a new certificate").click();
+    settle(&mut h);
+    h.get_by_label("Yes, forget it").click();
+    settle(&mut h);
+    assert!(!rig.dir.path().join("tls/cert.pem").exists());
+    assert!(!rig.dir.path().join("tls/key.pem").exists());
+    assert!(rig.dir.path().join("ra2_key.pem").exists());
+    h.get_by_label_contains("The certificate was removed");
+    assert!(
+        rig.log
+            .lines()
+            .iter()
+            .any(|l| l.level == Level::Warning && l.text.contains("certificate was forgotten"))
+    );
+}
+
+#[test]
+fn a_broken_settings_file_is_reported_not_overwritten() {
+    let (rig, mut h) = rig(vec![]);
+    std::fs::write(rig.dir.path().join("server.toml"), "tls = [").unwrap();
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    h.get_by_label_contains("The settings file cannot be read");
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("server.toml")).unwrap(),
+        "tls = ["
+    );
+}
+
+#[test]
+fn listening_beyond_this_computer_without_users_is_flagged() {
+    use farpane_server::settings::ServerSettings;
+    let (rig, mut h) = rig(vec![]);
+    ServerSettings {
+        listen: Some("0.0.0.0:5900".into()),
+        ..ServerSettings::default()
+    }
+    .save(&rig.dir.path().join("server.toml"))
+    .unwrap();
+    h.state_mut().set_page(Page::Security);
+    settle(&mut h);
+    h.get_by_label_contains("Reachable from other machines but no users exist");
+}
