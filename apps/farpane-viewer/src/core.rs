@@ -13,8 +13,8 @@ use rfb_tokio::Error as SessionError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::{
-    ConnectError, ConnectOptions, RemoteScreen, ScreenEvent, screen::DEFAULT_ENCODINGS,
-    stats::Snapshot,
+    ClipboardSent, ConnectError, ConnectOptions, RemoteScreen, ScreenEvent,
+    screen::DEFAULT_ENCODINGS, stats::Snapshot,
 };
 
 /// How often the UI gets a statistics reading.
@@ -47,6 +47,8 @@ pub enum Command {
         y: u16,
     },
     CutText(Vec<u8>),
+    /// Local clipboard text to share: UTF-8 if the server supports it.
+    Clipboard(String),
 }
 
 /// What the connection tells the UI.
@@ -84,6 +86,11 @@ pub enum UiEvent {
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
+    /// Clipboard text from the server (UTF-8, Extended Clipboard).
+    ClipboardText(String),
+    /// Something the user should know about, such as clipboard text that
+    /// could not be sent in full.
+    Notice(String),
     /// The server's TLS certificate is not trusted. Nothing was sent
     /// besides the handshake. Ask the user; if they accept, connect again with
     /// the fingerprint in `pins`.
@@ -280,6 +287,26 @@ async fn session(
                         Command::CutText(text) => {
                             screen.cut_text(text).await.map_err(|e| e.to_string())?;
                         }
+                        Command::Clipboard(text) => {
+                            let sent = screen
+                                .send_clipboard(&text)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            match sent {
+                                ClipboardSent::Utf8 | ClipboardSent::Latin1 { replaced: 0 } => {}
+                                ClipboardSent::Latin1 { replaced } => {
+                                    ui.emit(UiEvent::Notice(format!(
+                                        "{replaced} character(s) outside Latin-1 were sent as “?”"
+                                    )));
+                                }
+                                ClipboardSent::TooLarge { limit } => {
+                                    ui.emit(UiEvent::Notice(format!(
+                                        "Clipboard text is too large to send (limit {} MiB)",
+                                        limit / (1024 * 1024)
+                                    )));
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -346,6 +373,7 @@ async fn handle_event(
         ScreenEvent::UpdateEnd => screen.request_update(true).await?,
         ScreenEvent::Bell => ui.emit(UiEvent::Bell),
         ScreenEvent::CutText(text) => ui.emit(UiEvent::CutText(text)),
+        ScreenEvent::Text(text) => ui.emit(UiEvent::ClipboardText(text)),
     }
     Ok(())
 }

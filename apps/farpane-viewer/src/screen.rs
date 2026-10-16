@@ -1,6 +1,10 @@
 use core::fmt;
 
-use rfb_codec::{Cursor, Damage, DecodeError, Decoder, DesktopLayout, Framebuffer, enc};
+use rfb_codec::{
+    Cursor, Damage, DecodeError, Decoder, DesktopLayout, Framebuffer,
+    clipboard::{self, ExtClipboard, Role},
+    enc,
+};
 use rfb_proto::{
     PixelFormat,
     conn::ClientConnEvent,
@@ -16,7 +20,7 @@ use crate::stats::{Collector, Snapshot};
 
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
-pub const DEFAULT_ENCODINGS: [i32; 9] = [
+pub const DEFAULT_ENCODINGS: [i32; 10] = [
     enc::ZRLE,
     enc::HEXTILE,
     enc::ZLIB,
@@ -28,6 +32,8 @@ pub const DEFAULT_ENCODINGS: [i32; 9] = [
     // client that asks for both, and old servers still understand the other.
     pseudo::EXT_DESKTOP_SIZE,
     pseudo::DESKTOP_SIZE,
+    // UTF-8 clipboard; a server that lacks it keeps using the legacy messages.
+    pseudo::EXT_CLIPBOARD,
 ];
 
 /// What to authenticate with and which TLS certificates to trust.
@@ -62,6 +68,8 @@ pub enum ConnectError {
     Session(Error),
     Decode(DecodeError),
     Io(std::io::Error),
+    /// The server sent a damaged Extended Clipboard message.
+    Clipboard(clipboard::ClipboardError),
 }
 
 impl fmt::Display for ConnectError {
@@ -70,6 +78,7 @@ impl fmt::Display for ConnectError {
             Self::Session(e) => write!(f, "{e}"),
             Self::Decode(e) => write!(f, "decode error: {e}"),
             Self::Io(e) => write!(f, "{e}"),
+            Self::Clipboard(e) => write!(f, "clipboard: {e}"),
         }
     }
 }
@@ -98,6 +107,7 @@ pub struct RemoteScreen {
     stats: Collector,
     /// The screens from the last accepted layout, to build resize requests.
     screens: Vec<Screen>,
+    clip: ExtClipboard,
 }
 
 impl RemoteScreen {
@@ -176,6 +186,7 @@ impl RemoteScreen {
             name: String::from_utf8_lossy(&name).into_owned(),
             stats: Collector::new(std::time::Instant::now()),
             screens: Vec::new(),
+            clip: ExtClipboard::new(Role::Client),
         };
         screen.request_update(false).await?;
         Ok(screen)
@@ -241,8 +252,21 @@ impl RemoteScreen {
                 }
                 ClientConnEvent::Bell => return Ok(ScreenEvent::Bell),
                 ClientConnEvent::CutText(text) => return Ok(ScreenEvent::CutText(text)),
-                ClientConnEvent::ExtendedClipboard { .. }
-                | ClientConnEvent::Handshake(_)
+                ClientConnEvent::ExtendedClipboard { flags, payload } => {
+                    let reaction = self
+                        .clip
+                        .on_message(flags, &payload)
+                        .map_err(ConnectError::Clipboard)?;
+                    for (flags, payload) in reaction.send {
+                        self.session
+                            .send(&ClientMessage::ExtendedClipboard { flags, payload })
+                            .await?;
+                    }
+                    if let Some(text) = reaction.received {
+                        return Ok(ScreenEvent::Text(text));
+                    }
+                }
+                ClientConnEvent::Handshake(_)
                 | ClientConnEvent::UpdateBegin { .. }
                 | ClientConnEvent::ColourMap { .. } => {}
             }
@@ -264,7 +288,8 @@ impl RemoteScreen {
                 ScreenEvent::Cursor(_)
                 | ScreenEvent::Layout(_)
                 | ScreenEvent::Bell
-                | ScreenEvent::CutText(_) => {}
+                | ScreenEvent::CutText(_)
+                | ScreenEvent::Text(_) => {}
             }
         }
     }
@@ -333,6 +358,37 @@ impl RemoteScreen {
             .await?)
     }
 
+    /// Send local clipboard text: UTF-8 when the server supports Extended
+    /// Clipboard, otherwise as Latin-1 `ClientCutText`.
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn send_clipboard(&mut self, text: &str) -> Result<ClipboardSent, ConnectError> {
+        if self.clip.is_active() {
+            let limit = rfb_proto::consts::limits::MAX_EXT_CLIPBOARD_INFLATED as usize;
+            if clipboard::wire_size(text) > limit {
+                return Ok(ClipboardSent::TooLarge { limit });
+            }
+            for (flags, payload) in self.clip.local_changed(text) {
+                self.session
+                    .send(&ClientMessage::ExtendedClipboard { flags, payload })
+                    .await?;
+            }
+            return Ok(ClipboardSent::Utf8);
+        }
+        match crate::clipboard::to_remote(text) {
+            Ok(out) => {
+                self.cut_text(out.latin1).await?;
+                Ok(ClipboardSent::Latin1 {
+                    replaced: out.replaced,
+                })
+            }
+            Err(crate::clipboard::ClipboardError::TooLarge { .. }) => Ok(ClipboardSent::TooLarge {
+                limit: rfb_proto::consts::limits::MAX_CUT_TEXT_LEN as usize,
+            }),
+        }
+    }
+
     /// Send clipboard text (Latin-1 as the legacy message requires).
     ///
     /// # Errors
@@ -360,6 +416,20 @@ pub enum ScreenEvent {
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
+    /// Clipboard text from the server through Extended Clipboard (UTF-8, line
+    /// ends as the server sent them).
+    Text(String),
+}
+
+/// How [`RemoteScreen::send_clipboard`] sent the text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardSent {
+    /// As UTF-8 through Extended Clipboard (announced or provided).
+    Utf8,
+    /// As Latin-1 `ClientCutText`; `replaced` characters became `?`.
+    Latin1 { replaced: usize },
+    /// Too large for either path; nothing was sent.
+    TooLarge { limit: usize },
 }
 
 #[cfg(test)]
