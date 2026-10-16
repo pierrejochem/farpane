@@ -8,6 +8,8 @@ use rfb_proto::{PixelFormat, ProtoError, framing::frame, msg::server::RectHeader
 #[derive(Debug, Arbitrary)]
 struct Input {
     encoding: i32,
+    /// Fold the encoding into -20..20 so the real encodings are hit often.
+    small: bool,
     rect: [u16; 4],
     /// 0, 1 or 2 select 8, 16 or 32 bits per pixel.
     bpp: u8,
@@ -28,7 +30,11 @@ fuzz_target!(|i: Input| {
             width: i.rect[2],
             height: i.rect[3],
         },
-        encoding: i.encoding,
+        encoding: if i.small {
+            i32::from(i.encoding as i8) % 20
+        } else {
+            i.encoding
+        },
     };
     match frame(&header, &pf, &i.body) {
         Ok(n) => {
