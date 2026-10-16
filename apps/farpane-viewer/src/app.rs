@@ -14,9 +14,11 @@ use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
 
 use crate::{
+    appearance,
     clipboard::{self, ClipboardError},
     core::{Command, Core, UiEvent},
     input::{Canvas, KeyTranslator, PointerTranslator},
+    settings::{self, Store},
 };
 
 /// What the command line asked for.
@@ -31,7 +33,13 @@ pub struct Startup {
     pub fullscreen: bool,
     /// Keep the full-screen toolbar open and pinned (for screenshots).
     pub pin_toolbar: bool,
+    /// Where settings are kept. `None` means nothing is read or written
+    /// (tests); the binary passes [`settings::default_path`].
+    pub settings_path: Option<PathBuf>,
 }
+
+/// Width of an address book card, in points.
+const CARD_WIDTH: f32 = 220.0;
 
 /// Cursors wider or taller than this are not drawn (the server still thinks
 /// we show them, so we hide ours rather than the local one).
@@ -81,7 +89,15 @@ pub struct ViewerApp {
     password: String,
     error: Option<String>,
     theme: ThemePreference,
+    accent: Accent,
+    interface_size: u32,
+    reduce_transparency: bool,
     applied: Option<Tokens>,
+    applied_zoom: Option<u32>,
+    store: Store,
+    settings_open: bool,
+    /// The address of the connection attempt in progress.
+    last_addr: String,
     one_to_one: bool,
     /// Copy text between the local and the remote clipboard.
     clipboard_sync: bool,
@@ -125,14 +141,23 @@ impl ViewerApp {
         let ctx = ctx.clone();
         let core = Core::spawn(move || ctx.request_repaint());
         let auto = startup.addr.clone();
-        let app = Self {
+        let (store, settings_warning) = Store::load(startup.settings_path.clone());
+        let look = store.settings.appearance.clone();
+        let mut app = Self {
             core,
             phase: Phase::Home,
             addr: startup.addr.clone().unwrap_or_default(),
             password: String::new(),
             error: None,
-            theme: ThemePreference::default(),
+            theme: appearance::theme_from(&look.theme),
+            accent: appearance::accent_from(&look.accent),
+            interface_size: appearance::size_from(look.interface_size),
+            reduce_transparency: look.reduce_transparency,
             applied: None,
+            applied_zoom: None,
+            store,
+            settings_open: false,
+            last_addr: String::new(),
             one_to_one: false,
             clipboard_sync: true,
             toolbar: Toolbar {
@@ -154,6 +179,9 @@ impl ViewerApp {
             connected_at: None,
             screenshot_requested: false,
         };
+        if let Some(warning) = settings_warning {
+            app.say(warning);
+        }
         if auto.is_some() {
             app.connect_with(app.startup_password.clone());
         }
@@ -223,7 +251,9 @@ impl ViewerApp {
         if immersive {
             self.toolbar_overlay(ctx, &tokens);
         }
+        self.settings_window(ctx);
         self.toast(ctx, &tokens);
+        self.sync_appearance();
         self.screenshot_driver(ctx);
     }
 
@@ -265,26 +295,37 @@ impl ViewerApp {
         }
     }
 
-    fn connect(&self) {
+    fn connect(&mut self) {
         let password = (!self.password.is_empty()).then(|| self.password.clone().into_bytes());
         self.connect_with(password);
     }
 
-    fn connect_with(&self, password: Option<Vec<u8>>) {
+    fn connect_with(&mut self, password: Option<Vec<u8>>) {
+        self.last_addr = self.addr.trim().to_owned();
         self.core.send(Command::Connect {
-            addr: self.addr.trim().to_owned(),
+            addr: self.last_addr.clone(),
             password,
         });
     }
 
     fn tokens(&self, ctx: &Context) -> Tokens {
         let os_dark = ctx.input(|i| i.raw.system_theme) != Some(egui::Theme::Light);
-        Tokens::new(self.theme.resolve(os_dark), Accent::default())
+        let tokens = Tokens::new(self.theme.resolve(os_dark), self.accent);
+        if self.reduce_transparency {
+            tokens.reduce_transparency()
+        } else {
+            tokens
+        }
     }
 
     /// Apply the theme to egui whenever the tokens change.
     fn apply_theme(&mut self, ctx: &Context) -> Tokens {
         let tokens = self.tokens(ctx);
+        if self.applied_zoom != Some(self.interface_size) {
+            #[allow(clippy::cast_precision_loss)] // 90..=115
+            ctx.set_zoom_factor(self.interface_size as f32 / 100.0);
+            self.applied_zoom = Some(self.interface_size);
+        }
         if self.applied != Some(tokens) {
             style::apply(ctx, &tokens);
             self.applied = Some(tokens);
@@ -304,6 +345,7 @@ impl ViewerApp {
                     width,
                     height,
                 } => {
+                    self.remember_connection(&name);
                     self.phase = Phase::Connected { name };
                     self.new_texture(ctx, width, height);
                     self.connected_at = Some(Instant::now());
@@ -352,6 +394,75 @@ impl ViewerApp {
                 }
             },
         );
+    }
+
+    /// Save the settings; a failure is shown once, and "no config directory"
+    /// (tests, odd environments) is not an error worth showing.
+    fn persist(&mut self) {
+        match self.store.save() {
+            Ok(()) | Err(settings::SaveError::NoPath) => {}
+            Err(e) => self.say(format!("Could not save settings: {e}")),
+        }
+    }
+
+    /// Add or refresh the address book entry for the connection that just
+    /// succeeded.
+    fn remember_connection(&mut self, name: &str) {
+        let addr = self.last_addr.clone();
+        self.store.settings.remember(name, &addr, unix_now());
+        self.persist();
+    }
+
+    /// Write the appearance fields back to the settings if they changed.
+    fn sync_appearance(&mut self) {
+        let now = settings::Appearance {
+            theme: appearance::theme_key(self.theme).to_owned(),
+            accent: appearance::accent_key(self.accent).to_owned(),
+            interface_size: self.interface_size,
+            reduce_transparency: self.reduce_transparency,
+        };
+        if now != self.store.settings.appearance {
+            self.store.settings.appearance = now;
+            self.persist();
+        }
+    }
+
+    /// The saved connections as `(name, address)`, most recent first.
+    #[must_use]
+    pub fn saved_connections(&self) -> Vec<(String, String)> {
+        self.store
+            .settings
+            .recent()
+            .into_iter()
+            .map(|c| (c.name.clone(), c.addr.clone()))
+            .collect()
+    }
+
+    /// Connect to the `index`-th saved connection (as listed by
+    /// [`ViewerApp::saved_connections`]).
+    pub fn connect_saved(&mut self, index: usize) {
+        if let Some((_, addr)) = self.saved_connections().into_iter().nth(index) {
+            self.addr = addr;
+            self.connect();
+        }
+    }
+
+    /// Remove a saved connection.
+    pub fn forget_saved(&mut self, addr: &str) {
+        if self.store.settings.forget(addr) {
+            self.persist();
+        }
+    }
+
+    /// The chosen theme.
+    #[must_use]
+    pub fn theme(&self) -> ThemePreference {
+        self.theme
+    }
+
+    /// Change the theme (saved with the next frame).
+    pub fn set_theme(&mut self, theme: ThemePreference) {
+        self.theme = theme;
     }
 
     fn say(&mut self, message: String) {
@@ -438,18 +549,20 @@ impl ViewerApp {
                     ui.label(RichText::new(text).color(colour));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
-                            .selected_text(theme_name(self.theme))
+                            .selected_text(appearance::theme_label(self.theme))
                             .show_ui(ui, |ui| {
-                                for t in [
-                                    ThemePreference::Glass,
-                                    ThemePreference::Slate,
-                                    ThemePreference::Light,
-                                    ThemePreference::System,
-                                ] {
-                                    ui.selectable_value(&mut self.theme, t, theme_name(t));
+                                for t in appearance::THEMES {
+                                    ui.selectable_value(
+                                        &mut self.theme,
+                                        t,
+                                        appearance::theme_label(t),
+                                    );
                                 }
                             });
                         ui.label(RichText::new("Theme").color(tokens.muted));
+                        if ui.button("Settings").clicked() {
+                            self.settings_open = !self.settings_open;
+                        }
                         if matches!(self.phase, Phase::Connected { .. }) {
                             ui.add_space(8.0);
                             ui.checkbox(&mut self.clipboard_sync, "Clipboard")
@@ -667,8 +780,157 @@ impl ViewerApp {
                             ui.label(RichText::new(error).color(tokens.red));
                         }
                     });
+                if !self.store.settings.connections.is_empty() {
+                    ui.add_space(24.0);
+                    self.address_book(ui, tokens);
+                }
             });
         });
+    }
+
+    /// The saved connections as cards: click one to connect, × to forget it.
+    fn address_book(&mut self, ui: &mut egui::Ui, tokens: &Tokens) {
+        let now = unix_now();
+        let connecting = matches!(self.phase, Phase::Connecting);
+        let entries: Vec<_> = self
+            .store
+            .settings
+            .recent()
+            .into_iter()
+            .take(8)
+            .cloned()
+            .collect();
+        ui.label(RichText::new("Recent connections").color(tokens.muted));
+        ui.add_space(8.0);
+        let mut connect = None;
+        let mut forget = None;
+        // Explicit rows of equal cards: as many columns as fit, at most four,
+        // in a block centred under the connect card.
+        let gap = 12.0;
+        let card_outer = CARD_WIDTH + 2.0 * 14.0 + 2.0;
+        let fits = ((ui.available_width() - 24.0 + gap) / (card_outer + gap)).floor();
+        // Clamped to 1..=4 first, so the conversion is exact.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let columns = fits.clamp(1.0, 4.0) as usize;
+        #[allow(clippy::cast_precision_loss)] // at most four columns
+        let block = columns as f32 * card_outer + (columns - 1) as f32 * gap;
+        ui.allocate_ui(vec2(block, 0.0), |ui| {
+            ui.spacing_mut().item_spacing = vec2(gap, gap);
+            for row in entries.chunks(columns) {
+                ui.horizontal(|ui| {
+                    for entry in row {
+                        Frame::NONE
+                            .fill(tokens.card.into())
+                            .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                            .corner_radius(style::radius(tokens.radius / 1.5))
+                            .inner_margin(Margin::same(14))
+                            .show(ui, |ui| {
+                                ui.set_width(CARD_WIDTH);
+                                ui.set_min_height(92.0);
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(&entry.name).strong());
+                                        ui.with_layout(
+                                            Layout::right_to_left(Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .small_button("×")
+                                                    .on_hover_text("Forget this connection")
+                                                    .clicked()
+                                                {
+                                                    forget = Some(entry.addr.clone());
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.label(RichText::new(&entry.addr).color(tokens.muted));
+                                    ui.label(
+                                        RichText::new(settings::ago(now, entry.last_connected))
+                                            .color(tokens.muted)
+                                            .size(11.0),
+                                    );
+                                    ui.add_space(6.0);
+                                    let button = egui::Button::new(
+                                        RichText::new("Connect").color(Color32::WHITE),
+                                    )
+                                    .fill(Color32::from(tokens.accent));
+                                    if ui.add_enabled(!connecting, button).clicked() {
+                                        connect = Some(entry.addr.clone());
+                                    }
+                                });
+                            });
+                    }
+                });
+            }
+        });
+        if let Some(addr) = forget {
+            self.forget_saved(&addr);
+        }
+        if let Some(addr) = connect {
+            self.addr = addr;
+            self.connect();
+        }
+    }
+
+    /// The Settings window: appearance options, applied and saved at once.
+    fn settings_window(&mut self, ctx: &Context) {
+        if !self.settings_open {
+            return;
+        }
+        let mut open = true;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::RIGHT_TOP, vec2(-16.0, 56.0))
+            .show(ctx, |ui| {
+                egui::Grid::new("settings-grid")
+                    .num_columns(2)
+                    .spacing([16.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.label("Theme");
+                        egui::ComboBox::from_id_salt("settings-theme")
+                            .selected_text(appearance::theme_label(self.theme))
+                            .show_ui(ui, |ui| {
+                                for t in appearance::THEMES {
+                                    ui.selectable_value(
+                                        &mut self.theme,
+                                        t,
+                                        appearance::theme_label(t),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Accent colour");
+                        egui::ComboBox::from_id_salt("settings-accent")
+                            .selected_text(appearance::accent_label(self.accent))
+                            .show_ui(ui, |ui| {
+                                for a in appearance::ACCENTS {
+                                    ui.selectable_value(
+                                        &mut self.accent,
+                                        a,
+                                        appearance::accent_label(a),
+                                    );
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Interface size");
+                        ui.horizontal(|ui| {
+                            for size in appearance::SIZES {
+                                ui.selectable_value(
+                                    &mut self.interface_size,
+                                    size,
+                                    format!("{size}%"),
+                                );
+                            }
+                        });
+                        ui.end_row();
+                        ui.label("Reduce transparency");
+                        ui.checkbox(&mut self.reduce_transparency, "Solid panels");
+                        ui.end_row();
+                    });
+            });
+        self.settings_open = open;
     }
 
     fn session(&mut self, ctx: &Context) {
@@ -838,13 +1100,11 @@ impl ViewerApp {
     }
 }
 
-fn theme_name(t: ThemePreference) -> &'static str {
-    match t {
-        ThemePreference::Glass => "Glass",
-        ThemePreference::Slate => "Slate",
-        ThemePreference::Light => "Light",
-        ThemePreference::System => "System",
-    }
+/// Seconds since the Unix epoch.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 fn save_screenshot(

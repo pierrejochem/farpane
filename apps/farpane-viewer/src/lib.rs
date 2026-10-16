@@ -3,6 +3,7 @@
 //! ([`app::ViewerApp`]) that talks to the connection thread ([`core::Core`]).
 
 pub mod app;
+pub mod appearance;
 pub mod clipboard;
 pub mod core;
 pub mod input;
