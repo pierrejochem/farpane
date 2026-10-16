@@ -275,3 +275,32 @@ async fn works_over_tcp() {
         ClientMessage::ClientCutText(b"over tcp".to_vec())
     );
 }
+
+#[tokio::test]
+async fn both_sides_count_the_same_bytes() {
+    let (c, s) = duplex(64);
+    let server = tokio::spawn(ServerSession::accept(
+        s,
+        server_opts(ServerAuth::VncPassword(b"pw".to_vec())),
+    ));
+    let (mut client, _) = ClientSession::connect(c, client_opts(Some(b"pw")))
+        .await
+        .unwrap();
+    let mut server = server.await.unwrap().unwrap();
+    assert!(
+        client.bytes_sent() > 0 && client.bytes_received() > 0,
+        "the handshake counts"
+    );
+
+    client
+        .send(&ClientMessage::ClientCutText(b"hello".to_vec()))
+        .await
+        .unwrap();
+    server.next_message().await.unwrap();
+    server.send(&ServerMessage::Bell).await.unwrap();
+    client.next_event().await.unwrap();
+
+    // Everything one side wrote, the other read.
+    assert_eq!(client.bytes_sent(), server.bytes_received());
+    assert_eq!(server.bytes_sent(), client.bytes_received());
+}
