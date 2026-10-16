@@ -199,6 +199,8 @@ pub struct Dashboard {
     out_history: VecDeque<f32>,
     in_history: VecDeque<f32>,
     /// Bytes per second out and in, one point per second, for the chart.
+    /// Clients waiting for approval.
+    pending: Vec<rfb_server::PendingRequest>,
     long_out: VecDeque<f32>,
     long_in: VecDeque<f32>,
     /// Sum and count of the samples of the second in progress, and when it began.
@@ -319,6 +321,7 @@ impl Dashboard {
             rates: (0.0, 0.0),
             out_history: VecDeque::new(),
             in_history: VecDeque::new(),
+            pending: Vec::new(),
             long_out: VecDeque::new(),
             long_in: VecDeque::new(),
             second: (0.0, 0.0, 0, 0.0),
@@ -387,6 +390,7 @@ impl Dashboard {
             let elapsed = (now - self.last_sample).min(5.0);
             self.clients = self.backend.clients();
             self.status = self.backend.status();
+            self.pending = self.backend.pending();
             let totals = self
                 .clients
                 .iter()
@@ -667,6 +671,7 @@ impl Dashboard {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = GAP;
+                        self.approval_cards(ui, &tokens);
                         match self.page {
                             Page::Overview => self.overview(ui, &tokens),
                             Page::Clients => self.clients_card(ui, &tokens),
@@ -1126,6 +1131,66 @@ impl Dashboard {
         });
     }
 
+    /// One card per client that signed in and waits for the operator.
+    fn approval_cards(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        let mut answer = None;
+        for request in &self.pending {
+            Self::card_frame(tokens, 24, 18)
+                .stroke(egui::Stroke::new(1.5_f32, Color32::from(tokens.accent)))
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+                    ui.label(eyebrow("Approval needed", tokens).color(tokens.accent_text));
+                    ui.label(heading(ui, "Connection request"));
+                    let who = request.user.as_deref().unwrap_or("A client");
+                    let from = request
+                        .peer
+                        .map_or_else(|| "this computer".to_owned(), |p| p.to_string());
+                    ui.label(
+                        RichText::new(format!(
+                            "{who} from {from} (protection: {}) wants to see this screen.",
+                            request.encryption
+                        ))
+                        .color(tokens.muted),
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let allow = egui::Button::new(
+                            RichText::new("Allow").color(Color32::WHITE).strong(),
+                        )
+                        .fill(Color32::from(tokens.accent))
+                        .min_size(vec2(90.0, 32.0));
+                        if ui.add(allow).clicked() {
+                            answer = Some((request.clone(), rfb_server::Decision::Allow));
+                        }
+                        if ui.button("Allow view only").clicked() {
+                            answer = Some((request.clone(), rfb_server::Decision::ViewOnly));
+                        }
+                        if ui.button("Deny").clicked() {
+                            answer = Some((request.clone(), rfb_server::Decision::Deny));
+                        }
+                    });
+                });
+        }
+        if let Some((request, decision)) = answer {
+            let who = request.user.clone().unwrap_or_else(|| {
+                request
+                    .peer
+                    .map_or_else(|| "a client".to_owned(), |p| p.to_string())
+            });
+            if self.backend.decide(request.id, decision) {
+                self.log.push(
+                    Level::Info,
+                    match decision {
+                        rfb_server::Decision::Allow => format!("allowed {who} in"),
+                        rfb_server::Decision::ViewOnly => format!("allowed {who} in, view only"),
+                        rfb_server::Decision::Deny => format!("denied {who}"),
+                    },
+                );
+            }
+            self.pending.retain(|p| p.id != request.id);
+        }
+    }
+
     /// Whether `text` matches the top bar's search (always, when it is empty).
     fn matches_search(&self, text: &str) -> bool {
         let needle = self.search.trim().to_lowercase();
@@ -1553,6 +1618,10 @@ impl Dashboard {
             }
             ui.checkbox(&mut self.security.edit.ra2, "Offer RSA-AES (needs users)");
             ui.checkbox(&mut self.security.edit.view_only, "View only for everyone");
+            ui.checkbox(
+                &mut self.security.edit.require_approval,
+                "Ask before a client gets in",
+            );
             ui.horizontal(|ui| {
                 ui.label("Listen on");
                 ui.text_edit_singleline(&mut self.security.listen_text);

@@ -35,6 +35,9 @@ pub struct ServerSettings {
     /// Drop input from every client.
     #[serde(default)]
     pub view_only: bool,
+    /// Hold every new client until the operator allows it.
+    #[serde(default)]
+    pub require_approval: bool,
 }
 
 impl Default for ServerSettings {
@@ -45,6 +48,7 @@ impl Default for ServerSettings {
             tls: TlsMode::Off,
             ra2: false,
             view_only: false,
+            require_approval: false,
         }
     }
 }

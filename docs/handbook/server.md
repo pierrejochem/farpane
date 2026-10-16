@@ -28,6 +28,10 @@ By default the server listens on `127.0.0.1:5900` and refuses a non-loopback add
 
 Accounts sign in by name and password inside encryption: TLS (`--tls-self-signed` or `--tls-cert` and `--tls-key`) or RSA-AES (`--ra2`). The server prints the certificate and RSA key fingerprints at start; give them to your users so they can compare them in the viewer.
 
+## Approving connections
+
+With `--require-approval` (or **Ask before a client gets in** on the Security page) every client that signs in waits until you answer. The dashboard shows an **Approval needed** card on every page with **Allow**, **Allow view only** and **Deny**. The client sees an open connection but no pictures meanwhile; with no answer in 60 seconds it is turned away. Decisions go into the event log.
+
 ## The dashboard
 
 ![The Overview page of the Farpane Server dashboard](screenshots/server-overview.png){: width="1100" height="760" loading="lazy"}
@@ -59,4 +63,4 @@ The config folder is `/etc/farpane` if it exists, else `~/.config/farpane` (set 
 
 ## Limits
 
-One display, no Windows or macOS capture yet, no WebSocket listener for browsers, and no approval prompt for new connections.
+One display, no Windows or macOS capture yet, and no WebSocket listener for browsers.

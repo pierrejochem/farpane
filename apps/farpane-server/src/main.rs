@@ -52,6 +52,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --allow-no-auth        accept connections without credentials on a
                          non-loopback address (a bad idea without a tunnel)
   --max-connections N    most connections at once, handshakes included (default 256)
+  --require-approval     hold each new client until you allow it in the dashboard
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
@@ -73,6 +74,7 @@ struct Args {
     fps: u32,
     max_connections: Option<usize>,
     theme: Option<farpane_ui::ThemePreference>,
+    require_approval: bool,
     password: Option<Vec<u8>>,
     view_only: bool,
     allow_no_auth: bool,
@@ -111,6 +113,7 @@ fn parse() -> Result<Args, String> {
         fps: 30,
         max_connections: None,
         theme: None,
+        require_approval: false,
         password: std::env::var("FARPANE_PASSWORD")
             .ok()
             .filter(|p| !p.is_empty())
@@ -145,6 +148,7 @@ fn parse() -> Result<Args, String> {
                     .parse()
                     .map_err(|_| "--ui-delay: seconds")?;
             }
+            "--require-approval" => args.require_approval = true,
             "--theme" => {
                 use farpane_ui::ThemePreference as T;
                 let name = value(&mut it, "--theme")?;
@@ -241,6 +245,7 @@ fn with_saved_settings(mut args: Args) -> Result<Args, String> {
     }
     args.ra2 |= saved.ra2;
     args.view_only |= saved.view_only;
+    args.require_approval |= saved.require_approval;
     Ok(args)
 }
 
@@ -304,6 +309,12 @@ fn describe(event: &Event) -> String {
             error
                 .as_ref()
                 .map_or_else(String::new, |e| format!(": {e}"))
+        ),
+        Event::Denied { peer, user, reason } => format!(
+            "{} was turned away{}: {reason}",
+            who(peer),
+            user.as_ref()
+                .map_or_else(String::new, |u| format!(" ({u:?})"))
         ),
         Event::AuthFailed { peer } => format!("{} failed to sign in", who(peer)),
         Event::HandshakeFailed { peer, error } => {
@@ -492,10 +503,13 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     if let Some(max) = args.max_connections {
         server.set_max_connections(max);
     }
+    server.set_require_approval(args.require_approval);
     let sink = events.clone();
     server.set_events(move |e| {
         let level = match e {
-            Event::AuthFailed { .. } | Event::HandshakeFailed { .. } => Level::Warning,
+            Event::AuthFailed { .. } | Event::HandshakeFailed { .. } | Event::Denied { .. } => {
+                Level::Warning
+            }
             _ => Level::Info,
         };
         note(&sink, level, &describe(e));
@@ -545,6 +559,11 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             "Shared password (VNC Auth)".to_owned(),
             "Legacy, 8 characters".to_owned(),
             access.authenticator.is_none() && args.password.is_some(),
+        ),
+        (
+            "Operator approval".to_owned(),
+            "Each new client waits for you".to_owned(),
+            args.require_approval,
         ),
         (
             "No authentication".to_owned(),

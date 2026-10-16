@@ -28,13 +28,17 @@ The server keeps its own user list in `users.toml` (mode 0600). Passwords are ha
 - **Throttle**: delays of 1, 2, 4 ... 30 seconds per address (an IPv6 /64 counts as one address) after failures.
 - **Limits**: at most 4 password hashes at once, 32 connections per address and 256 in total by default.
 
+## Approval
+
+The server can hold every new client until you allow it (`--require-approval`), as view only if you like. An unanswered request is refused after 60 seconds.
+
 ## Input and clipboard
 
 A view-only user or client has all keyboard, pointer and clipboard input ignored. Keys and buttons a client still holds are released when it disconnects or is made view-only. The viewer drops control characters from clipboard text it receives, so a remote machine cannot slip escape sequences into a terminal paste.
 
 ## Not supported
 
-SASL, Apple DH, MS-Logon II, the two-step RSA-AES types, client certificates, per-connection approval prompts and allowed-network lists.
+SASL, Apple DH, MS-Logon II, the two-step RSA-AES types, client certificates and allowed-network lists.
 
 ## Reporting a problem
 

@@ -20,6 +20,7 @@ struct Calls {
     disconnected: Vec<u64>,
     view_only: Vec<(u64, bool)>,
     paused: Vec<bool>,
+    decided: Vec<(u64, rfb_server::Decision)>,
 }
 
 #[derive(Debug)]
@@ -27,6 +28,7 @@ struct Fake {
     clients: Mutex<Vec<ClientInfo>>,
     calls: Mutex<Calls>,
     failure: Mutex<Option<String>>,
+    pending: Mutex<Vec<rfb_server::PendingRequest>>,
 }
 
 impl Backend for Fake {
@@ -51,6 +53,16 @@ impl Backend for Fake {
                 ("No authentication".into(), "Anyone gets in".into(), false),
             ],
         }
+    }
+
+    fn pending(&self) -> Vec<rfb_server::PendingRequest> {
+        self.pending.lock().unwrap().clone()
+    }
+
+    fn decide(&self, id: u64, decision: rfb_server::Decision) -> bool {
+        self.calls.lock().unwrap().decided.push((id, decision));
+        self.pending.lock().unwrap().retain(|p| p.id != id);
+        true
     }
 
     fn set_paused(&self, paused: bool) {
@@ -111,6 +123,7 @@ fn rig(clients: Vec<ClientInfo>) -> (Rig, Harness<'static, Dashboard>) {
         clients: Mutex::new(clients),
         calls: Mutex::default(),
         failure: Mutex::new(None),
+        pending: Mutex::new(Vec::new()),
     });
     let log = EventLog::new();
     let dashboard = Dashboard::new(
@@ -525,4 +538,37 @@ fn the_displays_page_shows_what_is_shared() {
     settle(&mut h);
     h.get_by_label("test pattern");
     h.get_by_label("320 × 200");
+}
+
+#[test]
+fn a_waiting_client_gets_an_approval_card_and_the_answer_goes_to_the_server() {
+    let (rig, mut h) = rig(vec![]);
+    rig.fake
+        .pending
+        .lock()
+        .unwrap()
+        .push(rfb_server::PendingRequest {
+            id: 7,
+            peer: Some(SocketAddr::from(([192, 0, 2, 44], 50_000))),
+            user: Some("anna".into()),
+            encryption: "RSA-AES",
+            waiting_for: Duration::from_secs(3),
+        });
+    settle(&mut h);
+    h.get_by_label("Connection request");
+    h.get_by_label_contains("anna from 192.0.2.44:50000");
+    h.get_by_label("Allow view only").click();
+    settle(&mut h);
+    assert_eq!(
+        rig.fake.calls.lock().unwrap().decided,
+        [(7, rfb_server::Decision::ViewOnly)]
+    );
+    assert!(h.query_by_label("Connection request").is_none(), "answered");
+    let lines: Vec<String> = rig.log.lines().into_iter().map(|l| l.text).collect();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("anna") && l.contains("view only")),
+        "{lines:?}"
+    );
 }

@@ -148,6 +148,14 @@ pub trait Backend: Send + Sync {
     fn preview(&self, max_edge: u16) -> Preview;
     /// Pause or resume sharing.
     fn set_paused(&self, _paused: bool) {}
+    /// Clients waiting for the operator's approval.
+    fn pending(&self) -> Vec<rfb_server::PendingRequest> {
+        Vec::new()
+    }
+    /// Answer a waiting client.
+    fn decide(&self, _id: u64, _decision: rfb_server::Decision) -> bool {
+        false
+    }
 }
 
 /// The real thing: a running [`Server`].
@@ -193,6 +201,14 @@ impl Backend for LiveBackend {
 
     fn set_paused(&self, paused: bool) {
         self.server.set_paused(paused);
+    }
+
+    fn pending(&self) -> Vec<rfb_server::PendingRequest> {
+        self.server.pending()
+    }
+
+    fn decide(&self, id: u64, decision: rfb_server::Decision) -> bool {
+        self.server.decide(id, decision)
     }
 }
 

@@ -1564,3 +1564,102 @@ async fn connections_beyond_the_limit_are_dropped_at_once_and_slots_come_back() 
     v.request(false).await;
     v.update().await;
 }
+
+/// A server that holds clients for approval.
+fn approving(input: Recording) -> Server {
+    let mut server = Server::new(
+        TestPattern::new(64, 64),
+        input,
+        options(),
+        Settings::default(),
+    )
+    .unwrap();
+    server.set_require_approval(true);
+    server
+}
+
+/// Wait for a client to appear in the pending list and answer it.
+async fn answer_when_waiting(server: &Arc<Server>, decision: rfb_server::Decision) {
+    for _ in 0..200 {
+        if let Some(p) = server.pending().first() {
+            assert!(server.decide(p.id, decision));
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("nobody was waiting for approval");
+}
+
+#[tokio::test]
+async fn an_approved_client_gets_pictures_and_input_only_after_the_answer() {
+    let input = Recording::default();
+    let server = Arc::new(approving(input.clone()));
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    v.key(0x61).await;
+    v.quiet(Duration::from_millis(500)).await;
+    assert_eq!(server.pending().len(), 1, "it waits");
+    assert!(
+        !v.other
+            .iter()
+            .any(|e| matches!(e, ClientConnEvent::UpdateBegin { .. })),
+        "no picture before approval"
+    );
+    assert!(server.clients().is_empty(), "not listed as a client yet");
+    let s = Arc::clone(&server);
+    tokio::spawn(async move { answer_when_waiting(&s, rfb_server::Decision::Allow).await });
+    let rects = v.update().await;
+    assert_ne!(rects.len(), 0, "a picture follows the approval");
+    assert_eq!(server.pending(), []);
+    assert_eq!(server.clients().len(), 1);
+    assert!(
+        input.seen().contains(&"key 61 true".to_owned()),
+        "what it sent while waiting is handled after: {:?}",
+        input.seen()
+    );
+}
+
+#[tokio::test]
+async fn view_only_approval_ignores_input_and_a_denial_closes_the_connection() {
+    let input = Recording::default();
+    let server = Arc::new(approving(input.clone()));
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    let s = Arc::clone(&server);
+    tokio::spawn(async move { answer_when_waiting(&s, rfb_server::Decision::ViewOnly).await });
+    v.request(false).await;
+    v.update().await;
+    v.key(0x62).await;
+    v.quiet(Duration::from_millis(300)).await;
+    assert!(input.seen().is_empty(), "{:?}", input.seen());
+    assert!(server.clients()[0].view_only);
+
+    let (mut denied, task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    let s = Arc::clone(&server);
+    tokio::spawn(async move { answer_when_waiting(&s, rfb_server::Decision::Deny).await });
+    denied.request(false).await;
+    let end = timeout(Duration::from_secs(5), denied.session.next_event())
+        .await
+        .expect("the server answered");
+    assert!(end.is_err(), "a denied client is disconnected");
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(server.clients().len(), 1, "only the allowed one is left");
+}
+
+#[tokio::test]
+async fn an_unanswered_client_is_turned_away_after_the_timeout() {
+    let mut server = approving(Recording::default());
+    server.set_approval_timeout(Duration::from_millis(300));
+    let server = Arc::new(server);
+    let (mut v, task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+    v.request(false).await;
+    let end = timeout(Duration::from_secs(5), v.session.next_event())
+        .await
+        .expect("the server answered");
+    assert!(end.is_err());
+    assert!(task.await.unwrap().is_err());
+    assert_eq!(server.pending(), []);
+    assert!(
+        !server.decide(1, rfb_server::Decision::Allow),
+        "nobody left to answer"
+    );
+}

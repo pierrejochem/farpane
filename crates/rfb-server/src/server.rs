@@ -90,6 +90,58 @@ pub struct Server {
     connections: AtomicUsize,
     max_connections: usize,
     max_per_address: usize,
+    /// Hold every signed-in client until the operator allows it.
+    require_approval: bool,
+    approval_timeout: Duration,
+    waiting: Mutex<Vec<Waiting>>,
+    next_waiting: AtomicU64,
+}
+
+/// A client that signed in and waits for the operator.
+struct Waiting {
+    id: u64,
+    peer: Option<SocketAddr>,
+    user: Option<String>,
+    encryption: &'static str,
+    since: Instant,
+    decide: Option<tokio::sync::oneshot::Sender<Decision>>,
+}
+
+/// What the operator decided about a waiting client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Decision {
+    /// Let it in with the rights its account has.
+    Allow,
+    /// Let it in, but ignore its keyboard, pointer and clipboard.
+    ViewOnly,
+    /// Close the connection.
+    Deny,
+}
+
+/// A client waiting for approval, as the dashboard lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingRequest {
+    pub id: u64,
+    pub peer: Option<SocketAddr>,
+    pub user: Option<String>,
+    /// `"TLS"`, `"RSA-AES"` or `"none"`.
+    pub encryption: &'static str,
+    pub waiting_for: Duration,
+}
+
+/// How long a client waits for approval before it is turned away.
+pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Removes a waiting client when its task ends, however it ends.
+struct WaitingGuard<'a>(&'a Mutex<Vec<Waiting>>, u64);
+
+impl Drop for WaitingGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .retain(|w| w.id != self.1);
+    }
 }
 
 /// Connections allowed at once unless [`Server::set_max_connections`] says otherwise.
@@ -160,6 +212,12 @@ pub enum Event {
     },
     /// Wrong or missing credentials.
     AuthFailed { peer: Option<SocketAddr> },
+    /// A client was refused entry: denied by the operator or not answered in time.
+    Denied {
+        peer: Option<SocketAddr>,
+        user: Option<String>,
+        reason: String,
+    },
     /// The handshake failed for another reason (timeout, bad protocol, TLS).
     HandshakeFailed {
         peer: Option<SocketAddr>,
@@ -212,6 +270,10 @@ impl Server {
             connections: AtomicUsize::new(0),
             max_connections: DEFAULT_MAX_CONNECTIONS,
             max_per_address: DEFAULT_MAX_PER_ADDRESS,
+            require_approval: false,
+            approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
+            waiting: Mutex::new(Vec::new()),
+            next_waiting: AtomicU64::new(1),
         })
     }
 
@@ -235,6 +297,48 @@ impl Server {
     /// as one address), so a single machine cannot fill every slot.
     pub fn set_max_per_address(&mut self, max: usize) {
         self.max_per_address = max.max(1);
+    }
+
+    /// Hold every client that signed in until the operator allows it (see
+    /// [`Server::pending`] and [`Server::decide`]). The client sees an open
+    /// connection but gets no pictures meanwhile; with no answer in the
+    /// timeout it is turned away.
+    pub fn set_require_approval(&mut self, on: bool) {
+        self.require_approval = on;
+    }
+
+    /// How long a client waits for approval.
+    pub fn set_approval_timeout(&mut self, timeout: Duration) {
+        self.approval_timeout = timeout;
+    }
+
+    /// Clients waiting for approval, oldest first.
+    #[must_use]
+    pub fn pending(&self) -> Vec<PendingRequest> {
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .map(|w| PendingRequest {
+                id: w.id,
+                peer: w.peer,
+                user: w.user.clone(),
+                encryption: w.encryption,
+                waiting_for: w.since.elapsed(),
+            })
+            .collect()
+    }
+
+    /// Answer a waiting client. `false` if it is no longer waiting.
+    pub fn decide(&self, id: u64, decision: Decision) -> bool {
+        let sender = self
+            .waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter_mut()
+            .find(|w| w.id == id)
+            .and_then(|w| w.decide.take());
+        sender.is_some_and(|tx| tx.send(decision).is_ok())
     }
 
     /// Receive [`Event`]s: sign-ins, hang-ups, failures.
@@ -466,6 +570,32 @@ impl Server {
                 .as_ref()
                 .map_or(Permission::Full, |f| f(user.as_deref()))
         };
+        let encryption = if session.is_encrypted() {
+            "TLS"
+        } else if session.is_ra2() {
+            "RSA-AES"
+        } else {
+            "none"
+        };
+        let mut permission = permission;
+        if self.require_approval {
+            match self.await_approval(peer, user.clone(), encryption).await {
+                Ok(Decision::Allow) => {}
+                Ok(Decision::ViewOnly) => permission = Permission::ViewOnly,
+                Ok(Decision::Deny) => {
+                    self.emit(&Event::Denied {
+                        peer,
+                        user,
+                        reason: "denied from the dashboard".to_owned(),
+                    });
+                    return Err(Error::Closed);
+                }
+                Err(reason) => {
+                    self.emit(&Event::Denied { peer, user, reason });
+                    return Err(Error::Closed);
+                }
+            }
+        }
         self.emit(&Event::Connected {
             peer,
             user: user.clone(),
@@ -477,13 +607,7 @@ impl Server {
             peer,
             user: user.clone(),
             since: Instant::now(),
-            encryption: if session.is_encrypted() {
-                "TLS"
-            } else if session.is_ra2() {
-                "RSA-AES"
-            } else {
-                "none"
-            },
+            encryption,
             view_only: AtomicBool::new(permission == Permission::ViewOnly),
             kick: tokio::sync::Notify::new(),
             bytes_in: AtomicU64::new(0),
@@ -513,6 +637,37 @@ impl Server {
             },
         });
         result
+    }
+
+    /// Wait for the operator. `Err` says why the client is turned away.
+    async fn await_approval(
+        &self,
+        peer: Option<SocketAddr>,
+        user: Option<String>,
+        encryption: &'static str,
+    ) -> Result<Decision, String> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let id = self.next_waiting.fetch_add(1, Ordering::Relaxed);
+        self.waiting
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(Waiting {
+                id,
+                peer,
+                user,
+                encryption,
+                since: Instant::now(),
+                decide: Some(tx),
+            });
+        let _guard = WaitingGuard(&self.waiting, id);
+        match tokio::time::timeout(self.approval_timeout, rx).await {
+            Ok(Ok(decision)) => Ok(decision),
+            Ok(Err(_)) => Err("the request was dropped".to_owned()),
+            Err(_) => Err(format!(
+                "nobody answered within {} s",
+                self.approval_timeout.as_secs()
+            )),
+        }
     }
 
     /// Accept connections on `listener` for ever, one task each. Use

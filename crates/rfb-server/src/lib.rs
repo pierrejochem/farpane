@@ -16,6 +16,9 @@ mod throttle;
 pub use region::Region;
 pub use registry::{ClientInfo, Preview};
 pub use scroll::{Copy, find_copy};
-pub use server::{DEFAULT_MAX_CONNECTIONS, Event, Permission, Server, Settings};
+pub use server::{
+    DEFAULT_APPROVAL_TIMEOUT, DEFAULT_MAX_CONNECTIONS, Decision, Event, PendingRequest, Permission,
+    Server, Settings,
+};
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
 pub use throttle::Throttle;
