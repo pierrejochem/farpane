@@ -65,6 +65,18 @@ impl Decoder {
                 copy_rect(fb, rect, payload)?;
                 Ok(Damage::Rect(rect))
             }
+            enc::RRE => {
+                crate::rre::decode(fb, &self.converter, rect, payload, false)?;
+                Ok(Damage::Rect(rect))
+            }
+            enc::CO_RRE => {
+                crate::rre::decode(fb, &self.converter, rect, payload, true)?;
+                Ok(Damage::Rect(rect))
+            }
+            enc::HEXTILE => {
+                crate::hextile::decode(fb, &self.converter, rect, payload)?;
+                Ok(Damage::Rect(rect))
+            }
             pseudo::DESKTOP_SIZE => {
                 fb.resize(rect.width, rect.height)?;
                 Ok(Damage::Resized)
