@@ -333,6 +333,7 @@ fn loopback(subtype: u32, version: V, accept: bool) -> Result<Option<Credentials
                 to_server.extend_from_slice(&o);
             }
             Some(ClientEvent::ServerInit { .. }) => c_done = true,
+            Some(ClientEvent::StartRa2 { .. }) => panic!("no RSA-AES here"),
             None => {}
         }
         let mut out = Vec::new();
@@ -355,6 +356,7 @@ fn loopback(subtype: u32, version: V, accept: bool) -> Result<Option<Credentials
                 s.server_init(8, 8, &PixelFormat::RGB888, b"x", &mut out)?;
                 s_done = true;
             }
+            Some(ServerEvent::Ra2Selected { .. }) => panic!("no RSA-AES here"),
             None => {}
         }
         to_client.extend_from_slice(&out);
@@ -453,7 +455,7 @@ fn plaintext_injected_before_tls_is_refused() {
         }
     };
     assert!(
-        matches!(r, Err(ProtoError::Malformed { ctx }) if ctx.contains("before the TLS")),
+        matches!(r, Err(ProtoError::Malformed { ctx }) if ctx.contains("before the encryption")),
         "{r:?}"
     );
 

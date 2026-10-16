@@ -1,6 +1,9 @@
 //! Turning command-line choices into the server's authentication and TLS.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use rfb_tokio::{ServerAuth, ServerOptions};
 
@@ -28,6 +31,8 @@ pub struct Access {
     /// `Some` when users sign in by name: asks for their role.
     pub authenticator: Option<Authenticator>,
     pub identity: Option<Identity>,
+    /// SHA-256 fingerprint of the RSA-AES public key, when it is offered.
+    pub ra2_fingerprint: Option<[u8; 32]>,
     /// One line for the log.
     pub description: String,
 }
@@ -64,6 +69,7 @@ pub fn choose(
     config_dir: &Path,
     password: Option<Vec<u8>>,
     tls: &TlsChoice,
+    ra2: bool,
     log: impl Fn(String) + Send + Sync + 'static,
 ) -> Result<Access, String> {
     let users = UserStore::load(&config_dir.join("users.toml")).map_err(|e| e.to_string())?;
@@ -77,11 +83,16 @@ pub fn choose(
             Some(tlsconf::load(cert, key).map_err(|e| format!("TLS certificate: {e}"))?)
         }
     };
+    let ra2_key = if ra2 {
+        Some(tlsconf::load_or_generate_ra2(config_dir).map_err(|e| format!("RSA-AES key: {e}"))?)
+    } else {
+        None
+    };
     let (auth, authenticator, what) = if users.has_enabled_users() {
-        if identity.is_none() {
+        if identity.is_none() && ra2_key.is_none() {
             return Err(
-                "users are defined, and signing in by name needs TLS so the password is \
-                 encrypted: pass --tls-self-signed (or --tls-cert and --tls-key)"
+                "users are defined, and signing in by name needs encryption so the password \
+                 is protected: pass --tls-self-signed (or --tls-cert and --tls-key), or --ra2"
                     .to_owned(),
             );
         }
@@ -100,14 +111,23 @@ pub fn choose(
     if let Some(id) = &identity {
         template = template.with_tls(id.config.clone());
     }
+    if let Some(key) = &ra2_key {
+        template = template.with_ra2(Arc::clone(key));
+    }
     let description = format!(
         "{what}, {}",
-        if identity.is_some() { "TLS" } else { "no TLS" }
+        match (identity.is_some(), ra2_key.is_some()) {
+            (true, true) => "TLS or RSA-AES",
+            (true, false) => "TLS",
+            (false, true) => "RSA-AES",
+            (false, false) => "no encryption",
+        }
     );
     Ok(Access {
         template,
         authenticator,
         identity,
+        ra2_fingerprint: ra2_key.map(|k| k.public().fingerprint()),
         description,
     })
 }

@@ -172,6 +172,12 @@ impl RemoteScreen {
                     pins: options.pins.clone(),
                     extra_roots: options.extra_roots.clone(),
                 }),
+                // The same pins serve for an RSA-AES server key: both are
+                // SHA-256 fingerprints the user confirmed.
+                ra2: Some(rfb_tokio::Ra2Options {
+                    server_name: host_of(addr).to_owned(),
+                    pins: options.pins.clone(),
+                }),
                 ..ClientOptions::default()
             },
         )

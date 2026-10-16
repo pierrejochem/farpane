@@ -184,9 +184,13 @@ impl ServerConn {
                 buf.advance(n);
                 // The client sends its TLS hello only after our go-ahead, so
                 // plaintext still buffered at this point was injected.
-                if matches!(ev, Some(ServerEvent::StartTls { .. })) && !buf.is_empty() {
+                if matches!(
+                    ev,
+                    Some(ServerEvent::StartTls { .. } | ServerEvent::Ra2Selected { .. })
+                ) && !buf.is_empty()
+                {
                     return Err(ProtoError::Malformed {
-                        ctx: "data received before the TLS handshake",
+                        ctx: "data received before the encryption handshake",
                     });
                 }
                 Ok(ev.map(ServerConnEvent::Handshake))

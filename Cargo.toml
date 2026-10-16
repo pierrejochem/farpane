@@ -49,3 +49,18 @@ strip = "symbols"
 # and tests.
 [profile.dev.package.argon2]
 opt-level = 3
+
+# RSA key generation is far too slow unoptimised (seconds), which makes tests
+# and debug runs of the RSA-AES handshake crawl.
+[profile.dev.package.rsa]
+opt-level = 3
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+[profile.dev.package.sha2]
+opt-level = 3
+[profile.dev.package.sha1]
+opt-level = 3
+[profile.dev.package.aes]
+opt-level = 3
+[profile.dev.package.eax]
+opt-level = 3

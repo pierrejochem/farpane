@@ -136,6 +136,14 @@ impl ClientConn {
         !matches!(self.state, State::Handshake | State::Failed)
     }
 
+    /// The RSA-AES handshake finished (after [`ClientEvent::StartRa2`]).
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if none was requested.
+    pub fn ra2_established(&mut self) -> Result<(), ProtoError> {
+        self.hs.ra2_established()
+    }
+
     /// The TLS handshake finished (after [`ClientEvent::StartTls`]).
     ///
     /// # Errors
@@ -226,9 +234,13 @@ impl ClientConn {
                 // The server cannot have sent anything encrypted yet, so
                 // anything still buffered was injected in the clear and would
                 // be read as if it came through TLS (a STARTTLS injection).
-                if matches!(ev, ClientEvent::StartTls { .. }) && !buf.is_empty() {
+                if matches!(
+                    ev,
+                    ClientEvent::StartTls { .. } | ClientEvent::StartRa2 { .. }
+                ) && !buf.is_empty()
+                {
                     return Err(ProtoError::Malformed {
-                        ctx: "data received before the TLS handshake",
+                        ctx: "data received before the encryption handshake",
                     });
                 }
                 if let ClientEvent::ServerInit {

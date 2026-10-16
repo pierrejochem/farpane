@@ -28,7 +28,15 @@ impl Default for ClientConfig {
             max_version: ProtocolVersion::V3_8,
             shared: true,
             // TLS first: a server that offers it gets a protected session.
-            security: vec![security::VENCRYPT, security::VNC_AUTH, security::NONE],
+            // TLS first, then RSA-AES (which needs a user name and password
+            // and a pinned key; the caller removes what it cannot use).
+            security: vec![
+                security::VENCRYPT,
+                security::RA2_256,
+                security::RA2,
+                security::VNC_AUTH,
+                security::NONE,
+            ],
             vencrypt: vec![
                 vencrypt::X509_NONE,
                 vencrypt::X509_VNC,
@@ -47,6 +55,11 @@ pub enum ClientEvent {
     /// then call [`ClientHandshake::tls_established`]. Nothing may be sent or
     /// read in the clear after this point.
     StartTls { subtype: u32 },
+    /// An RSA-AES security type was chosen (`security` is 5, 6, 129 or 130):
+    /// run its handshake over the transport, then call
+    /// [`ClientHandshake::ra2_established`]. The server's public key is the
+    /// first thing to arrive; nothing is buffered before it.
+    StartRa2 { security: u8 },
     /// `X509Plain`: answer with [`ClientHandshake::plain_credentials`].
     PlainCredentialsNeeded,
     /// Handshake complete; the connection is now in the message loop.
@@ -74,6 +87,10 @@ enum State {
     VencryptSelectAck,
     /// Waiting for the caller to finish the TLS handshake.
     AwaitTls,
+    /// An RSA-AES type was chosen: report it to the caller.
+    Ra2Start,
+    /// Waiting for the caller to finish the RSA-AES handshake.
+    AwaitRa2,
     /// Waiting for the caller to supply a username and password.
     AwaitCredentials,
     Done,
@@ -88,6 +105,8 @@ pub struct ClientHandshake {
     version: ProtocolVersion,
     /// The `VeNCrypt` subtype chosen, once there is one.
     subtype: Option<u32>,
+    /// The RSA-AES security type chosen.
+    ra2: Option<u8>,
     /// `PlainCredentialsNeeded` was reported for the current wait.
     credentials_asked: bool,
 }
@@ -107,6 +126,7 @@ impl ClientHandshake {
             state: State::AwaitVersion,
             version,
             subtype: None,
+            ra2: None,
             credentials_asked: false,
         }
     }
@@ -182,6 +202,22 @@ impl ClientHandshake {
             Some(vencrypt::X509_PLAIN) => State::AwaitCredentials,
             _ => return Err(ProtoError::NoAcceptableSecurity),
         };
+        Ok(())
+    }
+
+    /// The RSA-AES handshake finished (after [`ClientEvent::StartRa2`]): the
+    /// server's `SecurityResult` comes next, encrypted for 5 and 129 and in
+    /// the clear for 6 and 130, which the caller's transport takes care of.
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if no RSA-AES handshake was requested.
+    pub fn ra2_established(&mut self) -> Result<(), ProtoError> {
+        if self.state != State::AwaitRa2 {
+            return Err(ProtoError::Malformed {
+                ctx: "ra2_established out of order",
+            });
+        }
+        self.state = State::AwaitSecurityResult;
         Ok(())
     }
 
@@ -355,9 +391,16 @@ impl ClientHandshake {
                 self.credentials_asked = true;
                 Ok(Progress::Event(0, ClientEvent::PlainCredentialsNeeded))
             }
-            State::AwaitReply | State::AwaitTls | State::AwaitCredentials | State::Done => {
-                Ok(Progress::Idle)
+            State::Ra2Start => {
+                self.state = State::AwaitRa2;
+                let security = self.ra2.unwrap_or_default();
+                Ok(Progress::Event(0, ClientEvent::StartRa2 { security }))
             }
+            State::AwaitReply
+            | State::AwaitTls
+            | State::AwaitRa2
+            | State::AwaitCredentials
+            | State::Done => Ok(Progress::Idle),
             State::Failed => Err(ProtoError::Malformed {
                 ctx: "handshake already failed",
             }),
@@ -375,6 +418,12 @@ impl ClientHandshake {
             security::VNC_AUTH => self.state = State::AwaitChallenge,
             security::VENCRYPT if self.version != ProtocolVersion::V3_3 => {
                 self.state = State::VencryptVersion;
+            }
+            security::RA2 | security::RA2NE | security::RA2_256 | security::RA2NE_256
+                if self.version != ProtocolVersion::V3_3 =>
+            {
+                self.ra2 = Some(chosen);
+                self.state = State::Ra2Start;
             }
             _ => return Err(ProtoError::NoAcceptableSecurity),
         }

@@ -8,7 +8,7 @@ use rfb_proto::{
     handshake::{ServerConfig, ServerEvent},
     msg::{client::ClientMessage, server::ServerMessage},
 };
-use rfb_security::vnc_auth;
+use rfb_security::{ra2::Variant, vnc_auth};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     time::timeout,
@@ -61,6 +61,18 @@ pub struct ServerOptions {
     /// Offer `VeNCrypt` with this certificate. Without it the session stays
     /// unencrypted and `ServerAuth::Plain` is refused.
     pub tls: Option<Arc<rustls::ServerConfig>>,
+    /// Offer RSA-AES with this key. Needs [`ServerAuth::Plain`]: the
+    /// credentials travel inside the encrypted channel.
+    pub ra2: Option<Ra2Server>,
+}
+
+/// The server's RSA-AES settings.
+#[derive(Debug, Clone)]
+pub struct Ra2Server {
+    pub key: Arc<rfb_security::ra2::KeyPair>,
+    /// Also offer `RA2ne` and `RA2ne_256`, which encrypt only the handshake.
+    /// Meant for a connection that is already protected (a TLS WebSocket).
+    pub allow_unencrypted: bool,
 }
 
 impl ServerOptions {
@@ -74,7 +86,18 @@ impl ServerOptions {
             name: name.to_vec(),
             handshake_timeout: HANDSHAKE_TIMEOUT,
             tls: None,
+            ra2: None,
         }
+    }
+
+    /// Offer RSA-AES (`RA2` and `RA2_256`) with `key`; see [`ServerOptions::ra2`].
+    #[must_use]
+    pub fn with_ra2(mut self, key: Arc<rfb_security::ra2::KeyPair>) -> Self {
+        self.ra2 = Some(Ra2Server {
+            key,
+            allow_unencrypted: false,
+        });
+        self
     }
 
     /// Offer `VeNCrypt` TLS with `config`.
@@ -104,21 +127,38 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     /// [`Error::HandshakeTimeout`], [`Error::AuthFailed`] (the client has been
     /// told), I/O and protocol errors.
     pub async fn accept(stream: S, opts: ServerOptions) -> Result<Self, Error> {
-        let (security, subtype) = match (&opts.tls, &opts.auth) {
-            (None, ServerAuth::None) => (security::NONE, None),
-            (None, ServerAuth::VncPassword(_)) => (security::VNC_AUTH, None),
-            (None, ServerAuth::Plain(_)) => {
-                return Err(Error::Config("username and password need TLS"));
+        let mut security_types = Vec::new();
+        let mut subtypes = Vec::new();
+        match (&opts.tls, &opts.auth) {
+            (None, ServerAuth::None) => security_types.push(security::NONE),
+            (None, ServerAuth::VncPassword(_)) => security_types.push(security::VNC_AUTH),
+            (None, ServerAuth::Plain(_)) if opts.ra2.is_none() => {
+                return Err(Error::Config("username and password need TLS or RSA-AES"));
             }
-            (Some(_), ServerAuth::None) => (security::VENCRYPT, Some(vencrypt::X509_NONE)),
-            (Some(_), ServerAuth::VncPassword(_)) => (security::VENCRYPT, Some(vencrypt::X509_VNC)),
-            (Some(_), ServerAuth::Plain(_)) => (security::VENCRYPT, Some(vencrypt::X509_PLAIN)),
-        };
+            (None, ServerAuth::Plain(_)) => {}
+            (Some(_), auth) => {
+                security_types.push(security::VENCRYPT);
+                subtypes.push(match auth {
+                    ServerAuth::None => vencrypt::X509_NONE,
+                    ServerAuth::VncPassword(_) => vencrypt::X509_VNC,
+                    ServerAuth::Plain(_) => vencrypt::X509_PLAIN,
+                });
+            }
+        }
+        if let Some(ra2) = &opts.ra2 {
+            if !matches!(opts.auth, ServerAuth::Plain(_)) {
+                return Err(Error::Config("RSA-AES needs user names and passwords"));
+            }
+            security_types.extend([security::RA2_256, security::RA2]);
+            if ra2.allow_unencrypted {
+                security_types.extend([security::RA2NE_256, security::RA2NE]);
+            }
+        }
         let mut io = Io::new(Transport::Plain(stream));
         let conn = ServerConn::new(
             ServerConfig {
-                security: vec![security],
-                vencrypt: subtype.into_iter().collect(),
+                security: security_types,
+                vencrypt: subtypes,
                 ..ServerConfig::default()
             },
             &mut io.outbuf,
@@ -136,6 +176,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
         Ok(session)
     }
 
+    #[allow(clippy::too_many_lines)] // one arm per handshake event
     async fn handshake(&mut self, opts: &ServerOptions) -> Result<(), Error> {
         self.io.flush().await?; // the version message
         while !self.conn.is_established() {
@@ -179,6 +220,33 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
                         self.io.stream.upgrade_server(config).await?;
                         self.conn.tls_established(&mut self.io.outbuf)?;
                         self.io.flush().await?;
+                    }
+                    ServerEvent::Ra2Selected { security } => {
+                        let (variant, keep) = Variant::from_security(security)
+                            .ok_or(Error::Config("unsupported RSA-AES type"))?;
+                        let (ServerAuth::Plain(verifier), Some(ra2)) = (&opts.auth, &opts.ra2)
+                        else {
+                            unreachable!("RSA-AES is only offered with a verifier and a key");
+                        };
+                        let (username, password) =
+                            self.io.stream.ra2_server(variant, keep, &ra2.key).await?;
+                        let check = Arc::clone(&verifier.0);
+                        let (user, pass) = (username.clone(), password);
+                        let ok = tokio::task::spawn_blocking(move || check(&user, &pass))
+                            .await
+                            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                        if ok {
+                            self.username = Some(username);
+                        }
+                        self.conn.security_result(
+                            ok,
+                            b"authentication failed",
+                            &mut self.io.outbuf,
+                        )?;
+                        self.io.flush().await?;
+                        if !ok {
+                            return Err(Error::AuthFailed);
+                        }
                     }
                     ServerEvent::PlainCredentials { username, password } => {
                         let ServerAuth::Plain(verifier) = &opts.auth else {
@@ -269,6 +337,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     pub async fn send(&mut self, msg: &ServerMessage) -> Result<(), Error> {
         self.conn.send(msg, &mut self.io.outbuf)?;
         self.io.flush().await
+    }
+
+    /// Whether the session runs inside RSA-AES encryption.
+    #[must_use]
+    pub fn is_ra2(&self) -> bool {
+        self.io.stream.is_ra2()
     }
 
     /// Whether the session runs inside TLS.

@@ -18,7 +18,7 @@ pub enum Error {
     AuthFailed,
     /// The server wants a username (`VeNCrypt` `X509Plain`) and none was given.
     UsernameRequired,
-    /// The server's TLS certificate is not trusted. Show `fingerprint` to the
+    /// The server's TLS certificate (or RSA-AES public key) is not trusted. Show `fingerprint` to the
     /// user; if they accept it, pin it and connect again.
     Untrusted {
         host: String,
@@ -27,6 +27,8 @@ pub enum Error {
     },
     /// The TLS handshake failed for another reason.
     Tls(String),
+    /// The RSA-AES handshake failed (a bad key, message or length).
+    Ra2(String),
     /// The options do not make sense together.
     Config(&'static str),
 }
@@ -58,6 +60,7 @@ impl fmt::Display for Error {
                 )
             }
             Self::Tls(e) => write!(f, "TLS error: {e}"),
+            Self::Ra2(e) => write!(f, "{e}"),
             Self::Config(e) => write!(f, "invalid options: {e}"),
         }
     }
