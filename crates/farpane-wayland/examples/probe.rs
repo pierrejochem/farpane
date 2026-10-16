@@ -1,6 +1,6 @@
 //! Live check of the Wayland backend's input: moves the pointer to three
 //! places (no clicks, no keys except a Shift tap), asks the X server which
-//! XWayland reports where the pointer is, and puts the pointer back.
+//! `XWayland` reports where the pointer is, and puts the pointer back.
 //!
 //! `cargo run -p farpane-wayland --example probe` (answer the portal dialog).
 
