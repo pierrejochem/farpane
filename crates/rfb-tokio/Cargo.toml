@@ -14,9 +14,12 @@ rfb-security.workspace = true
 bytes = { workspace = true, features = ["std"] }
 tokio = { version = "1.53.3", features = ["io-util", "time"] }
 getrandom = "0.4.3"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+rcgen = "0.14.7"
 tokio = { version = "1.53.3", features = ["rt", "macros", "net", "io-util", "time", "test-util"] }

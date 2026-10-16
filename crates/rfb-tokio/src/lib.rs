@@ -17,10 +17,12 @@ mod client;
 mod error;
 mod io;
 mod server;
+mod transport;
 
-pub use client::{ClientOptions, ClientSession, ServerInfo};
+pub use client::{ClientOptions, ClientSession, ServerInfo, TlsOptions};
 pub use error::Error;
-pub use server::{ServerAuth, ServerOptions, ServerSession};
+pub use server::{PlainVerifier, ServerAuth, ServerOptions, ServerSession};
+pub use transport::Transport;
 
 /// How long a handshake may take before the session gives up (design doc,
 /// section 15, "Limits").
