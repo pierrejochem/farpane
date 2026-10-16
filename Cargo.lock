@@ -775,6 +775,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
+ "x11-dl",
  "x11rb 0.14.0",
 ]
 
