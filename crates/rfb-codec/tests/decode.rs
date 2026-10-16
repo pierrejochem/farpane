@@ -266,3 +266,98 @@ fn rgba_copies_a_rect_in_texture_order() {
         Err(DecodeError::OutOfBounds)
     );
 }
+
+#[test]
+fn cursor_decodes_pixels_and_mask_with_the_hotspot() {
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    // 10 x 2 cursor, hotspot (3, 1). Wire pixels are B, G, R, X: pixel i has
+    // red = i + 1, green 0, blue 0 (so wire bytes [0, 0, i + 1, 0]).
+    let mut payload = Vec::new();
+    for i in 0..20u8 {
+        payload.extend([0, 0, i + 1, 0]);
+    }
+    // Mask rows are 2 bytes (10 bits, padded). Row 0: bits 1,0,0,0,0,0,0,0 | 0,1.
+    payload.extend([0b1000_0000, 0b0100_0000]);
+    payload.extend([0b0000_0000, 0b0000_0000]);
+    let h = header(pseudo::CURSOR, 3, 1, 10, 2);
+    let damage = dec.decode(&mut fb, &h, &payload).unwrap();
+    let Damage::Cursor(c) = damage else {
+        panic!("{damage:?}")
+    };
+    assert_eq!((c.hotspot, c.width, c.height), ((3, 1), 10, 2));
+    assert_eq!(c.rgba.len(), 10 * 2 * 4);
+    let px = |x: usize, y: usize| &c.rgba[(y * 10 + x) * 4..(y * 10 + x) * 4 + 4];
+    assert_eq!(
+        px(0, 0),
+        [1, 0, 0, 255],
+        "mask bit 7 of byte 0 is the leftmost pixel"
+    );
+    assert_eq!(px(1, 0), [2, 0, 0, 0], "clear bit: transparent");
+    assert_eq!(
+        px(9, 0),
+        [10, 0, 0, 255],
+        "second mask byte starts at pixel 8"
+    );
+    assert_eq!(px(8, 0), [9, 0, 0, 0]);
+    assert_eq!(px(0, 1), [11, 0, 0, 0], "second row is fully transparent");
+    assert_eq!(
+        fb,
+        Framebuffer::new(4, 4).unwrap(),
+        "the picture is untouched"
+    );
+}
+
+#[test]
+fn hidden_and_malformed_cursors() {
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    // 0 x 0 hides the cursor: no pixels, no mask.
+    let Ok(Damage::Cursor(c)) = dec.decode(&mut fb, &header(pseudo::CURSOR, 0, 0, 0, 0), &[])
+    else {
+        panic!("expected a cursor");
+    };
+    assert!(c.rgba.is_empty());
+    // Wrong payload size: pixels but no mask.
+    assert_eq!(
+        dec.decode(&mut fb, &header(pseudo::CURSOR, 0, 0, 2, 2), &[0; 16]),
+        Err(DecodeError::Malformed("Cursor payload size"))
+    );
+    // A cursor may be larger than the framebuffer and its position is a
+    // hotspot, not a location: no bounds check.
+    let payload = vec![0u8; 8 * 8 * 4 + 8];
+    assert!(
+        dec.decode(
+            &mut fb,
+            &header(pseudo::CURSOR, 60_000, 60_000, 8, 8),
+            &payload
+        )
+        .is_ok()
+    );
+}
+
+#[test]
+fn cursor_uses_the_session_pixel_format() {
+    let pf16 = PixelFormat {
+        bits_per_pixel: 16,
+        depth: 16,
+        red_max: 31,
+        green_max: 63,
+        blue_max: 31,
+        red_shift: 11,
+        green_shift: 5,
+        blue_shift: 0,
+        ..PixelFormat::RGB888
+    };
+    let mut dec = Decoder::new(&pf16).unwrap();
+    // One pure-red RGB565 pixel (little-endian 0xF800), opaque.
+    let payload = [0x00, 0xF8, 0b1000_0000];
+    let Ok(Damage::Cursor(c)) = dec.decode(
+        &mut Framebuffer::new(1, 1).unwrap(),
+        &header(pseudo::CURSOR, 0, 0, 1, 1),
+        &payload,
+    ) else {
+        panic!("expected a cursor");
+    };
+    assert_eq!(c.rgba, [255, 0, 0, 255]);
+}

@@ -10,6 +10,7 @@ use egui::{
     RichText, Sense, TextEdit, TextureHandle, TextureOptions, UserData, ViewportCommand, vec2,
 };
 use farpane_ui::{Accent, ThemePreference, Tokens, style};
+use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
 
 use crate::{
@@ -25,6 +26,21 @@ pub struct Startup {
     pub password: Option<Vec<u8>>,
     /// Save a screenshot of the window to this file and quit (for testing).
     pub ui_screenshot: Option<PathBuf>,
+}
+
+/// Cursors wider or taller than this are not drawn (the server still thinks
+/// we show them, so we hide ours rather than the local one).
+const MAX_CURSOR_PX: u16 = 512;
+
+/// The server's cursor, drawn by us at the pointer.
+enum RemoteCursor {
+    /// An empty shape: show no cursor at all.
+    Hidden,
+    Shape {
+        texture: TextureHandle,
+        hotspot: (u16, u16),
+        size: (u16, u16),
+    },
 }
 
 #[derive(Debug)]
@@ -46,6 +62,8 @@ pub struct ViewerApp {
     one_to_one: bool,
     texture: Option<TextureHandle>,
     remote_size: (u16, u16),
+    /// `None` until the server sends a shape: then the local arrow is shown.
+    cursor: Option<RemoteCursor>,
     keys: KeyTranslator,
     pointer: PointerTranslator,
     last_remote_pos: (u16, u16),
@@ -88,6 +106,7 @@ impl ViewerApp {
             one_to_one: false,
             texture: None,
             remote_size: (0, 0),
+            cursor: None,
             keys: KeyTranslator::default(),
             pointer: PointerTranslator::default(),
             last_remote_pos: (0, 0),
@@ -113,6 +132,16 @@ impl ViewerApp {
     #[must_use]
     pub fn remote_size(&self) -> (u16, u16) {
         self.remote_size
+    }
+
+    /// Size of the remote cursor shape: `None` before the server sent one,
+    /// `Some((0, 0))` when it asked to hide the cursor.
+    #[must_use]
+    pub fn remote_cursor_size(&self) -> Option<(u16, u16)> {
+        match self.cursor.as_ref()? {
+            RemoteCursor::Hidden => Some((0, 0)),
+            RemoteCursor::Shape { size, .. } => Some(*size),
+        }
     }
 
     /// Draw one frame: handle connection events, draw, forward input.
@@ -177,16 +206,37 @@ impl ViewerApp {
                 }
                 UiEvent::Resized { width, height } => self.new_texture(ctx, width, height),
                 UiEvent::Frame { rect, rgba } => self.upload(rect, &rgba),
+                UiEvent::Cursor(cursor) => self.set_cursor(ctx, &cursor),
                 UiEvent::Bell | UiEvent::CutText(_) => {}
                 UiEvent::Disconnected(reason) => {
                     self.phase = Phase::Home;
                     self.error = reason;
                     self.texture = None;
+                    self.cursor = None;
                     self.connected_at = None;
                     self.release_input();
                 }
             }
         }
+    }
+
+    fn set_cursor(&mut self, ctx: &Context, cursor: &Cursor) {
+        let (w, h) = (cursor.width, cursor.height);
+        self.cursor = Some(
+            if w == 0 || h == 0 || w > MAX_CURSOR_PX || h > MAX_CURSOR_PX {
+                RemoteCursor::Hidden
+            } else {
+                let image = ColorImage::from_rgba_unmultiplied(
+                    [usize::from(w), usize::from(h)],
+                    &cursor.rgba,
+                );
+                RemoteCursor::Shape {
+                    texture: ctx.load_texture("remote-cursor", image, TextureOptions::NEAREST),
+                    hotspot: cursor.hotspot,
+                    size: (w, h),
+                }
+            },
+        );
     }
 
     fn new_texture(&mut self, ctx: &Context, width: u16, height: u16) {
@@ -398,11 +448,48 @@ impl ViewerApp {
                 if response.clicked() {
                     response.request_focus();
                 }
-                if response.hovered() {
-                    ctx.set_cursor_icon(CursorIcon::Default);
-                }
+                self.draw_cursor(ctx, &response, &canvas);
                 self.forward_input(ctx, &response, &canvas);
             });
+    }
+
+    /// Draw the server's cursor at the pointer and hide the OS cursor; until
+    /// the server has sent a shape, the local arrow stays.
+    fn draw_cursor(&self, ctx: &Context, response: &egui::Response, canvas: &Canvas) {
+        if !response.hovered() {
+            return;
+        }
+        let Some(cursor) = &self.cursor else {
+            ctx.set_cursor_icon(CursorIcon::Default);
+            return;
+        };
+        ctx.set_cursor_icon(CursorIcon::None);
+        let RemoteCursor::Shape {
+            texture,
+            hotspot,
+            size,
+        } = cursor
+        else {
+            return;
+        };
+        let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else {
+            return;
+        };
+        // Points per remote pixel: the cursor scales with the picture.
+        let scale = canvas.image.width() / f32::from(self.remote_size.0.max(1));
+        let top_left = pos - vec2(f32::from(hotspot.0), f32::from(hotspot.1)) * scale;
+        let rect =
+            egui::Rect::from_min_size(top_left, vec2(f32::from(size.0), f32::from(size.1)) * scale);
+        ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("remote-cursor"),
+        ))
+        .image(
+            texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
     }
 
     fn forward_input(&mut self, ctx: &Context, response: &egui::Response, canvas: &Canvas) {

@@ -164,3 +164,39 @@ async fn next_event_loses_nothing_when_it_is_cancelled() {
     assert_eq!(events[3], ScreenEvent::UpdateEnd);
     assert_eq!(screen.framebuffer().pixel(2, 0), Some([7, 7, 7, 255]));
 }
+
+#[tokio::test]
+async fn cursor_shapes_arrive_as_events() {
+    let (addr, server) = serve().await;
+    let mut screen = RemoteScreen::connect(&addr, None).await.unwrap();
+    let mut server = server.await.unwrap();
+    for _ in 0..3 {
+        server.next_message().await.unwrap(); // pixel format, encodings, request
+    }
+    // 2 x 1 cursor, hotspot (1, 0): red (opaque) and green (transparent).
+    let payload = [0, 0, 255, 0, 0, 255, 0, 0, 0b1000_0000];
+    server
+        .send_update(&[EncodedRect {
+            header: RectHeader {
+                rect: Rect {
+                    x: 1,
+                    y: 0,
+                    width: 2,
+                    height: 1,
+                },
+                encoding: rfb_proto::consts::pseudo::CURSOR,
+            },
+            payload: &payload,
+        }])
+        .await
+        .unwrap();
+    let ScreenEvent::Cursor(cursor) = screen.next_event().await.unwrap() else {
+        panic!("expected a cursor event");
+    };
+    assert_eq!(cursor.hotspot, (1, 0));
+    assert_eq!((cursor.width, cursor.height), (2, 1));
+    assert_eq!(cursor.rgba, [255, 0, 0, 255, 0, 255, 0, 0]);
+    assert_eq!(screen.next_event().await.unwrap(), ScreenEvent::UpdateEnd);
+    // The picture was not touched.
+    assert_eq!(screen.framebuffer().pixel(1, 0), Some([0, 0, 0, 255]));
+}
