@@ -53,12 +53,15 @@ impl Default for Appearance {
 pub struct Input {
     /// Keyboard capture: `auto` (full screen only), `always` or `never`.
     pub capture: String,
+    /// Resize the remote desktop to the window when the server allows it.
+    pub resize_remote: bool,
 }
 
 impl Default for Input {
     fn default() -> Self {
         Self {
             capture: "auto".into(),
+            resize_remote: false,
         }
     }
 }

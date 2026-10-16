@@ -32,6 +32,11 @@ pub enum Command {
         pins: Vec<Fingerprint>,
     },
     Disconnect,
+    /// Ask the server to resize the remote desktop.
+    Resize {
+        width: u16,
+        height: u16,
+    },
     Key {
         keysym: u32,
         down: bool,
@@ -65,6 +70,15 @@ pub enum UiEvent {
     },
     /// The server's cursor shape (empty pixels mean "hidden").
     Cursor(Cursor),
+    /// The server announced its screen layout (it supports resizing). When
+    /// `reason` is 1 this answers a [`Command::Resize`]; a `status` other
+    /// than 0 then means the request was refused.
+    Layout {
+        reason: u16,
+        status: u16,
+        width: u16,
+        height: u16,
+    },
     /// A statistics reading, about four times a second while connected.
     Stats(Snapshot),
     Bell,
@@ -254,6 +268,9 @@ async fn session(
                     match command {
                         Command::Disconnect => return Ok(()),
                         Command::Connect { .. } => {}
+                        Command::Resize { width, height } => {
+                            screen.request_size(width, height).await.map_err(|e| e.to_string())?;
+                        }
                         Command::Key { keysym, down } => {
                             screen.key(keysym, down).await.map_err(|e| e.to_string())?;
                         }
@@ -302,7 +319,29 @@ async fn handle_event(
                 ui.emit(UiEvent::Frame { rect: full, rgba });
             }
         }
-        ScreenEvent::Damage(Damage::None | Damage::Cursor(_)) => {}
+        ScreenEvent::Damage(Damage::None | Damage::Cursor(_) | Damage::Layout(_)) => {}
+        ScreenEvent::Layout(layout) => {
+            let fb = screen.framebuffer();
+            let (width, height) = (fb.width(), fb.height());
+            if layout.resized {
+                ui.emit(UiEvent::Resized { width, height });
+                let full = Rect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                };
+                if let Ok(rgba) = fb.rgba(full) {
+                    ui.emit(UiEvent::Frame { rect: full, rgba });
+                }
+            }
+            ui.emit(UiEvent::Layout {
+                reason: layout.reason,
+                status: layout.status,
+                width: layout.width,
+                height: layout.height,
+            });
+        }
         ScreenEvent::Cursor(cursor) => ui.emit(UiEvent::Cursor(cursor)),
         ScreenEvent::UpdateEnd => screen.request_update(true).await?,
         ScreenEvent::Bell => ui.emit(UiEvent::Bell),

@@ -48,6 +48,13 @@ pub struct Startup {
 /// Samples kept for the bandwidth graph: 60 s at four readings a second.
 const HISTORY_LEN: usize = 240;
 
+/// The window size must stay the same this long (egui seconds) before the
+/// remote desktop is asked to follow it.
+const RESIZE_SETTLE: f64 = 0.4;
+
+/// Smallest remote size we ask for.
+const MIN_REMOTE_SIZE: u16 = 64;
+
 /// Width of an address book card, in points.
 const CARD_WIDTH: f32 = 220.0;
 
@@ -136,6 +143,16 @@ pub struct ViewerApp {
     released_by_user: bool,
     chord: ChordTracker,
     was_capturing: bool,
+    /// Resize the remote desktop to the window.
+    resize_remote: bool,
+    /// The server announced a layout, so it understands resize requests.
+    server_can_resize: bool,
+    /// The server refused a request: stop asking for this connection.
+    resize_refused: bool,
+    /// A size we want to ask for, and when the window first had it.
+    resize_wanted: Option<((u16, u16), f64)>,
+    /// The last size we asked for (never asked twice in a row).
+    last_requested: Option<(u16, u16)>,
     stats_visible: bool,
     stats: Option<Snapshot>,
     /// Received bytes per second, one value per reading, oldest first.
@@ -214,6 +231,11 @@ impl ViewerApp {
             released_by_user: false,
             chord: ChordTracker::default(),
             was_capturing: false,
+            resize_remote: input.resize_remote,
+            server_can_resize: false,
+            resize_refused: false,
+            resize_wanted: None,
+            last_requested: None,
             stats_visible: startup.show_stats,
             stats: None,
             rx_history: VecDeque::new(),
@@ -289,6 +311,91 @@ impl ViewerApp {
     pub fn set_credentials(&mut self, username: &str, password: &str) {
         username.clone_into(&mut self.username);
         password.clone_into(&mut self.password);
+    }
+
+    /// Whether the remote desktop follows the window size.
+    #[must_use]
+    pub fn resize_remote(&self) -> bool {
+        self.resize_remote
+    }
+
+    /// Turn "resize the remote desktop to the window" on or off.
+    pub fn set_resize_remote(&mut self, on: bool) {
+        self.resize_remote = on;
+        self.resize_wanted = None;
+        // Asking again after the user turned it on is allowed even after a refusal.
+        if on {
+            self.resize_refused = false;
+            self.last_requested = None;
+        }
+    }
+
+    /// Whether the server has shown that it supports resizing.
+    #[must_use]
+    pub fn server_can_resize(&self) -> bool {
+        self.server_can_resize
+    }
+
+    /// Tooltip for the resize toggle.
+    fn resize_hint(&self) -> &'static str {
+        if self.resize_refused {
+            "The server refused to resize. Switch off and on to try again."
+        } else if self.server_can_resize {
+            "Make the remote desktop the same size as this window"
+        } else {
+            "The server does not say it can resize its desktop"
+        }
+    }
+
+    fn reset_resize(&mut self) {
+        self.server_can_resize = false;
+        self.resize_refused = false;
+        self.resize_wanted = None;
+        self.last_requested = None;
+    }
+
+    /// Ask the server for the size of `canvas` (in physical pixels) once the
+    /// window has kept that size for a moment. Never asks twice for the same
+    /// size, so a server that picks another size cannot cause a loop.
+    fn follow_window_size(&mut self, ctx: &Context, canvas: egui::Rect) {
+        if !(self.resize_remote && self.server_can_resize && !self.resize_refused) {
+            self.resize_wanted = None;
+            return;
+        }
+        let px = |points: f32| {
+            let v = (points * ctx.pixels_per_point()).round();
+            // Clamped to the protocol's range first, so the conversion is exact.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let v = v.clamp(
+                f32::from(MIN_REMOTE_SIZE),
+                f32::from(rfb_proto::consts::limits::MAX_FB_DIMENSION),
+            ) as u16;
+            v
+        };
+        let desired = (px(canvas.width()), px(canvas.height()));
+        if desired == self.remote_size || Some(desired) == self.last_requested {
+            self.resize_wanted = None;
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        match self.resize_wanted {
+            Some((size, since)) if size == desired => {
+                if now - since >= RESIZE_SETTLE {
+                    self.core.send(Command::Resize {
+                        width: desired.0,
+                        height: desired.1,
+                    });
+                    self.last_requested = Some(desired);
+                    self.resize_wanted = None;
+                } else {
+                    ctx.request_repaint_after(Duration::from_millis(100));
+                }
+            }
+            _ => {
+                self.resize_wanted = Some((desired, now));
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
     }
 
     /// Turn clipboard sharing on or off.
@@ -475,6 +582,7 @@ impl ViewerApp {
                     width,
                     height,
                 } => {
+                    self.reset_resize();
                     self.remember_connection(&name);
                     self.phase = Phase::Connected { name };
                     self.new_texture(ctx, width, height);
@@ -505,6 +613,18 @@ impl ViewerApp {
                         problem,
                     });
                 }
+                UiEvent::Layout { reason, status, .. } => {
+                    self.server_can_resize = true;
+                    // Reason 1 answers our request; status 4 means "forwarded,
+                    // may still happen", anything else non-zero is a refusal.
+                    if reason == 1 && status != 0 && status != 4 {
+                        self.resize_refused = true;
+                        self.say(format!(
+                            "The server did not resize the screen ({}).",
+                            resize_refusal(status)
+                        ));
+                    }
+                }
                 UiEvent::Stats(snapshot) => {
                     if self.rx_history.len() == HISTORY_LEN {
                         self.rx_history.pop_front();
@@ -522,6 +642,7 @@ impl ViewerApp {
                     self.error = reason;
                     self.texture = None;
                     self.cursor = None;
+                    self.reset_resize();
                     self.stats = None;
                     self.rx_history.clear();
                     self.connected_at = None;
@@ -577,6 +698,7 @@ impl ViewerApp {
         };
         let input = settings::Input {
             capture: self.capture_pref.key().to_owned(),
+            resize_remote: self.resize_remote,
         };
         if now != self.store.settings.appearance || input != self.store.settings.input {
             self.store.settings.appearance = now;
@@ -881,6 +1003,14 @@ impl ViewerApp {
                             }
                             ui.toggle_value(&mut self.stats_visible, "Stats")
                                 .on_hover_text("Ctrl+Alt+Shift+S");
+                            let mut resize = self.resize_remote;
+                            if ui
+                                .toggle_value(&mut resize, "Resize remote")
+                                .on_hover_text(self.resize_hint())
+                                .changed()
+                            {
+                                self.set_resize_remote(resize);
+                            }
                             let mut capturing = self.capture_wanted();
                             let status = self.capture_status();
                             if ui
@@ -984,6 +1114,14 @@ impl ViewerApp {
                                 }
                                 ui.checkbox(&mut self.clipboard_sync, "Clipboard");
                                 ui.toggle_value(&mut self.stats_visible, "Stats");
+                                let mut resize = self.resize_remote;
+                                if ui
+                                    .toggle_value(&mut resize, "Resize remote")
+                                    .on_hover_text(self.resize_hint())
+                                    .changed()
+                                {
+                                    self.set_resize_remote(resize);
+                                }
                                 let mut capturing = self.capture_wanted();
                                 let status = self.capture_status();
                                 if ui
@@ -1444,6 +1582,7 @@ impl ViewerApp {
                 let available = ui.available_rect_before_wrap();
                 let (rect, response) =
                     ui.allocate_exact_size(available.size(), Sense::click_and_drag());
+                self.follow_window_size(ctx, rect);
                 let canvas = Canvas::fit(rect, self.remote_size, self.one_to_one);
                 if let Some(texture) = &self.texture {
                     let painter = ui.painter_at(rect);
@@ -1610,6 +1749,16 @@ impl ViewerApp {
             }
         }
         ctx.request_repaint_after(Duration::from_millis(100));
+    }
+}
+
+/// What a resize refusal code means (spec, `ExtendedDesktopSize`).
+fn resize_refusal(status: u16) -> &'static str {
+    match status {
+        1 => "resizing is prohibited on this server",
+        2 => "out of resources",
+        3 => "invalid screen layout",
+        _ => "unknown reason",
     }
 }
 

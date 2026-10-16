@@ -50,6 +50,7 @@ pub fn parse_encodings(list: &str) -> Result<Vec<i32>, String> {
             "zrle" => Ok(enc::ZRLE),
             "cursor" => Ok(pseudo::CURSOR),
             "desktopsize" => Ok(pseudo::DESKTOP_SIZE),
+            "extdesktopsize" => Ok(pseudo::EXT_DESKTOP_SIZE),
             other => Err(format!("unknown encoding {other:?}")),
         })
         .collect()
