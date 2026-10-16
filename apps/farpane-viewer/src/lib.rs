@@ -4,5 +4,5 @@
 mod screen;
 mod screenshot;
 
-pub use screen::{ConnectError, DEFAULT_ENCODINGS, RemoteScreen};
+pub use screen::{ConnectError, DEFAULT_ENCODINGS, RemoteScreen, ScreenEvent};
 pub use screenshot::{parse_encodings, write_image};

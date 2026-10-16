@@ -227,3 +227,42 @@ proptest! {
         prop_assert_eq!(fb, want);
     }
 }
+
+#[test]
+fn rgba_copies_a_rect_in_texture_order() {
+    let mut fb = Framebuffer::new(3, 2).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    // Wire pixels are B, G, R, X: (1,0) is red 10 / green 20 / blue 30.
+    dec.decode(&mut fb, &header(enc::RAW, 1, 0, 1, 1), &[30, 20, 10, 0])
+        .unwrap();
+    let all = fb
+        .rgba(Rect {
+            x: 0,
+            y: 0,
+            width: 3,
+            height: 2,
+        })
+        .unwrap();
+    assert_eq!(all.len(), 3 * 2 * 4);
+    assert_eq!(&all[4..8], &[10, 20, 30, 255]);
+    assert_eq!(&all[0..4], &[0, 0, 0, 255]);
+    // A sub-rectangle is tightly packed.
+    let sub = fb
+        .rgba(Rect {
+            x: 1,
+            y: 0,
+            width: 2,
+            height: 1,
+        })
+        .unwrap();
+    assert_eq!(sub, [10, 20, 30, 255, 0, 0, 0, 255]);
+    assert_eq!(
+        fb.rgba(Rect {
+            x: 2,
+            y: 1,
+            width: 2,
+            height: 1
+        }),
+        Err(DecodeError::OutOfBounds)
+    );
+}

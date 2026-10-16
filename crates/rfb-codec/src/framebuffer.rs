@@ -77,6 +77,24 @@ impl Framebuffer {
         self.pixels[at..at + BYTES_PER_PIXEL].try_into().ok()
     }
 
+    /// The pixels of `rect` as tightly packed `R, G, B, 0xFF` bytes, row by
+    /// row: the layout GPU texture uploads and image libraries expect.
+    ///
+    /// # Errors
+    /// [`DecodeError::OutOfBounds`] if `rect` is not inside the picture.
+    pub fn rgba(&self, rect: Rect) -> Result<Vec<u8>, DecodeError> {
+        self.check(rect)?;
+        let row_bytes = usize::from(rect.width) * BYTES_PER_PIXEL;
+        let mut out = Vec::with_capacity(row_bytes * usize::from(rect.height));
+        for row in 0..rect.height {
+            let at = self.offset(rect.x, rect.y + row);
+            for px in self.pixels[at..at + row_bytes].chunks_exact(BYTES_PER_PIXEL) {
+                out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
+            }
+        }
+        Ok(out)
+    }
+
     pub(crate) fn offset(&self, x: u16, y: u16) -> usize {
         usize::from(y) * self.stride() + usize::from(x) * BYTES_PER_PIXEL
     }
