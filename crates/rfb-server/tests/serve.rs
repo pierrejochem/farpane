@@ -260,6 +260,7 @@ impl Viewer {
 
 const ZRLE: &[i32] = &[enc::ZRLE, enc::RAW, pseudo::DESKTOP_SIZE];
 const RAW: &[i32] = &[enc::RAW];
+const TRLE: &[i32] = &[enc::TRLE, enc::RAW];
 
 fn rgb565() -> PixelFormat {
     PixelFormat {
@@ -300,6 +301,8 @@ async fn the_first_request_gets_the_whole_picture_in_the_clients_format_and_enco
         (PixelFormat::RGB888, RAW),
         (rgb565(), ZRLE),
         (rgb565(), RAW),
+        (PixelFormat::RGB888, TRLE),
+        (rgb565(), TRLE),
     ] {
         let (mut v, _task) = connect(&server, pf, encodings).await;
         assert_eq!((v.info.width, v.info.height), (150, 90));

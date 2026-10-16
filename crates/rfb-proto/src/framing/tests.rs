@@ -244,8 +244,8 @@ fn oversized_payloads_are_refused_before_buffering() {
 #[test]
 fn unknown_encodings_are_fatal() {
     assert_eq!(
-        frame(&header(enc::TRLE, 8, 8), &PF32, &[0; 16]),
-        Err(ProtoError::UnsupportedEncoding(enc::TRLE))
+        frame(&header(enc::ZYWRLE, 8, 8), &PF32, &[0; 16]),
+        Err(ProtoError::UnsupportedEncoding(enc::ZYWRLE))
     );
     assert_eq!(
         frame(&header(12345, 8, 8), &PF32, &[]),
@@ -400,5 +400,151 @@ fn tight_sizes_are_bounded() {
     assert!(matches!(
         frame(&h, &PF32, &[0xA0]),
         Err(ProtoError::LimitExceeded { .. })
+    ));
+}
+
+// --- TRLE (RFC 6143 section 7.7.5) ------------------------------------------
+
+fn trle_header(w: u16, h: u16) -> RectHeader {
+    header(enc::TRLE, w, h)
+}
+
+/// A pixel value of three bytes (CPIXEL of RGB888).
+const P: [u8; 3] = [1, 2, 3];
+const Q: [u8; 3] = [4, 5, 6];
+
+fn cat(parts: &[&[u8]]) -> Vec<u8> {
+    parts.concat()
+}
+
+#[test]
+fn trle_cpixel_is_three_bytes_when_the_colour_bits_fit() {
+    assert_eq!(PF32.cpixel_len(), 3);
+    assert_eq!(pf16().cpixel_len(), 2);
+    let deep = PixelFormat {
+        depth: 30,
+        red_max: 1023,
+        green_max: 1023,
+        blue_max: 1023,
+        red_shift: 20,
+        green_shift: 10,
+        blue_shift: 0,
+        ..PF32
+    };
+    assert_eq!(deep.cpixel_len(), 4, "depth over 24");
+    let high = PixelFormat {
+        red_shift: 24,
+        green_shift: 16,
+        blue_shift: 8,
+        ..PF32
+    };
+    assert_eq!(high.cpixel_len(), 3, "the top three bytes");
+    let spread = PixelFormat {
+        red_shift: 24,
+        green_shift: 8,
+        blue_shift: 0,
+        ..PF32
+    };
+    assert_eq!(spread.cpixel_len(), 4, "fits neither end");
+}
+
+#[test]
+fn trle_raw_and_solid_tiles() {
+    let raw = cat(&[&[0], &[0; 12]]);
+    check(&trle_header(2, 2), &PF32, &raw);
+    check(&trle_header(2, 2), &PF32, &cat(&[&[1], &P]));
+    // 16 bit pixels: two bytes each.
+    check(&trle_header(2, 2), &pf16(), &cat(&[&[0], &[0; 8]]));
+    check(&trle_header(2, 2), &pf16(), &[1, 9, 9]);
+}
+
+#[test]
+fn trle_packed_palettes_round_rows_up_to_whole_bytes() {
+    // 2 colours: 1 bit per pixel, 2 x 2 tile: 1 byte per row.
+    check(
+        &trle_header(2, 2),
+        &PF32,
+        &cat(&[&[2], &P, &Q, &[0b0100_0000, 0b1000_0000]]),
+    );
+    // 3 colours: 2 bits, 5 wide: 10 bits = 2 bytes per row, 2 rows.
+    check(
+        &trle_header(5, 2),
+        &PF32,
+        &cat(&[&[3], &P, &Q, &P, &[0; 4]]),
+    );
+    // 16 colours: 4 bits, 3 wide: 12 bits = 2 bytes, 1 row.
+    check(&trle_header(3, 1), &PF32, &cat(&[&[16], &[7; 48], &[0; 2]]));
+}
+
+#[test]
+fn trle_run_length_encoding() {
+    // 2 x 2 = 4 pixels: a run of 3 then a run of 1.
+    check(
+        &trle_header(2, 2),
+        &PF32,
+        &cat(&[&[128], &P, &[2], &Q, &[0]]),
+    );
+    // 256 pixels in one run is [255, 0] (RFC: "256 as [255,0]").
+    check(&trle_header(16, 16), &PF32, &cat(&[&[128], &P, &[255, 0]]));
+    // Two tiles of 256 pixels, one run for each.
+    check(
+        &trle_header(32, 16),
+        &PF32,
+        &cat(&[&[128], &P, &[255, 0], &[128], &Q, &[255, 0]]),
+    );
+    // Palette RLE: new palette of 2, run of 2 (index 0, flagged), then 1 and 1.
+    check(
+        &trle_header(2, 2),
+        &PF32,
+        &cat(&[&[130], &P, &Q, &[0x80, 1, 1, 1]]),
+    );
+}
+
+#[test]
+fn trle_palettes_can_be_reused_from_the_previous_tile() {
+    // Two 16 x 1 tiles. Packed palette, then 127: packed pixels only.
+    let a = cat(&[&[2], &P, &Q, &[0xAA, 0x55], &[127], &[0x0F, 0xF0]]);
+    check(&trle_header(32, 1), &PF32, &a);
+    // Palette RLE, then 129 reusing it: runs of 16 pixels (length - 1 = 15).
+    let b = cat(&[&[130], &P, &Q, &[0x80, 15], &[129], &[0x81, 15]]);
+    check(&trle_header(32, 1), &PF32, &b);
+    // A palette RLE tile can also be reused by a later palette RLE tile after
+    // an unrelated tile; solid and raw tiles do not replace it.
+    let c = cat(&[&[130], &P, &Q, &[0x80, 15], &[1], &P, &[129], &[0x80, 15]]);
+    check(&trle_header(48, 1), &PF32, &c);
+}
+
+#[test]
+fn trle_tiles_at_the_edges_are_smaller() {
+    // 17 x 17: tiles of 16x16, 1x16, 16x1 and 1x1, here all solid.
+    let p = cat(&[&[1], &P, &[1], &Q, &[1], &P, &[1], &Q]);
+    check(&trle_header(17, 17), &PF32, &p);
+    check(&trle_header(0, 5), &PF32, &[]);
+    check(&trle_header(5, 0), &PF32, &[]);
+}
+
+#[test]
+fn trle_invalid_data_is_fatal() {
+    let malformed = |payload: &[u8]| {
+        matches!(
+            frame(&trle_header(32, 1), &PF32, payload),
+            Err(ProtoError::Malformed { .. })
+        )
+    };
+    assert!(malformed(&[127, 0, 0]), "reuse before any palette");
+    assert!(malformed(&[129, 0]), "reuse before any palette");
+    assert!(malformed(&[17]), "unused subencoding");
+    assert!(malformed(&[126]), "unused subencoding");
+    // A run that overshoots the 16 pixels of the tile.
+    assert!(malformed(&cat(&[&[128], &P, &[16]])));
+    // A palette index outside the palette.
+    assert!(malformed(&cat(&[&[130], &P, &Q, &[2]])));
+    // A packed palette cannot reuse a larger palette (20 colours).
+    let big = cat(&[&[128 + 20], &[7; 60], &[0x80, 15], &[127]]);
+    assert!(malformed(&big));
+    // The state does not leak between rectangles.
+    assert!(matches!(
+        frame(&trle_header(16, 1), &PF32, &[127, 0, 0]),
+        Err(ProtoError::Malformed { .. })
     ));
 }

@@ -43,6 +43,27 @@ impl PixelFormat {
         self.bits_per_pixel as usize / 8
     }
 
+    /// Bytes per `CPIXEL` (TRLE and ZRLE, RFC 6143 section 7.7.5): 3 when the
+    /// format is true colour, 32 bpp, depth 24 or less and the colour bits
+    /// all fit the least or the most significant three bytes, otherwise the
+    /// same as a wire pixel.
+    #[must_use]
+    pub fn cpixel_len(&self) -> usize {
+        if !self.true_colour || self.bits_per_pixel != 32 || self.depth > 24 {
+            return self.bytes_per_pixel();
+        }
+        let channels = [
+            (self.red_shift, self.red_max),
+            (self.green_shift, self.green_max),
+            (self.blue_shift, self.blue_max),
+        ];
+        let fits_low = channels
+            .iter()
+            .all(|&(shift, max)| u32::from(shift) + (16 - max.leading_zeros()) <= 24);
+        let fits_high = channels.iter().all(|&(shift, _)| shift >= 8);
+        if fits_low || fits_high { 3 } else { 4 }
+    }
+
     /// Bytes per `TPIXEL` in the Tight encoding: 3 (red, green, blue) when
     /// the format is true colour, 32 bpp, depth 24 and every channel is
     /// exactly 8 bits wide, otherwise the same as a wire pixel.

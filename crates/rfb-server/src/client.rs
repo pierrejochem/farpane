@@ -5,7 +5,7 @@ use std::sync::Arc;
 use rfb_codec::{
     Cursor, PixelPacker, ZrleEncoder,
     clipboard::{ExtClipboard, Role},
-    encode_cursor, encode_raw,
+    encode_cursor, encode_raw, encode_trle,
 };
 use rfb_proto::{
     conn::EncodedRect,
@@ -289,7 +289,8 @@ where
     let packer = PixelPacker::new(&pf).map_err(|e| Error::Io(std::io::Error::other(e)))?;
     let wants_ext = encodings.contains(&pseudo::EXT_DESKTOP_SIZE);
     let wants_size = wants_ext || encodings.contains(&pseudo::DESKTOP_SIZE);
-    let use_zrle = encodings.contains(&enc::ZRLE);
+    let zrle_wanted = encodings.contains(&enc::ZRLE);
+    let tiles_wanted = !zrle_wanted && encodings.contains(&enc::TRLE);
 
     // Encode under the read lock, send after releasing it.
     let (headers, payloads) = {
@@ -356,8 +357,10 @@ where
         }
         st.dirty.clip(size.0, size.1);
         for rect in st.dirty.take_within(area) {
-            let (encoding, payload) = if use_zrle {
+            let (encoding, payload) = if zrle_wanted {
                 (enc::ZRLE, st.zrle.encode(&fb, rect, &packer))
+            } else if tiles_wanted {
+                (enc::TRLE, encode_trle(&fb, rect, &packer))
             } else {
                 (enc::RAW, encode_raw(&fb, rect, &packer))
             };

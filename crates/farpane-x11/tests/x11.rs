@@ -50,6 +50,20 @@ impl Drop for TestServer {
     }
 }
 
+/// A freshly started server can accept connections a moment before its
+/// extensions answer: try a few times.
+fn open_display(display: &str) -> (farpane_x11::X11Source, farpane_x11::X11Input) {
+    let mut last = None;
+    for _ in 0..30 {
+        match farpane_x11::open(Some(display)) {
+            Ok(pair) => return pair,
+            Err(e) => last = Some(e),
+        }
+        sleep(Duration::from_millis(100));
+    }
+    panic!("cannot open the display: {last:?}");
+}
+
 fn start_server() -> Option<TestServer> {
     let only = ONE_AT_A_TIME
         .lock()
@@ -190,7 +204,7 @@ fn capture_sees_a_window_and_reports_its_changes() {
         return;
     };
     let d = server.display.clone();
-    let (mut source, _input) = farpane_x11::open(Some(&d)).unwrap();
+    let (mut source, _input) = open_display(&d);
     let (w, h) = source.size();
     let mut fb = Framebuffer::new(w, h).unwrap();
     let first = source.capture(&mut fb).unwrap();
@@ -280,7 +294,7 @@ fn the_keyboard_layout_has_ascii_and_pointer_moves_reach_the_server() {
         return;
     };
     let d = server.display.clone();
-    let (source, input) = farpane_x11::open(Some(&d)).unwrap();
+    let (source, input) = open_display(&d);
     for sym in [u32::from(b'a'), u32::from(b'A'), u32::from(b'1'), 0xFF0D] {
         assert!(input.keycode_for(sym).is_some(), "keysym {sym:x}");
     }
@@ -312,7 +326,7 @@ fn keys_reach_a_focused_window_including_symbols_the_layout_lacks() {
         eprintln!("no X display: skipped");
         return;
     };
-    let (_source, input) = farpane_x11::open(Some(&server.display)).unwrap();
+    let (_source, input) = open_display(&server.display);
     let (conn, num) = RustConnection::connect(Some(&server.display)).unwrap();
     let screen = conn.setup().roots[num].clone();
     let win = conn.generate_id().unwrap();
@@ -500,7 +514,7 @@ mod clipboard {
             eprintln!("no X display: skipped");
             return;
         };
-        let (mut source, _input) = farpane_x11::open(Some(&server.display)).unwrap();
+        let (mut source, _input) = open_display(&server.display);
         let (w, h) = source.size();
         let mut fb = Framebuffer::new(w, h).unwrap();
         source.capture(&mut fb).unwrap();
@@ -528,7 +542,7 @@ mod clipboard {
             eprintln!("no X display: skipped");
             return;
         };
-        let (mut source, input) = farpane_x11::open(Some(&server.display)).unwrap();
+        let (mut source, input) = open_display(&server.display);
         let (w, h) = source.size();
         let mut fb = Framebuffer::new(w, h).unwrap();
         source.capture(&mut fb).unwrap();

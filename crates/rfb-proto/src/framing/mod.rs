@@ -5,7 +5,7 @@
 //! scans just enough of the bytes after a [`RectHeader`] to learn the payload
 //! length. Decoding is `rfb-codec`'s job and sees only complete payloads.
 //!
-//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, Tight and the
+//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, TRLE, Tight and the
 //! `Cursor`, `DesktopSize`, `ExtendedDesktopSize` and `LastRect`
 //! pseudo-encodings. `ZRLE` and zlib are
 //! length-prefixed, so their tiles are walked only after inflating, in the
@@ -50,6 +50,7 @@ pub fn frame(header: &RectHeader, pf: &PixelFormat, input: &[u8]) -> Result<usiz
         enc::RRE => rre(input, bpp as u64, 8),
         enc::CO_RRE => rre(input, bpp as u64, 4),
         enc::HEXTILE => hextile(input, header.rect.width, header.rect.height, bpp),
+        enc::TRLE => trle(input, header.rect.width, header.rect.height, pf),
         enc::TIGHT => tight(
             input,
             header.rect.width,
@@ -146,6 +147,108 @@ fn hextile(input: &[u8], width: u16, height: u16, bpp: usize) -> Result<usize, P
 }
 
 /// Skip `n` payload bytes, keeping a running total under the payload limit.
+/// TRLE (RFC 6143 section 7.7.5): 16 x 16 tiles, each with a subencoding
+/// byte. Only the sizes matter here, but the palette size of the last tile
+/// that had one must be remembered, because subencodings 127 and 129 reuse it.
+fn trle(input: &[u8], width: u16, height: u16, pf: &PixelFormat) -> Result<usize, ProtoError> {
+    let bad = |ctx| ProtoError::Malformed { ctx };
+    let cp = pf.cpixel_len();
+    let mut r = Reader::new(input);
+    let mut total = 0u64;
+    // Palette of the last tile that had one (2 to 127 colours); none at the
+    // start of a rectangle.
+    let mut last_palette: Option<usize> = None;
+    for ty in (0..height).step_by(16) {
+        let th = usize::from((height - ty).min(16));
+        for tx in (0..width).step_by(16) {
+            let tw = usize::from((width - tx).min(16));
+            let sub = r.u8()?;
+            let palette_rle = |r: &mut Reader<'_>, total: &mut u64, n: usize| {
+                // Runs until the tile's pixels are used up.
+                let mut pixels = 0;
+                while pixels < tw * th {
+                    let index = r.u8()?;
+                    if usize::from(index & 0x7F) >= n {
+                        return Err(bad("TRLE palette index"));
+                    }
+                    let run = if index & 0x80 != 0 {
+                        run_length(r, total)?
+                    } else {
+                        1
+                    };
+                    pixels += run;
+                }
+                if pixels == tw * th {
+                    Ok(())
+                } else {
+                    Err(bad("TRLE run past the end of the tile"))
+                }
+            };
+            match sub {
+                0 => skip_bounded(&mut r, &mut total, tw * th * cp)?,
+                1 => skip_bounded(&mut r, &mut total, cp)?,
+                2..=16 | 127 => {
+                    let n = if sub == 127 {
+                        last_palette.ok_or_else(|| bad("TRLE palette reused before any"))?
+                    } else {
+                        usize::from(sub)
+                    };
+                    if !(2..=16).contains(&n) {
+                        return Err(bad("TRLE packed palette reuse of a larger palette"));
+                    }
+                    if sub != 127 {
+                        skip_bounded(&mut r, &mut total, n * cp)?;
+                        last_palette = Some(n);
+                    }
+                    let bits = match n {
+                        2 => 1,
+                        3..=4 => 2,
+                        _ => 4,
+                    };
+                    skip_bounded(&mut r, &mut total, (tw * bits).div_ceil(8) * th)?;
+                }
+                17..=126 => return Err(bad("TRLE subencoding")),
+                128 => {
+                    let mut pixels = 0;
+                    while pixels < tw * th {
+                        skip_bounded(&mut r, &mut total, cp)?;
+                        pixels += run_length(&mut r, &mut total)?;
+                    }
+                    if pixels != tw * th {
+                        return Err(bad("TRLE run past the end of the tile"));
+                    }
+                }
+                129 => {
+                    let n = last_palette.ok_or_else(|| bad("TRLE palette reused before any"))?;
+                    palette_rle(&mut r, &mut total, n)?;
+                }
+                130..=255 => {
+                    let n = usize::from(sub - 128);
+                    skip_bounded(&mut r, &mut total, n * cp)?;
+                    last_palette = Some(n);
+                    palette_rle(&mut r, &mut total, n)?;
+                }
+            }
+        }
+    }
+    Ok(r.position())
+}
+
+/// A run length: one plus the sum of bytes up to and including the first
+/// byte below 255.
+fn run_length(r: &mut Reader<'_>, total: &mut u64) -> Result<usize, ProtoError> {
+    let mut len = 1usize;
+    loop {
+        let b = r.u8()?;
+        *total += 1;
+        check_limit(*total, "TRLE payload")?;
+        len += usize::from(b);
+        if b != 255 {
+            return Ok(len);
+        }
+    }
+}
+
 /// Tight (spec, "Tight Encoding"). The control byte says which of fill, JPEG
 /// and basic compression follows; for basic compression the size of the
 /// filtered data is known from the filter, and data under 12 bytes is sent

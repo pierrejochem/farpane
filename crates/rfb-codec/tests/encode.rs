@@ -411,3 +411,93 @@ fn cursor_round_trips_through_the_decoder_in_every_format() {
     };
     assert!(encode_cursor(&bad, &packer).is_err());
 }
+
+#[test]
+fn trle_round_trips_in_every_format_with_reuse_across_tiles() {
+    use rfb_codec::encode_trle;
+    for (name, pf) in formats() {
+        let packer = PixelPacker::new(&pf).unwrap();
+        let mut decoder = Decoder::new(&pf).unwrap();
+        let mut shown = Framebuffer::new(150, 90).unwrap();
+        for (pattern, f) in patterns() {
+            let fb = picture(150, 90, &f);
+            for rect in [
+                Rect {
+                    x: 5,
+                    y: 3,
+                    width: 133,
+                    height: 71,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                Rect {
+                    x: 16,
+                    y: 16,
+                    width: 16,
+                    height: 16,
+                },
+                Rect {
+                    x: 64,
+                    y: 64,
+                    width: 64,
+                    height: 26,
+                },
+            ] {
+                let payload = encode_trle(&fb, rect, &packer).unwrap();
+                assert_eq!(
+                    frame(&header(rect, enc::TRLE), &pf, &payload),
+                    Ok(payload.len()),
+                    "{name} {pattern}: the framer agrees with the encoder"
+                );
+                decoder
+                    .decode(&mut shown, &header(rect, enc::TRLE), &payload)
+                    .unwrap();
+                assert_matches(
+                    &shown,
+                    &fb,
+                    rect,
+                    &pf,
+                    &format!("{name} {pattern} {rect:?}"),
+                );
+            }
+        }
+    }
+}
+
+proptest! {
+    #[test]
+    fn trle_round_trips_random_pictures(
+        w in 1u16..100,
+        h in 1u16..100,
+        colours in 1usize..40,
+        run in 1u16..30,
+        seed in any::<u32>(),
+        fmt in 0usize..7,
+    ) {
+        use rfb_codec::encode_trle;
+        let (_, pf) = formats().swap_remove(fmt);
+        let colour = move |i: u32| {
+            let v = i.wrapping_mul(2_654_435_761).wrapping_add(seed);
+            [(v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]
+        };
+        let fb = picture(w, h, |x, y| colour((u32::from(x / run) + u32::from(y / 3)) % colours as u32));
+        let rect = Rect { x: 0, y: 0, width: w, height: h };
+        let packer = PixelPacker::new(&pf).unwrap();
+        let payload = encode_trle(&fb, rect, &packer).unwrap();
+        prop_assert_eq!(frame(&header(rect, enc::TRLE), &pf, &payload), Ok(payload.len()));
+        let mut shown = Framebuffer::new(w, h).unwrap();
+        Decoder::new(&pf).unwrap().decode(&mut shown, &header(rect, enc::TRLE), &payload).unwrap();
+        let want = expected(&fb, rect, &pf);
+        let mut i = 0;
+        for y in 0..h {
+            for x in 0..w {
+                prop_assert_eq!(shown.pixel(x, y), Some(want[i]));
+                i += 1;
+            }
+        }
+    }
+}
