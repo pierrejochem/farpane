@@ -4,8 +4,9 @@ After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
-# --headless: run without the dashboard window (flag name is a placeholder).
-ExecStart=/usr/bin/farpane-server --headless
+# --headless: no dashboard window. --desktop: share this session's desktop
+# (Wayland through the portal, else X11).
+ExecStart=/usr/bin/farpane-server --headless --desktop
 Restart=on-failure
 RestartSec=3
 
