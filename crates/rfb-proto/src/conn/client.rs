@@ -39,6 +39,11 @@ pub enum ClientConnEvent {
     },
     Bell,
     CutText(Vec<u8>),
+    /// An Extended Clipboard message; see `rfb-codec`'s clipboard module.
+    ExtendedClipboard {
+        flags: u32,
+        payload: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -248,6 +253,9 @@ impl ClientConn {
             }
             ServerMessage::Bell => ClientConnEvent::Bell,
             ServerMessage::ServerCutText(t) => ClientConnEvent::CutText(t),
+            ServerMessage::ExtendedClipboard { flags, payload } => {
+                ClientConnEvent::ExtendedClipboard { flags, payload }
+            }
         }))
     }
 

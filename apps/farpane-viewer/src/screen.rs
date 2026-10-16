@@ -241,7 +241,8 @@ impl RemoteScreen {
                 }
                 ClientConnEvent::Bell => return Ok(ScreenEvent::Bell),
                 ClientConnEvent::CutText(text) => return Ok(ScreenEvent::CutText(text)),
-                ClientConnEvent::Handshake(_)
+                ClientConnEvent::ExtendedClipboard { .. }
+                | ClientConnEvent::Handshake(_)
                 | ClientConnEvent::UpdateBegin { .. }
                 | ClientConnEvent::ColourMap { .. } => {}
             }

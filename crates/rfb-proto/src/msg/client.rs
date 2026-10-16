@@ -27,8 +27,14 @@ pub enum ClientMessage {
         x: u16,
         y: u16,
     },
-    /// Latin-1 text. Extended Clipboard (negative length) arrives in M3.
+    /// Latin-1 text.
     ClientCutText(Vec<u8>),
+    /// An Extended Clipboard message (negative length): `flags` and the
+    /// payload after them, interpreted by `rfb-codec`'s clipboard module.
+    ExtendedClipboard {
+        flags: u32,
+        payload: Vec<u8>,
+    },
     /// Ask for a new framebuffer size and screen layout. Only valid after an
     /// `ExtendedDesktopSize` rectangle was received.
     SetDesktopSize {
@@ -88,15 +94,12 @@ impl ClientMessage {
             },
             client_msg::CLIENT_CUT_TEXT => {
                 r.skip(3)?;
-                let len = r.u32()?;
-                if len > limits::MAX_CUT_TEXT_LEN {
-                    return Err(ProtoError::LimitExceeded {
-                        field: "ClientCutText length",
-                        value: u64::from(len),
-                        limit: u64::from(limits::MAX_CUT_TEXT_LEN),
-                    });
+                match super::read_cut_text(&mut r, "ClientCutText length")? {
+                    super::CutText::Legacy(text) => Self::ClientCutText(text),
+                    super::CutText::Extended { flags, payload } => {
+                        Self::ExtendedClipboard { flags, payload }
+                    }
                 }
-                Self::ClientCutText(r.take(len as usize)?.to_vec())
             }
             client_msg::SET_DESKTOP_SIZE => {
                 r.skip(1)?;
@@ -183,6 +186,13 @@ impl ClientMessage {
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(text);
             }
+            Self::ExtendedClipboard { flags, payload } => super::write_extended_cut_text(
+                out,
+                client_msg::CLIENT_CUT_TEXT,
+                *flags,
+                payload,
+                "ClientCutText length",
+            )?,
             Self::SetDesktopSize {
                 width,
                 height,
@@ -283,6 +293,14 @@ mod tests {
                 ClientMessage::ClientCutText(b"hi\n".to_vec()),
                 vec![6, 0, 0, 0, 0, 0, 0, 3, b'h', b'i', b'\n'],
             ),
+            // Extended Clipboard `request` for text (bit 25) from the client.
+            (
+                ClientMessage::ExtendedClipboard {
+                    flags: 0x0200_0001,
+                    payload: vec![],
+                },
+                vec![6, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFC, 0x02, 0x00, 0x00, 0x01],
+            ),
             // rfbproto.rst, SetDesktopSize: type 251, pad, width, height,
             // number-of-screens, pad, then 16 bytes per screen.
             (
@@ -368,11 +386,20 @@ mod tests {
             ClientMessage::parse(&b),
             Err(ProtoError::LimitExceeded { .. })
         ));
+        // A legacy length above the limit (the largest positive S32).
+        let mut b = vec![6, 0, 0, 0];
+        b.extend_from_slice(&i32::MAX.to_be_bytes());
+        assert!(matches!(
+            ClientMessage::parse(&b),
+            Err(ProtoError::LimitExceeded { .. })
+        ));
+        // 0xFFFFFFFF is -1 as a signed length: an extended message too short
+        // to hold its flags.
         let mut b = vec![6, 0, 0, 0];
         b.extend_from_slice(&u32::MAX.to_be_bytes());
         assert!(matches!(
             ClientMessage::parse(&b),
-            Err(ProtoError::LimitExceeded { .. })
+            Err(ProtoError::Malformed { .. })
         ));
     }
 }

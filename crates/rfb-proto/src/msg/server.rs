@@ -64,8 +64,14 @@ pub enum ServerMessage {
         colours: Vec<[u16; 3]>,
     },
     Bell,
-    /// Latin-1 text. Extended Clipboard (negative length) arrives in M3.
+    /// Latin-1 text.
     ServerCutText(Vec<u8>),
+    /// An Extended Clipboard message (negative length): `flags` and the
+    /// payload after them, interpreted by `rfb-codec`'s clipboard module.
+    ExtendedClipboard {
+        flags: u32,
+        payload: Vec<u8>,
+    },
 }
 
 impl ServerMessage {
@@ -96,15 +102,12 @@ impl ServerMessage {
             server_msg::BELL => Self::Bell,
             server_msg::SERVER_CUT_TEXT => {
                 r.skip(3)?;
-                let len = r.u32()?;
-                if len > limits::MAX_CUT_TEXT_LEN {
-                    return Err(ProtoError::LimitExceeded {
-                        field: "ServerCutText length",
-                        value: u64::from(len),
-                        limit: u64::from(limits::MAX_CUT_TEXT_LEN),
-                    });
+                match super::read_cut_text(&mut r, "ServerCutText length")? {
+                    super::CutText::Legacy(text) => Self::ServerCutText(text),
+                    super::CutText::Extended { flags, payload } => {
+                        Self::ExtendedClipboard { flags, payload }
+                    }
                 }
-                Self::ServerCutText(r.take(len as usize)?.to_vec())
             }
             _ => {
                 return Err(ProtoError::Malformed {
@@ -155,6 +158,13 @@ impl ServerMessage {
                 out.extend_from_slice(&len.to_be_bytes());
                 out.extend_from_slice(text);
             }
+            Self::ExtendedClipboard { flags, payload } => super::write_extended_cut_text(
+                out,
+                server_msg::SERVER_CUT_TEXT,
+                *flags,
+                payload,
+                "ServerCutText length",
+            )?,
         }
         Ok(())
     }
@@ -183,6 +193,29 @@ mod tests {
                 ServerMessage::ServerCutText(b"ab".to_vec()),
                 vec![3, 0, 0, 0, 0, 0, 0, 2, b'a', b'b'],
             ),
+            // rfbproto.rst, Extended Clipboard: a negative length counts the
+            // flags and everything after them. Here a `caps` message (bit 24)
+            // for the text format (bit 0) plus actions, with one size entry.
+            (
+                ServerMessage::ExtendedClipboard {
+                    flags: 0x1F00_0001,
+                    payload: vec![0, 0, 0x10, 0],
+                },
+                vec![
+                    3, 0, 0, 0, // type, padding
+                    0xFF, 0xFF, 0xFF, 0xF8, // length = -8
+                    0x1F, 0x00, 0x00, 0x01, // flags
+                    0, 0, 0x10, 0, // sizes[text]
+                ],
+            ),
+            // A `notify` (bit 27) with no data after the flags: length -4.
+            (
+                ServerMessage::ExtendedClipboard {
+                    flags: 0x0800_0001,
+                    payload: vec![],
+                },
+                vec![3, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFC, 0x08, 0x00, 0x00, 0x01],
+            ),
         ]
     }
 
@@ -209,6 +242,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn extended_clipboard_lengths_are_checked() {
+        let with_len = |len: i32| {
+            let mut b = vec![3, 0, 0, 0];
+            b.extend_from_slice(&len.to_be_bytes());
+            b.extend_from_slice(&[0; 8]);
+            b
+        };
+        // Too small to hold the flags, and the most negative length of all.
+        for len in [-1, -2, -3, i32::MIN] {
+            assert!(
+                matches!(
+                    ServerMessage::parse(&with_len(len)),
+                    Err(ProtoError::Malformed { .. } | ProtoError::LimitExceeded { .. })
+                ),
+                "{len}"
+            );
+        }
+        // Above the inflated-size limit, refused before waiting for the data.
+        let big = -i32::try_from(limits::MAX_EXT_CLIPBOARD_INFLATED + 1).unwrap();
+        assert!(matches!(
+            ServerMessage::parse(&with_len(big)),
+            Err(ProtoError::LimitExceeded { .. })
+        ));
+        // Exactly the limit is accepted as "need more".
+        let max = -i32::try_from(limits::MAX_EXT_CLIPBOARD_INFLATED).unwrap();
+        assert!(matches!(
+            ServerMessage::parse(&with_len(max)),
+            Err(ProtoError::NeedMore(_))
+        ));
+        // Writing refuses what could not be parsed back.
+        let mut out = Vec::new();
+        let huge = ServerMessage::ExtendedClipboard {
+            flags: 0,
+            payload: vec![0; limits::MAX_EXT_CLIPBOARD_INFLATED as usize],
+        };
+        assert!(matches!(
+            huge.write(&mut out),
+            Err(ProtoError::LimitExceeded { .. })
+        ));
+        assert_eq!(out.len(), 0);
     }
 
     #[test]
