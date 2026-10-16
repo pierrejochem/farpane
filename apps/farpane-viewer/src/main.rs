@@ -199,6 +199,16 @@ async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
             Err(_) => break,
         }
     }
+    let stats = screen.sample_stats(std::time::Instant::now());
+    let mix = farpane_viewer::stats::pixel_mix(&stats, 4)
+        .into_iter()
+        .map(|(e, pct)| format!("{} {pct}%", farpane_viewer::stats::encoding_name(e)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    eprintln!(
+        "encodings used: {}",
+        if mix.is_empty() { "none" } else { &mix }
+    );
     write_image(screen.framebuffer(), path)?;
     eprintln!("saved {}", path.display());
     Ok(())
