@@ -13,6 +13,7 @@
 //! in M3. See `docs/design/farpane-reference.md`,
 //! sections 7, 15 and 22.
 
+pub mod clipboard;
 mod decoder;
 mod error;
 mod framebuffer;
