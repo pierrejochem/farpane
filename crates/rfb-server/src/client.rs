@@ -1,6 +1,6 @@
 //! One client connection: its pending changes, encoder state and requests.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::Ordering};
 
 use rfb_codec::{
     Cursor, PixelPacker, TIGHT_MAX_WIDTH, TightEncoder, ZrleEncoder,
@@ -24,6 +24,7 @@ use tokio::{
 
 use crate::{
     region::{self, Region},
+    registry::ClientHandle,
     server::Shared,
 };
 
@@ -35,8 +36,8 @@ const STATUS_PROHIBITED: u16 = 1;
 
 #[allow(clippy::struct_excessive_bools)] // independent one-shot flags
 struct State {
-    /// This client may look but not touch.
-    view_only: bool,
+    /// Live state shared with the dashboard (view-only switch, counters).
+    handle: Arc<ClientHandle>,
     dirty: Region,
     /// The area of the outstanding update request, if any.
     request: Option<Rect>,
@@ -94,7 +95,7 @@ fn layout_rect(size: (u16, u16), reason: u16, status: u16) -> (RectHeader, Vec<u
 pub(crate) async fn run<S>(
     mut session: ServerSession<S>,
     shared: Arc<Shared>,
-    view_only: bool,
+    handle: Arc<ClientHandle>,
 ) -> Result<(), Error>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -108,7 +109,7 @@ where
         (fb.width(), fb.height())
     };
     let mut st = State {
-        view_only,
+        handle: Arc::clone(&handle),
         dirty: Region::new(),
         request: None,
         zrle: ZrleEncoder::new(),
@@ -130,7 +131,14 @@ where
                 st.request = None;
             }
         }
+        handle
+            .bytes_in
+            .store(session.bytes_received(), Ordering::Relaxed);
+        handle
+            .bytes_out
+            .store(session.bytes_sent(), Ordering::Relaxed);
         tokio::select! {
+            () = handle.kick.notified() => return Err(Error::Closed),
             message = session.next_message() => {
                 handle_message(&mut session, &shared, &mut st, message?).await?;
             }
@@ -220,17 +228,17 @@ where
             st.request = Some(st.request.map_or(rect, |old| region::union(old, rect)));
         }
         ClientMessage::KeyEvent { down, keysym } => {
-            if !st.view_only {
+            if !st.handle.view_only.load(Ordering::Relaxed) {
                 shared.input.key(keysym, down);
             }
         }
         ClientMessage::PointerEvent { buttons, x, y } => {
-            if !st.view_only {
+            if !st.handle.view_only.load(Ordering::Relaxed) {
                 shared.input.pointer(x, y, buttons);
             }
         }
         ClientMessage::ClientCutText(latin1) => {
-            if !st.view_only {
+            if !st.handle.view_only.load(Ordering::Relaxed) {
                 let text: String = latin1.iter().map(|&b| char::from(b)).collect();
                 shared.input.clipboard(&text);
             }
@@ -246,7 +254,7 @@ where
                     .await?;
             }
             if let Some(text) = reaction.received {
-                if !st.view_only {
+                if !st.handle.view_only.load(Ordering::Relaxed) {
                     // The wire has CR LF; backends get plain LF.
                     shared.input.clipboard(&text.replace("\r\n", "\n"));
                 }
@@ -406,6 +414,8 @@ where
         })
         .collect();
     session.send_update(&rects).await?;
+    st.handle.updates.fetch_add(1, Ordering::Relaxed);
+    st.handle.encoding.store(chosen, Ordering::Relaxed);
     Ok(true)
 }
 

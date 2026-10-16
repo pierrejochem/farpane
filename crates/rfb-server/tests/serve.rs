@@ -233,6 +233,13 @@ impl Viewer {
         }
     }
 
+    async fn key(&mut self, keysym: u32) {
+        self.session
+            .send(&ClientMessage::KeyEvent { down: true, keysym })
+            .await
+            .unwrap();
+    }
+
     /// Wait up to `span` for any event outside updates.
     async fn quiet(&mut self, span: Duration) {
         while let Ok(event) = timeout(span, self.session.next_event()).await {
@@ -1073,4 +1080,88 @@ async fn the_clients_order_of_preference_decides_and_wide_tight_rectangles_are_s
     .await;
     z.request(false).await;
     assert!(z.update().await.iter().all(|&(_, e)| e == enc::ZRLE));
+}
+
+#[tokio::test]
+async fn the_dashboard_can_see_clients_switch_view_only_and_disconnect_them() {
+    let input = Recording::default();
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(64, 64),
+            input.clone(),
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    assert_eq!(server.clients(), []);
+    let (mut v, task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, enc::RAW]).await;
+    v.request(false).await;
+    v.update().await;
+    let list = server.clients();
+    assert_eq!(list.len(), 1);
+    let info = &list[0];
+    assert_eq!(info.encryption, "none");
+    assert_eq!((info.user.as_deref(), info.view_only), (None, false));
+    assert!(info.updates >= 1 && info.encoding == enc::ZRLE, "{info:?}");
+    // The counters move with traffic (they are refreshed each time the task
+    // wakes, so poke it first).
+    v.key(0x61).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let later = &server.clients()[0];
+    assert!(later.bytes_out > 0 && later.bytes_in > 0, "{later:?}");
+
+    // View-only can be switched on and off while connected.
+    let id = info.id;
+    assert!(server.set_view_only(id, true));
+    assert!(server.clients()[0].view_only);
+    input.0.0.lock().unwrap().clear();
+    v.key(0x62).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(input.seen().len(), 0, "input is dropped now");
+    assert!(server.set_view_only(id, false));
+    v.key(0x63).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    assert_eq!(input.seen(), ["key 63 true"]);
+    assert!(!server.set_view_only(9999, true), "no such client");
+
+    // Disconnecting ends the session and removes it from the list.
+    assert!(server.disconnect(id));
+    let ended = timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(ended.is_err());
+    assert_eq!(server.clients(), []);
+    assert!(!server.disconnect(id));
+}
+
+#[tokio::test]
+async fn the_preview_is_a_scaled_copy_of_the_screen() {
+    let server = Server::new(
+        TestPattern::new(400, 200),
+        NoInput,
+        options(),
+        Settings::default(),
+    )
+    .unwrap();
+    let p = server.preview(100);
+    assert_eq!((p.width, p.height), (100, 50));
+    assert_eq!(p.rgba.len(), 100 * 50 * 4);
+    // The top-left pixel is the pattern's, in R, G, B order.
+    let [b, g, r, _] = TestPattern::background(0, 0);
+    assert_eq!(&p.rgba[..4], [r, g, b, 255]);
+    // A small screen is not enlarged, and a request of 0 still gives a pixel.
+    let small = Server::new(
+        TestPattern::new(20, 10),
+        NoInput,
+        options(),
+        Settings::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        (small.preview(500).width, small.preview(500).height),
+        (20, 10)
+    );
+    assert!(small.preview(0).width >= 1);
 }
