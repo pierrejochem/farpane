@@ -51,6 +51,9 @@ pub(crate) struct Shared {
     next_id: AtomicU64,
     pub input: Arc<dyn Input>,
     stop: AtomicBool,
+    /// Sharing is paused: clients keep their last picture and their input
+    /// is ignored.
+    pub paused: AtomicBool,
     /// Why capturing stopped, if it did.
     failure: Mutex<Option<String>>,
     clients: AtomicUsize,
@@ -190,6 +193,7 @@ impl Server {
             next_id: AtomicU64::new(1),
             input: Arc::new(input),
             stop: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             failure: Mutex::new(None),
             clients: AtomicUsize::new(0),
         });
@@ -253,6 +257,20 @@ impl Server {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (fb.width(), fb.height())
+    }
+
+    /// Pause or resume sharing. While paused clients stay connected but get
+    /// no new pictures, and their keyboard, pointer and clipboard input is
+    /// ignored (held keys are let go). Changes made meanwhile are sent on
+    /// resume.
+    pub fn set_paused(&self, paused: bool) {
+        self.shared.paused.store(paused, Ordering::Relaxed);
+    }
+
+    /// Whether sharing is paused.
+    #[must_use]
+    pub fn is_paused(&self) -> bool {
+        self.shared.paused.load(Ordering::Relaxed)
     }
 
     /// Why capturing stopped, if it did. Clients are disconnected then.

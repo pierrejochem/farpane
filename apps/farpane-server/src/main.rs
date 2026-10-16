@@ -55,7 +55,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
-  --page NAME            start on overview, clients, users, security or log
+  --page NAME            start on overview, clients, users, security, displays or log
 
 Settings saved by the dashboard's Security page (server.toml in the config
 folder) apply unless an option here says otherwise.
@@ -144,7 +144,8 @@ fn parse() -> Result<Args, String> {
             }
             "--page" => {
                 let name = value(&mut it, "--page")?;
-                args.page = Page::parse(&name).ok_or("--page: overview, clients, users or log")?;
+                args.page = Page::parse(&name)
+                    .ok_or("--page: overview, clients, users, security, displays or log")?;
             }
             "--listen" => {
                 args.listen = value(&mut it, "--listen")?
@@ -391,6 +392,7 @@ struct Running {
     source: String,
     access: String,
     fingerprints: Vec<(String, String)>,
+    offered: Vec<(String, String, bool)>,
     events: EventLog,
     config_dir: PathBuf,
 }
@@ -509,6 +511,33 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         note(&events, Level::Info, &format!("certificate SHA-256 {text}"));
         fingerprints.push(("Certificate".to_owned(), text));
     }
+    let offered = vec![
+        (
+            "VeNCrypt over TLS".to_owned(),
+            "Certificate you pin in the viewer".to_owned(),
+            access.identity.is_some(),
+        ),
+        (
+            "RSA-AES".to_owned(),
+            "Encrypted, needs user accounts".to_owned(),
+            access.ra2_fingerprint.is_some(),
+        ),
+        (
+            "User accounts".to_owned(),
+            "Name and password, Argon2id".to_owned(),
+            access.authenticator.is_some(),
+        ),
+        (
+            "Shared password (VNC Auth)".to_owned(),
+            "Legacy, 8 characters".to_owned(),
+            access.authenticator.is_none() && args.password.is_some(),
+        ),
+        (
+            "No authentication".to_owned(),
+            "Anyone who can connect gets in".to_owned(),
+            !authenticated,
+        ),
+    ];
     Ok(Running {
         server: Arc::new(server),
         listener,
@@ -516,6 +545,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         source: what,
         access: access.description.clone(),
         fingerprints,
+        offered,
         events,
         config_dir,
     })
@@ -575,6 +605,7 @@ fn main() -> ExitCode {
         fingerprints,
         events,
         config_dir,
+        offered,
     } = running;
     rt.spawn(Arc::clone(&server).listen(listener));
     let backend = Arc::new(LiveBackend {
@@ -583,6 +614,7 @@ fn main() -> ExitCode {
         source,
         access,
         fingerprints,
+        offered,
     });
     let mut dashboard = Dashboard::new(backend, events, config_dir.join("users.toml"), config_dir);
     dashboard.set_screenshot(args.ui_screenshot.clone(), args.page, args.ui_delay);
