@@ -16,6 +16,9 @@ path = "src/main.rs"
 rfb-proto.workspace = true
 rfb-codec.workspace = true
 rfb-security.workspace = true
+rfb-tokio.workspace = true
+rfb-server.workspace = true
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal"] }
 farpane-ui.workspace = true
 
 [lints]

@@ -1,0 +1,21 @@
+[package]
+name = "rfb-server"
+description = "Async RFB server: shared framebuffer with damage tracking and one task per client, over pluggable capture and input backends"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-proto.workspace = true
+rfb-codec.workspace = true
+rfb-tokio.workspace = true
+tokio = { version = "1.53.3", features = ["rt", "sync", "time", "net", "macros"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time", "sync"] }

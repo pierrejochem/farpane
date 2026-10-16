@@ -107,6 +107,31 @@ impl Framebuffer {
         }
     }
 
+    /// Copy `rect`-sized pixels from `bgrx` (rows of `B, G, R, X` bytes, no
+    /// padding) into the picture; the alpha byte is set opaque. A server's
+    /// capture backend uses this to deliver a frame.
+    ///
+    /// # Errors
+    /// [`DecodeError::OutOfBounds`] if `rect` is not inside the picture,
+    /// [`DecodeError::Malformed`] if `bgrx` is not exactly `rect` large.
+    pub fn write_bgrx(&mut self, rect: Rect, bgrx: &[u8]) -> Result<(), DecodeError> {
+        self.check(rect)?;
+        let row_bytes = usize::from(rect.width) * BYTES_PER_PIXEL;
+        if bgrx.len() != row_bytes * usize::from(rect.height) {
+            return Err(DecodeError::Malformed("frame data size"));
+        }
+        for (row, src) in (0..rect.height).zip(bgrx.chunks_exact(row_bytes.max(1))) {
+            for (dst, px) in self
+                .row_mut(rect, row)
+                .chunks_exact_mut(BYTES_PER_PIXEL)
+                .zip(src.chunks_exact(BYTES_PER_PIXEL))
+            {
+                dst.copy_from_slice(&[px[0], px[1], px[2], 0xFF]);
+            }
+        }
+        Ok(())
+    }
+
     /// The bytes of row `row` of `rect`. `rect` must have been checked.
     pub(crate) fn row(&self, rect: Rect, row: u16) -> &[u8] {
         let at = self.offset(rect.x, rect.y + row);
