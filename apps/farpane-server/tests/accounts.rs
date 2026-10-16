@@ -56,7 +56,7 @@ fn setup(tls: bool) -> Setup {
     } else {
         TlsChoice::Off
     };
-    let access = config::choose(dir.path(), None, &choice, move |l| {
+    let access = config::choose(dir.path(), None, &choice, false, move |l| {
         sink.lock().unwrap().push(l);
     });
     let access = match access {
@@ -115,9 +115,11 @@ fn users_without_tls_are_refused_with_a_hint() {
         .add("admin", "", b"admin password", Role::Admin)
         .unwrap();
     users.save().unwrap();
-    let err = config::choose(dir.path(), None, &TlsChoice::Off, |_| {}).unwrap_err();
+    let err = config::choose(dir.path(), None, &TlsChoice::Off, false, |_| {}).unwrap_err();
     assert!(
-        err.contains("needs TLS") && err.contains("--tls-self-signed"),
+        err.contains("needs encryption")
+            && err.contains("--tls-self-signed")
+            && err.contains("--ra2"),
         "{err}"
     );
 }
@@ -125,9 +127,16 @@ fn users_without_tls_are_refused_with_a_hint() {
 #[test]
 fn without_users_the_shared_password_or_nothing_applies() {
     let dir = tempfile::tempdir().unwrap();
-    let a = config::choose(dir.path(), Some(b"pw".to_vec()), &TlsChoice::Off, |_| {}).unwrap();
+    let a = config::choose(
+        dir.path(),
+        Some(b"pw".to_vec()),
+        &TlsChoice::Off,
+        false,
+        |_| {},
+    )
+    .unwrap();
     assert!(a.description.starts_with("shared password") && a.authenticator.is_none());
-    let b = config::choose(dir.path(), None, &TlsChoice::Off, |_| {}).unwrap();
+    let b = config::choose(dir.path(), None, &TlsChoice::Off, false, |_| {}).unwrap();
     assert!(b.description.starts_with("no authentication"));
 }
 
@@ -190,4 +199,71 @@ async fn the_certificate_must_match_the_pinned_fingerprint() {
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Untrusted { .. }), "{err}");
+}
+
+#[tokio::test]
+async fn users_can_sign_in_over_rsa_aes_without_tls_and_roles_still_apply() {
+    use rfb_tokio::Ra2Options;
+    let dir = tempfile::tempdir().unwrap();
+    let mut users = UserStore::load(&dir.path().join("users.toml")).unwrap();
+    users
+        .add("admin", "", b"admin password", Role::Admin)
+        .unwrap();
+    users
+        .add("watcher", "", b"watcher password", Role::View)
+        .unwrap();
+    users.save().unwrap();
+    let access = config::choose(dir.path(), None, &TlsChoice::Off, true, |_| {}).unwrap();
+    assert!(access.identity.is_none());
+    let fingerprint = access.ra2_fingerprint.expect("the RSA-AES key was made");
+    assert!(
+        access.description.contains("RSA-AES"),
+        "{}",
+        access.description
+    );
+    // The key is kept: asking again gives the same fingerprint.
+    let again = config::choose(dir.path(), None, &TlsChoice::Off, true, |_| {}).unwrap();
+    assert_eq!(again.ra2_fingerprint, Some(fingerprint));
+
+    let input = Recording::default();
+    let mut server = Server::new(
+        TestPattern::new(64, 64),
+        input.clone(),
+        access.template.clone(),
+        Settings::default(),
+    )
+    .unwrap();
+    let auth = access.authenticator.clone().unwrap();
+    server.set_policy(move |u| auth.permission(u));
+    let server = Arc::new(server);
+    for (user, password, expect_input) in [
+        ("admin", "admin password", true),
+        ("watcher", "watcher password", false),
+    ] {
+        input.0.lock().unwrap().clear();
+        let (near, far) = duplex(1 << 20);
+        let s = Arc::clone(&server);
+        tokio::spawn(async move { s.serve_connection(far).await });
+        let options = ClientOptions {
+            username: Some(user.as_bytes().to_vec()),
+            password: Some(password.as_bytes().to_vec()),
+            ra2: Some(Ra2Options {
+                server_name: "localhost".to_owned(),
+                pins: vec![fingerprint],
+            }),
+            ..ClientOptions::default()
+        };
+        let (mut session, _) = ClientSession::connect(near, options).await.unwrap();
+        assert!(session.is_ra2() && !session.is_encrypted());
+        session
+            .send(&ClientMessage::KeyEvent {
+                down: true,
+                keysym: 0x61,
+            })
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let seen = input.0.lock().unwrap().clone();
+        assert_eq!(!seen.is_empty(), expect_input, "{user}: {seen:?}");
+    }
 }

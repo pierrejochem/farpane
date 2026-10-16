@@ -16,12 +16,14 @@
 mod client;
 mod error;
 mod io;
+mod ra2;
 mod server;
 mod transport;
 
 pub use client::{ClientOptions, ClientSession, ServerInfo, TlsOptions};
 pub use error::Error;
-pub use server::{PlainVerifier, ServerAuth, ServerOptions, ServerSession};
+pub use ra2::{Ra2Options, Ra2Stream};
+pub use server::{PlainVerifier, Ra2Server, ServerAuth, ServerOptions, ServerSession};
 pub use transport::Transport;
 
 /// How long a handshake may take before the session gives up (design doc,

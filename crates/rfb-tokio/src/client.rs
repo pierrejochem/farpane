@@ -31,6 +31,9 @@ pub struct ClientOptions {
     /// TLS settings. Without them `VeNCrypt` is never chosen, so a server
     /// that offers nothing else is refused rather than talked to in the clear.
     pub tls: Option<TlsOptions>,
+    /// RSA-AES settings. Without them RA2 types are never chosen (the
+    /// server's key must be pinned, so the caller has to be able to ask).
+    pub ra2: Option<crate::Ra2Options>,
     pub handshake_timeout: Duration,
 }
 
@@ -52,6 +55,7 @@ impl Default for ClientOptions {
             password: None,
             username: None,
             tls: None,
+            ra2: None,
             handshake_timeout: HANDSHAKE_TIMEOUT,
         }
     }
@@ -85,6 +89,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
         let mut config = opts.handshake.clone();
         if opts.tls.is_none() {
             config.security.retain(|t| *t != security::VENCRYPT);
+        }
+        if opts.ra2.is_none() || opts.password.is_none() {
+            config.security.retain(|t| {
+                !matches!(
+                    *t,
+                    security::RA2 | security::RA2NE | security::RA2_256 | security::RA2NE_256
+                )
+            });
         }
         // Prefer the subtype that matches what the user supplied.
         config.vencrypt = match (&opts.username, &opts.password) {
@@ -124,6 +136,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
                         .ok_or(Error::Config("TLS requested but no TLS options"))?;
                     self.start_tls(tls).await?;
                     self.conn.tls_established()?;
+                }
+                ClientConnEvent::Handshake(ClientEvent::StartRa2 { security: chosen }) => {
+                    let (variant, keep) = rfb_security::ra2::Variant::from_security(chosen)
+                        .ok_or(Error::Config("unsupported RSA-AES type"))?;
+                    let ra2 = opts
+                        .ra2
+                        .as_ref()
+                        .ok_or(Error::Config("RSA-AES requested but no RSA-AES options"))?;
+                    let password = opts.password.as_deref().ok_or(Error::PasswordRequired)?;
+                    self.io
+                        .stream
+                        .ra2_client(variant, keep, ra2, opts.username.as_deref(), password)
+                        .await?;
+                    self.conn.ra2_established()?;
                 }
                 ClientConnEvent::Handshake(ClientEvent::PlainCredentialsNeeded) => {
                     let username = opts.username.as_deref().ok_or(Error::UsernameRequired)?;
@@ -204,6 +230,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
     pub async fn send(&mut self, msg: &ClientMessage) -> Result<(), Error> {
         self.conn.send(msg, &mut self.io.outbuf)?;
         self.io.flush().await
+    }
+
+    /// Whether the session runs inside RSA-AES encryption.
+    pub fn is_ra2(&self) -> bool {
+        self.io.stream.is_ra2()
     }
 
     /// Whether the session runs inside TLS.

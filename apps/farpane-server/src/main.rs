@@ -23,7 +23,7 @@ use tokio::net::TcpListener;
 const USAGE: &str = "\
 Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH]
                       [--fps N] [--config-dir DIR] [--view-only]
-                      [--tls-self-signed [--tls-name NAME]... | --tls-cert FILE --tls-key FILE]
+                      [--tls-self-signed [--tls-name NAME]... | --tls-cert FILE --tls-key FILE] [--ra2]
                       [--password-file FILE] [--allow-no-auth]
        farpane-server user COMMAND ...     (see `farpane-server user --help`)
 
@@ -37,6 +37,8 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --tls-self-signed      encrypt with a self-signed certificate kept in the
                          config folder; its fingerprint is printed at start
   --tls-name NAME        extra name for that certificate (repeatable)
+  --ra2                  also offer RSA-AES (RA2_256 and RA2) with a key kept in the
+                         config folder; needs users; its fingerprint is printed
   --tls-cert/--tls-key   encrypt with your own PEM certificate and key
   --password-file FILE   shared VNC password (first line), when there are no
                          users; $FARPANE_PASSWORD also works
@@ -60,6 +62,7 @@ struct Args {
     x11_display: Option<String>,
     config_dir: Option<PathBuf>,
     self_signed: bool,
+    ra2: bool,
     tls_names: Vec<String>,
     tls_cert: Option<PathBuf>,
     tls_key: Option<PathBuf>,
@@ -88,6 +91,7 @@ fn parse() -> Result<Args, String> {
         x11_display: None,
         config_dir: None,
         self_signed: false,
+        ra2: false,
         tls_names: Vec::new(),
         tls_cert: None,
         tls_key: None,
@@ -133,6 +137,7 @@ fn parse() -> Result<Args, String> {
             }
             "--config-dir" => args.config_dir = Some(value(&mut it, "--config-dir")?.into()),
             "--tls-self-signed" => args.self_signed = true,
+            "--ra2" => args.ra2 = true,
             "--tls-name" => args.tls_names.push(value(&mut it, "--tls-name")?),
             "--tls-cert" => args.tls_cert = Some(value(&mut it, "--tls-cert")?.into()),
             "--tls-key" => args.tls_key = Some(value(&mut it, "--tls-key")?.into()),
@@ -287,7 +292,9 @@ async fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let access = match config::choose(&config_dir, args.password.clone(), &tls, |l| log(&l)) {
+    let access = match config::choose(&config_dir, args.password.clone(), &tls, args.ra2, |l| {
+        log(&l);
+    }) {
         Ok(a) => a,
         Err(e) => {
             eprintln!("farpane-server: {e}");
@@ -348,6 +355,9 @@ async fn main() -> ExitCode {
         args.listen,
         access.description
     ));
+    if let Some(fp) = &access.ra2_fingerprint {
+        log(&format!("RSA-AES key SHA-256 {}", format_fingerprint(fp)));
+    }
     if let Some(id) = &access.identity {
         log(&format!(
             "certificate SHA-256 {}",

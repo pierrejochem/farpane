@@ -85,6 +85,37 @@ pub fn load_or_generate(dir: &Path, names: &[String]) -> io::Result<Identity> {
     load(&cert_path, &key_path)
 }
 
+/// The server's RSA key for the RSA-AES security types: `dir/ra2_key.pem`,
+/// generated once (it takes a moment) and kept private to its owner. Clients
+/// pin the fingerprint of its public half, which stays the same.
+///
+/// # Errors
+/// I/O errors, or a file that exists but is not a usable key (never replaced).
+pub fn load_or_generate_ra2(dir: &Path) -> io::Result<Arc<rfb_security::ra2::KeyPair>> {
+    use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey, LineEnding};
+    let path = dir.join("ra2_key.pem");
+    let pair = match fs::read_to_string(&path) {
+        Ok(pem) => {
+            let private = rsa::RsaPrivateKey::from_pkcs8_pem(&pem)
+                .map_err(|e| bad(format!("{}: {e}", path.display())))?;
+            rfb_security::ra2::KeyPair::from_private(private)
+                .map_err(|e| bad(format!("{}: {e}", path.display())))?
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            let pair = rfb_security::ra2::KeyPair::generate().map_err(|e| bad(e.to_string()))?;
+            let pem = pair
+                .private()
+                .to_pkcs8_pem(LineEnding::LF)
+                .map_err(|e| bad(e.to_string()))?;
+            fs::create_dir_all(dir)?;
+            write_private(&path, pem.as_bytes())?;
+            pair
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(Arc::new(pair))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -52,7 +52,9 @@ fn run(
                 }
                 Some(e @ ClientEvent::ServerInit { .. }) => run.client_event = Some(e),
                 Some(
-                    other @ (ClientEvent::StartTls { .. } | ClientEvent::PlainCredentialsNeeded),
+                    other @ (ClientEvent::StartTls { .. }
+                    | ClientEvent::StartRa2 { .. }
+                    | ClientEvent::PlainCredentialsNeeded),
                 ) => {
                     panic!("these tests use no VeNCrypt: {other:?}")
                 }
@@ -80,7 +82,9 @@ fn run(
                     s.server_init(1920, 1080, &PixelFormat::RGB888, b"desk", &mut out)?;
                 }
                 Some(
-                    other @ (ServerEvent::StartTls { .. } | ServerEvent::PlainCredentials { .. }),
+                    other @ (ServerEvent::StartTls { .. }
+                    | ServerEvent::Ra2Selected { .. }
+                    | ServerEvent::PlainCredentials { .. }),
                 ) => {
                     panic!("these tests use no VeNCrypt: {other:?}")
                 }
@@ -401,4 +405,80 @@ fn golden_client_transcripts_3_3_and_3_7() {
     want.extend_from_slice(&RESPONSE);
     want.push(1);
     assert_eq!(out, want);
+}
+
+// --- RSA-AES: the handshake hands the stream to the caller -------------------
+
+#[test]
+fn rsa_aes_is_chosen_reported_and_resumes_with_the_security_result() {
+    for (chosen, version) in [
+        (security::RA2_256, V::V3_8),
+        (security::RA2, V::V3_8),
+        (security::RA2NE_256, V::V3_7),
+        (security::RA2NE, V::V3_8),
+    ] {
+        let mut c = ClientHandshake::new(ClientConfig {
+            max_version: version,
+            shared: true,
+            security: vec![chosen, security::NONE],
+            vencrypt: vec![],
+        });
+        let mut to_client = Vec::new();
+        let mut s = ServerHandshake::new(
+            ServerConfig {
+                max_version: version,
+                security: vec![chosen],
+                ..ServerConfig::default()
+            },
+            &mut to_client,
+        );
+        let (mut to_server, mut c_in, mut s_in) = (Vec::new(), Vec::new(), Vec::new());
+        let (mut client_asked, mut server_asked) = (None, None);
+        for _ in 0..50 {
+            c_in.append(&mut to_client);
+            let mut out = Vec::new();
+            let (n, ev) = c.poll(&c_in, &mut out).unwrap();
+            c_in.drain(..n);
+            to_server.append(&mut out);
+            if let Some(ClientEvent::StartRa2 { security }) = ev {
+                client_asked = Some(security);
+                // The RSA-AES handshake would run here; nothing was buffered.
+                assert_eq!(c_in.len(), 0);
+                c.ra2_established().unwrap();
+            }
+            s_in.append(&mut to_server);
+            let mut out = Vec::new();
+            let (n, ev) = s.poll(&s_in, &mut out).unwrap();
+            s_in.drain(..n);
+            to_client.append(&mut out);
+            let mut out = Vec::new();
+            match ev {
+                Some(ServerEvent::Ra2Selected { security }) => {
+                    server_asked = Some(security);
+                    s.security_result(true, b"", &mut out).unwrap();
+                }
+                Some(ServerEvent::ClientInit { .. }) => {
+                    s.server_init(8, 8, &PixelFormat::RGB888, b"x", &mut out)
+                        .unwrap();
+                }
+                _ => {}
+            }
+            to_client.append(&mut out);
+            if c.is_done() && s.is_done() {
+                break;
+            }
+        }
+        assert_eq!(
+            (client_asked, server_asked),
+            (Some(chosen), Some(chosen)),
+            "{chosen}"
+        );
+        assert!(c.is_done() && s.is_done(), "{chosen}");
+    }
+}
+
+#[test]
+fn rsa_aes_calls_out_of_order_fail() {
+    let mut c = ClientHandshake::new(ClientConfig::default());
+    assert!(c.ra2_established().is_err());
 }

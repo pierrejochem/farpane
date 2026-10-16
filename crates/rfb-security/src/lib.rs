@@ -5,6 +5,7 @@
 //! RA2 and RA2-256 (RSA + AES-EAX framing), Apple DH (viewer), checking
 //! credentials against the server's own user list (Argon2id).
 
+pub mod ra2;
 pub mod tls;
 pub mod vnc_auth;
 

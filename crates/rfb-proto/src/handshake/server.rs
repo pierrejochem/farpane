@@ -42,6 +42,10 @@ pub enum ServerEvent {
     /// `VeNCrypt`: the client picked a TLS subtype. Run the TLS handshake as
     /// the server, then call [`ServerHandshake::tls_established`].
     StartTls { subtype: u32 },
+    /// The client chose an RSA-AES type (5, 6, 129 or 130). Run its
+    /// handshake: send the server's public key first. Check the credentials
+    /// it ends with, then call [`ServerHandshake::security_result`].
+    Ra2Selected { security: u8 },
     /// `X509Plain` credentials from the client, received over TLS. Verify
     /// them, then call [`ServerHandshake::security_result`].
     PlainCredentials {
@@ -411,6 +415,13 @@ impl ServerHandshake {
                 out.extend_from_slice(&[0, 2]); // the highest version we support: 0.2
                 self.state = State::VencryptVersion;
                 Ok(None)
+            }
+            security::RA2 | security::RA2NE | security::RA2_256 | security::RA2NE_256
+                if self.version != ProtocolVersion::V3_3 =>
+            {
+                // The caller runs the handshake, then sends the SecurityResult.
+                self.state = State::AwaitResultSend;
+                Ok(Some(ServerEvent::Ra2Selected { security: t }))
             }
             _ => Err(ProtoError::NoAcceptableSecurity),
         }
