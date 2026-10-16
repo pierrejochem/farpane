@@ -12,5 +12,7 @@ mod screenshot;
 pub mod settings;
 pub mod stats;
 
-pub use screen::{ConnectError, DEFAULT_ENCODINGS, RemoteScreen, ScreenEvent};
+pub use screen::{
+    ConnectError, ConnectOptions, DEFAULT_ENCODINGS, RemoteScreen, ScreenEvent, host_of,
+};
 pub use screenshot::{parse_encodings, write_image};

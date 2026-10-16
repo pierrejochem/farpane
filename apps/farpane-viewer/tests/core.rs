@@ -46,6 +46,8 @@ fn connect(core: &Core, addr: &str) {
     core.send(Command::Connect {
         addr: addr.to_owned(),
         password: None,
+        username: None,
+        pins: vec![],
     });
 }
 

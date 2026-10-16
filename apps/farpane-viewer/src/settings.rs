@@ -12,6 +12,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use rfb_security::tls::{Fingerprint, format_fingerprint, parse_fingerprint};
 use serde::{Deserialize, Serialize};
 
 /// The file format version this build writes.
@@ -55,6 +56,15 @@ pub struct SavedConnection {
     pub last_connected: u64,
 }
 
+/// A TLS certificate the user chose to trust for one server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnownHost {
+    /// The address as typed (`host:port`).
+    pub host: String,
+    /// SHA-256 fingerprint of the certificate, `AB:CD:...`.
+    pub sha256: String,
+}
+
 /// Everything the viewer remembers between runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -63,6 +73,9 @@ pub struct Settings {
     pub appearance: Appearance,
     #[serde(rename = "connection")]
     pub connections: Vec<SavedConnection>,
+    /// Pinned certificates (trust on first use).
+    #[serde(rename = "known_host")]
+    pub known_hosts: Vec<KnownHost>,
 }
 
 impl Default for Settings {
@@ -71,6 +84,7 @@ impl Default for Settings {
             version: FORMAT_VERSION,
             appearance: Appearance::default(),
             connections: Vec::new(),
+            known_hosts: Vec::new(),
         }
     }
 }
@@ -111,6 +125,28 @@ impl Settings {
         self.connections
             .sort_by_key(|c| std::cmp::Reverse(c.last_connected));
         self.connections.truncate(MAX_SAVED_CONNECTIONS);
+    }
+
+    /// The fingerprints trusted for `addr` (unreadable entries are skipped).
+    #[must_use]
+    pub fn pins_for(&self, addr: &str) -> Vec<Fingerprint> {
+        self.known_hosts
+            .iter()
+            .filter(|k| key(&k.host) == key(addr))
+            .filter_map(|k| parse_fingerprint(&k.sha256))
+            .collect()
+    }
+
+    /// Trust exactly `fingerprint` for `addr`, replacing earlier pins (a
+    /// server has one certificate at a time; accepting a changed one retires
+    /// the old pin).
+    pub fn pin(&mut self, addr: &str, fingerprint: &Fingerprint) {
+        let addr = addr.trim();
+        self.known_hosts.retain(|k| key(&k.host) != key(addr));
+        self.known_hosts.push(KnownHost {
+            host: addr.to_owned(),
+            sha256: format_fingerprint(fingerprint),
+        });
     }
 
     /// Remove the entry for `addr`; returns whether there was one.
@@ -413,6 +449,49 @@ mod tests {
         assert!(s.forget("A:1"));
         assert!(!s.forget("a:1"));
         assert_eq!(s.connections.len(), 1);
+    }
+
+    #[test]
+    fn pins_are_per_server_replaced_not_accumulated_and_survive_the_file() {
+        let mut s = Settings::default();
+        let (a, b) = ([1u8; 32], [2u8; 32]);
+        assert_eq!(s.pins_for("srv:5900").len(), 0);
+        s.pin("srv:5900", &a);
+        s.pin("other:5900", &b);
+        assert_eq!(
+            s.pins_for("SRV:5900"),
+            [a],
+            "names compare case-insensitively"
+        );
+        // Accepting a changed certificate retires the old pin.
+        s.pin(" srv:5900 ", &b);
+        assert_eq!(s.pins_for("srv:5900"), [b]);
+        assert_eq!(s.known_hosts.len(), 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, path) = store_in(&dir);
+        store.settings = s.clone();
+        store.save().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("[[known_host]]") && text.contains("02:02:02"),
+            "{text}"
+        );
+        assert_eq!(Store::load(Some(path)).0.settings.pins_for("srv:5900"), [b]);
+    }
+
+    #[test]
+    fn a_damaged_pin_is_ignored_not_trusted() {
+        let mut s = Settings::default();
+        s.known_hosts.push(KnownHost {
+            host: "srv:5900".into(),
+            sha256: "not a fingerprint".into(),
+        });
+        assert_eq!(
+            s.pins_for("srv:5900").len(),
+            0,
+            "an unreadable pin trusts nothing"
+        );
     }
 
     #[test]

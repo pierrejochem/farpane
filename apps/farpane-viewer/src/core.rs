@@ -8,9 +8,14 @@ use std::{
 
 use rfb_codec::{Cursor, Damage};
 use rfb_proto::types::Rect;
+use rfb_security::tls::{CertProblem, Fingerprint};
+use rfb_tokio::Error as SessionError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::{RemoteScreen, ScreenEvent, screen::DEFAULT_ENCODINGS, stats::Snapshot};
+use crate::{
+    ConnectError, ConnectOptions, RemoteScreen, ScreenEvent, screen::DEFAULT_ENCODINGS,
+    stats::Snapshot,
+};
 
 /// How often the UI gets a statistics reading.
 const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -21,6 +26,10 @@ pub enum Command {
     Connect {
         addr: String,
         password: Option<Vec<u8>>,
+        /// For `VeNCrypt` `X509Plain`.
+        username: Option<Vec<u8>>,
+        /// Certificate fingerprints trusted for this server.
+        pins: Vec<Fingerprint>,
     },
     Disconnect,
     Key {
@@ -61,6 +70,15 @@ pub enum UiEvent {
     Bell,
     /// Clipboard text from the server (Latin-1 bytes).
     CutText(Vec<u8>),
+    /// The server's TLS certificate is not trusted. Nothing was sent
+    /// besides the handshake. Ask the user; if they accept, connect again with
+    /// the fingerprint in `pins`.
+    Untrusted {
+        addr: String,
+        host: String,
+        fingerprint: Fingerprint,
+        problem: CertProblem,
+    },
     /// The connection ended; `Some` carries the reason for an error.
     Disconnected(Option<String>),
 }
@@ -144,15 +162,28 @@ impl Notifier {
 async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
     loop {
         // Idle: wait for a Connect; other commands have nothing to act on.
-        let (addr, password) = loop {
+        let (addr, options) = loop {
             match commands.recv().await {
-                Some(Command::Connect { addr, password }) => break (addr, password),
+                Some(Command::Connect {
+                    addr,
+                    password,
+                    username,
+                    pins,
+                }) => {
+                    let options = ConnectOptions {
+                        password,
+                        username,
+                        pins,
+                        ..ConnectOptions::default()
+                    };
+                    break (addr, options);
+                }
                 Some(_) => {}
                 None => return,
             }
         };
         ui.emit(UiEvent::Connecting);
-        let connect = RemoteScreen::connect_with(&addr, password, &DEFAULT_ENCODINGS);
+        let connect = RemoteScreen::connect_opts(&addr, &options, &DEFAULT_ENCODINGS);
         tokio::pin!(connect);
         // `Err(None)` means the user cancelled while connecting.
         let screen: Result<RemoteScreen, Option<crate::ConnectError>> = loop {
@@ -172,6 +203,16 @@ async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
                 }
             }
             Err(None) => ui.emit(UiEvent::Disconnected(None)),
+            Err(Some(ConnectError::Session(SessionError::Untrusted {
+                host,
+                fingerprint,
+                problem,
+            }))) => ui.emit(UiEvent::Untrusted {
+                addr: addr.clone(),
+                host,
+                fingerprint,
+                problem,
+            }),
             Err(Some(e)) => ui.emit(UiEvent::Disconnected(Some(e.to_string()))),
         }
         if commands.is_closed() {

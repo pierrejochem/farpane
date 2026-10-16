@@ -13,6 +13,7 @@ use egui::{
 use farpane_ui::{Accent, ThemePreference, Tokens, style};
 use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
+use rfb_security::tls::{CertProblem, Fingerprint, format_fingerprint};
 
 use crate::{
     appearance,
@@ -51,6 +52,15 @@ const CARD_WIDTH: f32 = 220.0;
 /// Cursors wider or taller than this are not drawn (the server still thinks
 /// we show them, so we hide ours rather than the local one).
 const MAX_CURSOR_PX: u16 = 512;
+
+/// A server whose TLS certificate is not trusted yet, waiting for the user.
+#[derive(Debug, Clone)]
+struct TrustPrompt {
+    addr: String,
+    host: String,
+    fingerprint: Fingerprint,
+    problem: CertProblem,
+}
 
 /// The full-screen toolbar: a slim tab at the top edge that opens a pill of
 /// controls. Times are egui's clock, in seconds, so tests can drive them.
@@ -94,6 +104,9 @@ pub struct ViewerApp {
     phase: Phase,
     addr: String,
     password: String,
+    /// For servers that ask for a username as well (`VeNCrypt` `X509Plain`).
+    username: String,
+    trust_prompt: Option<TrustPrompt>,
     error: Option<String>,
     theme: ThemePreference,
     accent: Accent,
@@ -159,6 +172,8 @@ impl ViewerApp {
             phase: Phase::Home,
             addr: startup.addr.clone().unwrap_or_default(),
             password: String::new(),
+            username: String::new(),
+            trust_prompt: None,
             error: None,
             theme: appearance::theme_from(&look.theme),
             accent: appearance::accent_from(&look.accent),
@@ -237,6 +252,22 @@ impl ViewerApp {
         self.rx_history.len()
     }
 
+    /// Fill in the address field, as if typed.
+    pub fn set_address(&mut self, addr: &str) {
+        addr.clone_into(&mut self.addr);
+    }
+
+    /// Connect to the address in the field, as if the button was clicked.
+    pub fn start_connect(&mut self) {
+        self.connect();
+    }
+
+    /// Fill in the credential fields, as if typed.
+    pub fn set_credentials(&mut self, username: &str, password: &str) {
+        username.clone_into(&mut self.username);
+        password.clone_into(&mut self.password);
+    }
+
     /// Turn clipboard sharing on or off.
     pub fn set_clipboard_sync(&mut self, on: bool) {
         self.clipboard_sync = on;
@@ -295,6 +326,7 @@ impl ViewerApp {
         if self.stats_visible && self.is_connected() {
             self.stats_overlay(ctx, &tokens);
         }
+        self.trust_window(ctx, &tokens);
         self.settings_window(ctx);
         self.toast(ctx, &tokens);
         self.sync_appearance();
@@ -346,10 +378,40 @@ impl ViewerApp {
 
     fn connect_with(&mut self, password: Option<Vec<u8>>) {
         self.last_addr = self.addr.trim().to_owned();
+        self.trust_prompt = None;
+        let username = (!self.username.is_empty()).then(|| self.username.clone().into_bytes());
         self.core.send(Command::Connect {
             addr: self.last_addr.clone(),
             password,
+            username,
+            pins: self.store.settings.pins_for(&self.last_addr),
         });
+    }
+
+    /// The certificate waiting for a decision: its fingerprint as shown to the
+    /// user, and why it is not trusted yet.
+    #[must_use]
+    pub fn pending_trust(&self) -> Option<(String, CertProblem)> {
+        self.trust_prompt
+            .as_ref()
+            .map(|p| (format_fingerprint(&p.fingerprint), p.problem.clone()))
+    }
+
+    /// The user trusts the waiting certificate: remember it (replacing any
+    /// older one for that server) and connect again.
+    pub fn trust_pending(&mut self) {
+        if let Some(prompt) = self.trust_prompt.take() {
+            self.store.settings.pin(&prompt.addr, &prompt.fingerprint);
+            self.persist();
+            self.addr = prompt.addr;
+            let password = (!self.password.is_empty()).then(|| self.password.clone().into_bytes());
+            self.connect_with(password);
+        }
+    }
+
+    /// The user does not trust the waiting certificate.
+    pub fn reject_pending(&mut self) {
+        self.trust_prompt = None;
     }
 
     fn tokens(&self, ctx: &Context) -> Tokens {
@@ -404,6 +466,20 @@ impl ViewerApp {
                             ctx.copy_text(text);
                         }
                     }
+                }
+                UiEvent::Untrusted {
+                    addr,
+                    host,
+                    fingerprint,
+                    problem,
+                } => {
+                    self.phase = Phase::Home;
+                    self.trust_prompt = Some(TrustPrompt {
+                        addr,
+                        host,
+                        fingerprint,
+                        problem,
+                    });
                 }
                 UiEvent::Stats(snapshot) => {
                     if self.rx_history.len() == HISTORY_LEN {
@@ -866,6 +942,14 @@ impl ViewerApp {
                         );
                         ui.add_space(8.0);
                         ui.label(
+                            RichText::new("Username (only if the server asks)").color(tokens.muted),
+                        );
+                        ui.add_enabled(
+                            !connecting,
+                            TextEdit::singleline(&mut self.username).desired_width(f32::INFINITY),
+                        );
+                        ui.add_space(8.0);
+                        ui.label(
                             RichText::new("Password (if the server asks)").color(tokens.muted),
                         );
                         let password = ui.add_enabled(
@@ -991,6 +1075,104 @@ impl ViewerApp {
         if let Some(addr) = connect {
             self.addr = addr;
             self.connect();
+        }
+    }
+
+    /// The "do you trust this server?" dialog.
+    fn trust_window(&mut self, ctx: &Context, tokens: &Tokens) {
+        let Some(prompt) = self.trust_prompt.clone() else {
+            return;
+        };
+        let changed = prompt.problem == CertProblem::Changed;
+        let mut decision = None;
+        // A dialog over the connect form must be opaque, or both texts mix.
+        let solid = tokens.reduce_transparency();
+        egui::Window::new(if changed {
+            "Certificate changed"
+        } else {
+            "Trust this server?"
+        })
+        .frame(
+            Frame::NONE
+                .fill(solid.card.into())
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    Color32::from(if changed { tokens.red } else { tokens.line }),
+                ))
+                .corner_radius(style::radius(tokens.radius / 1.5))
+                .inner_margin(Margin::same(18)),
+        )
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_max_width(460.0);
+            match &prompt.problem {
+                CertProblem::Changed => {
+                    ui.label(
+                        RichText::new(format!(
+                            "WARNING: the certificate of {} is different from the one you trusted.",
+                            prompt.host
+                        ))
+                        .color(tokens.red)
+                        .strong(),
+                    );
+                    ui.label(
+                        "This can mean the server's certificate was renewed. It can also mean \
+                             someone is intercepting the connection. Only continue if you expected \
+                             this change and the fingerprint below matches what the server's \
+                             administrator gave you.",
+                    );
+                }
+                CertProblem::Unknown => {
+                    ui.label(format!(
+                        "{} has not been seen before and its certificate is not signed by a \
+                             known authority.",
+                        prompt.host
+                    ));
+                    ui.label(
+                        "Compare the fingerprint with the one the server's administrator gave you.",
+                    );
+                }
+                CertProblem::Invalid(why) => {
+                    ui.label(
+                        RichText::new(format!(
+                            "The certificate of {} has a problem: {why}.",
+                            prompt.host
+                        ))
+                        .color(tokens.amber),
+                    );
+                }
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("SHA-256 fingerprint").color(tokens.muted));
+            ui.label(
+                RichText::new(format_fingerprint(&prompt.fingerprint))
+                    .monospace()
+                    .size(12.0),
+            );
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                let label = if changed {
+                    "Replace and connect"
+                } else {
+                    "Trust and connect"
+                };
+                let button = egui::Button::new(RichText::new(label).color(Color32::WHITE)).fill(
+                    Color32::from(if changed { tokens.red } else { tokens.accent }),
+                );
+                if ui.add(button).clicked() {
+                    decision = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    decision = Some(false);
+                }
+            });
+        });
+        match decision {
+            Some(true) => self.trust_pending(),
+            Some(false) => self.reject_pending(),
+            None => {}
         }
     }
 
@@ -1198,6 +1380,10 @@ impl ViewerApp {
         };
         let ready = match self.connected_at {
             Some(at) => at.elapsed() > Duration::from_millis(2500),
+            // A trust question on screen is what the screenshot is for.
+            None if self.trust_prompt.is_some() => {
+                self.started.elapsed() > Duration::from_millis(1500)
+            }
             None => {
                 self.startup_password.is_none()
                     && self.addr.is_empty()
