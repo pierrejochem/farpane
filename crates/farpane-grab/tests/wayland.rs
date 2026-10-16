@@ -1,3 +1,4 @@
+#![cfg(all(unix, not(target_vendor = "apple")))]
 //! The Wayland backend against the running compositor; skipped without one.
 //!
 //! A real toplevel surface is created with a small client of its own, then the

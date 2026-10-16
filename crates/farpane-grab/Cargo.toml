@@ -10,18 +10,22 @@ authors.workspace = true
 
 [dependencies]
 raw-window-handle = "0.6"
+
+# The Wayland and X11 backends exist only where those windowing systems do:
+# Linux and the BSDs. (wayland-sys does not even compile on Windows.)
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dependencies]
 wayland-backend = { version = "0.3.17", features = ["client_system", "dlopen"] }
 wayland-client = "0.31.15"
 wayland-protocols = { version = "0.32.12", features = ["client", "unstable"] }
 x11-dl = "2.21.0"
 
+[target.'cfg(all(unix, not(target_vendor = "apple")))'.dev-dependencies]
+x11rb = { version = "0.14.0", features = ["xtest"] }
+
 # This crate is the one place in the workspace where `unsafe` is allowed (the
 # workspace denies it): it turns the raw window and display pointers that
 # winit hands out into protocol objects. See the crate documentation for the
 # justification. Everything else matches the workspace lints.
-[dev-dependencies]
-x11rb = { version = "0.14.0", features = ["xtest"] }
-
 [lints.rust]
 unsafe_code = "allow"
 unsafe_op_in_unsafe_fn = "deny"
