@@ -126,6 +126,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
         self.io.flush().await
     }
 
+    /// Bytes read from the stream so far, handshake included.
+    #[must_use]
+    pub fn bytes_received(&self) -> u64 {
+        self.io.received
+    }
+
+    /// Bytes written to the stream so far, handshake included.
+    #[must_use]
+    pub fn bytes_sent(&self) -> u64 {
+        self.io.sent
+    }
+
     /// The protocol state: framebuffer size, pixel format, version.
     #[must_use]
     pub fn conn(&self) -> &ClientConn {
