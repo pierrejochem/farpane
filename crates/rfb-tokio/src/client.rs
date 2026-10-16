@@ -250,6 +250,24 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
         self.io.flush().await
     }
 
+    /// The protocol version in use.
+    #[must_use]
+    pub fn version(&self) -> rfb_proto::ProtocolVersion {
+        self.conn.version()
+    }
+
+    /// The security type in use (a number from `rfb_proto::consts::security`).
+    #[must_use]
+    pub fn security_type(&self) -> Option<u8> {
+        self.conn.security_type()
+    }
+
+    /// The `VeNCrypt` subtype in use.
+    #[must_use]
+    pub fn vencrypt_subtype(&self) -> Option<u32> {
+        self.conn.vencrypt_subtype()
+    }
+
     /// Whether the session runs inside RSA-AES encryption.
     pub fn is_ra2(&self) -> bool {
         self.io.stream.is_ra2()

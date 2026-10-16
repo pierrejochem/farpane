@@ -214,6 +214,39 @@ impl RemoteScreen {
         Ok(screen)
     }
 
+    /// The protocol version in use, such as `RFB 3.8`.
+    #[must_use]
+    pub fn protocol(&self) -> String {
+        match self.session.version() {
+            rfb_proto::ProtocolVersion::V3_3 => "RFB 3.3",
+            rfb_proto::ProtocolVersion::V3_7 => "RFB 3.7",
+            rfb_proto::ProtocolVersion::V3_8 => "RFB 3.8",
+        }
+        .to_owned()
+    }
+
+    /// How the session signed in and is protected, such as
+    /// `VeNCrypt X509Vnc` or `VNC Auth`.
+    #[must_use]
+    pub fn security(&self) -> String {
+        use rfb_proto::consts::{security, vencrypt};
+        match self.session.security_type() {
+            Some(security::NONE) => "None".to_owned(),
+            Some(security::VNC_AUTH) => "VNC Auth".to_owned(),
+            Some(security::VENCRYPT) => match self.session.vencrypt_subtype() {
+                Some(vencrypt::X509_NONE) => "VeNCrypt X509None".to_owned(),
+                Some(vencrypt::X509_VNC) => "VeNCrypt X509Vnc".to_owned(),
+                Some(vencrypt::X509_PLAIN) => "VeNCrypt X509Plain".to_owned(),
+                _ => "VeNCrypt".to_owned(),
+            },
+            Some(security::RA2) => "RSA-AES".to_owned(),
+            Some(security::RA2_256) => "RSA-AES-256".to_owned(),
+            Some(security::RA2NE) => "RSA-AES (unencrypted after sign-in)".to_owned(),
+            Some(security::RA2NE_256) => "RSA-AES-256 (unencrypted after sign-in)".to_owned(),
+            _ => "unknown".to_owned(),
+        }
+    }
+
     /// The remote desktop's name.
     #[must_use]
     pub fn name(&self) -> &str {

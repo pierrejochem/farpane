@@ -105,6 +105,18 @@ impl ClientConn {
         self.hs.version()
     }
 
+    /// The security type in use, once one was chosen.
+    #[must_use]
+    pub fn security_type(&self) -> Option<u8> {
+        self.hs.security_type()
+    }
+
+    /// The `VeNCrypt` subtype in use, once one was chosen.
+    #[must_use]
+    pub fn vencrypt_subtype(&self) -> Option<u32> {
+        self.hs.vencrypt_subtype()
+    }
+
     /// Framebuffer size: from `ServerInit`, updated by `DesktopSize`.
     #[must_use]
     pub fn framebuffer_size(&self) -> (u16, u16) {

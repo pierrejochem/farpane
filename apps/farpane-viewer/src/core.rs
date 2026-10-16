@@ -61,6 +61,9 @@ pub enum UiEvent {
         name: String,
         width: u16,
         height: u16,
+        /// `RFB 3.8`, and how the session is secured.
+        protocol: String,
+        security: String,
     },
     /// New pixels for `rect`, as `R, G, B, 0xFF` rows.
     Frame {
@@ -256,6 +259,8 @@ async fn session(
         name: screen.name().to_owned(),
         width: w,
         height: h,
+        protocol: screen.protocol(),
+        security: screen.security(),
     });
     // Readings four times a second (design doc, section 16); a slow UI thread
     // makes the interval skip, not pile up.
