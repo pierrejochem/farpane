@@ -15,8 +15,9 @@ impl From<Rgba> for Color32 {
 const STROKE_WIDTH: f32 = 1.0;
 
 /// Corner radius for panels and windows, clamped to what egui can store.
+#[must_use]
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // clamped to 0..=255
-fn radius(px: f32) -> CornerRadius {
+pub fn radius(px: f32) -> CornerRadius {
     CornerRadius::same(px.round().clamp(0.0, 255.0) as u8)
 }
 
