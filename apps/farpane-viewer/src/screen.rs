@@ -7,6 +7,8 @@ use rfb_proto::{
 use rfb_tokio::{ClientOptions, ClientSession, Error, ServerInfo};
 use tokio::net::TcpStream;
 
+use crate::stats::{Collector, Snapshot};
+
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
 pub const DEFAULT_ENCODINGS: [i32; 8] = [
@@ -59,6 +61,7 @@ pub struct RemoteScreen {
     decoder: Decoder,
     fb: Framebuffer,
     name: String,
+    stats: Collector,
 }
 
 impl RemoteScreen {
@@ -111,6 +114,7 @@ impl RemoteScreen {
             decoder,
             fb,
             name: String::from_utf8_lossy(&name).into_owned(),
+            stats: Collector::new(std::time::Instant::now()),
         };
         screen.request_update(false).await?;
         Ok(screen)
@@ -157,13 +161,17 @@ impl RemoteScreen {
         loop {
             match self.session.next_event().await? {
                 ClientConnEvent::Rect { header, payload } => {
+                    self.stats.record_rect(header.encoding, payload.len());
                     match self.decoder.decode(&mut self.fb, &header, &payload)? {
                         Damage::None => {}
                         Damage::Cursor(cursor) => return Ok(ScreenEvent::Cursor(cursor)),
                         damage => return Ok(ScreenEvent::Damage(damage)),
                     }
                 }
-                ClientConnEvent::UpdateEnd => return Ok(ScreenEvent::UpdateEnd),
+                ClientConnEvent::UpdateEnd => {
+                    self.stats.record_update();
+                    return Ok(ScreenEvent::UpdateEnd);
+                }
                 ClientConnEvent::Bell => return Ok(ScreenEvent::Bell),
                 ClientConnEvent::CutText(text) => return Ok(ScreenEvent::CutText(text)),
                 ClientConnEvent::Handshake(_)
@@ -188,6 +196,16 @@ impl RemoteScreen {
                 ScreenEvent::Cursor(_) | ScreenEvent::Bell | ScreenEvent::CutText(_) => {}
             }
         }
+    }
+
+    /// Take a statistics reading: rates since the previous reading, totals,
+    /// and the encoding mix since the connection started.
+    pub fn sample_stats(&mut self, now: std::time::Instant) -> Snapshot {
+        self.stats.sample(
+            now,
+            self.session.bytes_received(),
+            self.session.bytes_sent(),
+        )
     }
 
     /// Send a key press or release (an X11 keysym).

@@ -49,10 +49,14 @@ fn connect(core: &Core, addr: &str) {
     });
 }
 
-/// Wait for the next event, up to five seconds.
+/// Wait for the next event, up to five seconds. Statistics readings, which
+/// arrive on a timer, are skipped; `next_stats` looks for those.
 async fn next(core: &Core) -> UiEvent {
     for _ in 0..1000 {
         if let Some(e) = core.try_recv() {
+            if matches!(e, UiEvent::Stats(_)) {
+                continue;
+            }
             return e;
         }
         tokio::time::sleep(Duration::from_millis(5)).await;
@@ -289,4 +293,77 @@ async fn cursor_shapes_are_forwarded_to_the_ui() {
         UiEvent::Cursor(c) => assert_eq!(c.rgba, [3, 2, 1, 255]),
         other => panic!("{other:?}"),
     }
+}
+
+/// Wait for a statistics reading that satisfies `want`.
+async fn next_stats(
+    core: &Core,
+    want: impl Fn(&farpane_viewer::stats::Snapshot) -> bool,
+) -> farpane_viewer::stats::Snapshot {
+    for _ in 0..1000 {
+        match core.try_recv() {
+            Some(UiEvent::Stats(s)) if want(&s) => return s,
+            Some(_) => {}
+            None => tokio::time::sleep(Duration::from_millis(5)).await,
+        }
+    }
+    panic!("no matching statistics reading within 5 s");
+}
+
+#[tokio::test]
+async fn statistics_readings_follow_the_traffic() {
+    let (listener, addr) = listen().await;
+    let core = Core::spawn(|| {});
+    connect(&core, &addr);
+    let mut server = accept(&listener).await;
+    for _ in 0..3 {
+        server.next_message().await.unwrap();
+    }
+    // A 4 x 4 raw rectangle: 64 payload bytes.
+    let pixels = vec![7u8; 4 * 4 * 4];
+    server
+        .send_update(&[EncodedRect {
+            header: hdr(enc::RAW, 0, 0, 4, 4),
+            payload: &pixels,
+        }])
+        .await
+        .unwrap();
+    let s = next_stats(&core, |s| {
+        s.updates_per_sec > 0.0 || s.encodings.iter().any(|e| e.rects > 0)
+    })
+    .await;
+    assert!(
+        s.total_rx > 64,
+        "handshake and update bytes were counted: {}",
+        s.total_rx
+    );
+    assert!(s.total_tx > 0);
+    let later = next_stats(&core, |s| {
+        s.encodings.iter().any(|e| e.encoding == enc::RAW)
+    })
+    .await;
+    let raw = later
+        .encodings
+        .iter()
+        .find(|e| e.encoding == enc::RAW)
+        .unwrap();
+    assert_eq!((raw.rects, raw.bytes), (1, 64));
+    assert!(later.total_rx >= s.total_rx, "totals never go down");
+}
+
+#[tokio::test]
+async fn readings_keep_coming_while_the_screen_is_idle() {
+    let (listener, addr) = listen().await;
+    let core = Core::spawn(|| {});
+    connect(&core, &addr);
+    let _server = accept(&listener).await;
+    // Several readings in a row, about a quarter of a second apart.
+    let started = std::time::Instant::now();
+    for _ in 0..3 {
+        next_stats(&core, |_| true).await;
+    }
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "paced, not a burst"
+    );
 }
