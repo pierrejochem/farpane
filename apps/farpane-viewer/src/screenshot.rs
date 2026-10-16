@@ -53,6 +53,7 @@ pub fn parse_encodings(list: &str) -> Result<Vec<i32>, String> {
             "desktopsize" => Ok(pseudo::DESKTOP_SIZE),
             "extdesktopsize" => Ok(pseudo::EXT_DESKTOP_SIZE),
             "extclipboard" => Ok(pseudo::EXT_CLIPBOARD),
+            "fence" => Ok(pseudo::FENCE),
             other => Err(format!("unknown encoding {other:?}")),
         })
         .collect()

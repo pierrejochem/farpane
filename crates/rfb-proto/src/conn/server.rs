@@ -293,6 +293,11 @@ impl ServerConn {
     /// [`ProtoError::LimitExceeded`] if the message is too large.
     pub fn send(&mut self, msg: &ServerMessage, out: &mut Vec<u8>) -> Result<(), ProtoError> {
         self.require_established("message sent before handshake finished")?;
+        if matches!(msg, ServerMessage::Fence { .. })
+            && !self.encodings.contains(&crate::consts::pseudo::FENCE)
+        {
+            return Err(ProtoError::ExtensionNotConfirmed("Fence"));
+        }
         if matches!(msg, ServerMessage::UpdateBegin { .. }) {
             return Err(ProtoError::Malformed {
                 ctx: "use send_update for FramebufferUpdate",

@@ -35,6 +35,11 @@ pub enum ClientMessage {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `ClientFence`: a synchronisation request or the answer to the server's.
+    Fence {
+        flags: u32,
+        payload: Vec<u8>,
+    },
     /// Ask for a new framebuffer size and screen layout. Only valid after an
     /// `ExtendedDesktopSize` rectangle was received.
     SetDesktopSize {
@@ -100,6 +105,10 @@ impl ClientMessage {
                         Self::ExtendedClipboard { flags, payload }
                     }
                 }
+            }
+            client_msg::CLIENT_FENCE => {
+                let (flags, payload) = super::read_fence(&mut r)?;
+                Self::Fence { flags, payload }
             }
             client_msg::SET_DESKTOP_SIZE => {
                 r.skip(1)?;
@@ -193,6 +202,9 @@ impl ClientMessage {
                 payload,
                 "ClientCutText length",
             )?,
+            Self::Fence { flags, payload } => {
+                super::write_fence(out, client_msg::CLIENT_FENCE, *flags, payload)?;
+            }
             Self::SetDesktopSize {
                 width,
                 height,
@@ -300,6 +312,15 @@ mod tests {
                     payload: vec![],
                 },
                 vec![6, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFC, 0x02, 0x00, 0x00, 0x01],
+            ),
+            // rfbproto.rst, ClientFence: type 248, 3 padding bytes, U32 flags,
+            // U8 length, payload. A plain request that blocks before.
+            (
+                ClientMessage::Fence {
+                    flags: 0x8000_0001,
+                    payload: vec![0xDE, 0xAD],
+                },
+                vec![248, 0, 0, 0, 0x80, 0, 0, 1, 2, 0xDE, 0xAD],
             ),
             // rfbproto.rst, SetDesktopSize: type 251, pad, width, height,
             // number-of-screens, pad, then 16 bytes per screen.

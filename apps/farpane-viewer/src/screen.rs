@@ -1,4 +1,5 @@
 use core::fmt;
+use std::{collections::VecDeque, time::Instant};
 
 use rfb_codec::{
     Cursor, Damage, DecodeError, Decoder, DesktopLayout, Framebuffer,
@@ -8,7 +9,7 @@ use rfb_codec::{
 use rfb_proto::{
     PixelFormat,
     conn::ClientConnEvent,
-    consts::pseudo,
+    consts::{fence, pseudo},
     msg::client::ClientMessage,
     types::{Rect, Screen},
 };
@@ -20,7 +21,7 @@ use crate::stats::{Collector, Snapshot};
 
 /// Encodings we ask for, most preferred first. ZRLE usually compresses best;
 /// Raw is always understood by servers.
-pub const DEFAULT_ENCODINGS: [i32; 11] = [
+pub const DEFAULT_ENCODINGS: [i32; 12] = [
     enc::ZRLE,
     // No JPEG quality level is requested, so a server sends only the
     // lossless Tight methods.
@@ -37,6 +38,8 @@ pub const DEFAULT_ENCODINGS: [i32; 11] = [
     pseudo::DESKTOP_SIZE,
     // UTF-8 clipboard; a server that lacks it keeps using the legacy messages.
     pseudo::EXT_CLIPBOARD,
+    // Round-trip measurement; a server that lacks it just never answers.
+    pseudo::FENCE,
 ];
 
 /// What to authenticate with and which TLS certificates to trust.
@@ -111,6 +114,9 @@ pub struct RemoteScreen {
     /// The screens from the last accepted layout, to build resize requests.
     screens: Vec<Screen>,
     clip: ExtClipboard,
+    /// Fence requests sent and not yet answered: sequence number and send time.
+    pings: VecDeque<(u64, Instant)>,
+    next_ping: u64,
 }
 
 impl RemoteScreen {
@@ -190,6 +196,8 @@ impl RemoteScreen {
             stats: Collector::new(std::time::Instant::now()),
             screens: Vec::new(),
             clip: ExtClipboard::new(Role::Client),
+            pings: VecDeque::new(),
+            next_ping: 0,
         };
         screen.request_update(false).await?;
         Ok(screen)
@@ -269,6 +277,27 @@ impl RemoteScreen {
                         return Ok(ScreenEvent::Text(text));
                     }
                 }
+                ClientConnEvent::Fence { flags, payload } => {
+                    if flags & fence::REQUEST != 0 {
+                        // Answer at once, keeping only the flags we know.
+                        let known = fence::BLOCK_BEFORE | fence::BLOCK_AFTER | fence::SYNC_NEXT;
+                        self.session
+                            .send(&ClientMessage::Fence {
+                                flags: flags & known,
+                                payload,
+                            })
+                            .await?;
+                    } else if let Ok(seq) = <[u8; 8]>::try_from(payload.as_slice()) {
+                        let seq = u64::from_be_bytes(seq);
+                        // Older requests that were never answered are dropped.
+                        while let Some((n, sent)) = self.pings.pop_front() {
+                            if n == seq {
+                                self.stats.record_rtt(sent.elapsed());
+                                break;
+                            }
+                        }
+                    }
+                }
                 ClientConnEvent::Handshake(_)
                 | ClientConnEvent::UpdateBegin { .. }
                 | ClientConnEvent::ColourMap { .. } => {}
@@ -305,6 +334,31 @@ impl RemoteScreen {
             self.session.bytes_received(),
             self.session.bytes_sent(),
         )
+    }
+
+    /// Measure the round trip: send a Fence request that the server answers
+    /// once it has handled everything sent before it. The result shows up in
+    /// [`RemoteScreen::sample_stats`] after the answer has been read by
+    /// [`RemoteScreen::next_event`]. Returns `false` without sending if the
+    /// server has not shown Fence support or too many requests are still
+    /// unanswered.
+    ///
+    /// # Errors
+    /// I/O errors.
+    pub async fn ping(&mut self) -> Result<bool, ConnectError> {
+        if !self.session.conn().supports_fence() || self.pings.len() >= 4 {
+            return Ok(false);
+        }
+        let seq = self.next_ping;
+        self.next_ping += 1;
+        self.pings.push_back((seq, Instant::now()));
+        self.session
+            .send(&ClientMessage::Fence {
+                flags: fence::REQUEST | fence::BLOCK_BEFORE,
+                payload: seq.to_be_bytes().to_vec(),
+            })
+            .await?;
+        Ok(true)
     }
 
     /// Ask the server to resize the remote desktop to `width` x `height`

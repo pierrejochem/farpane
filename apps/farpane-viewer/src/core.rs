@@ -19,6 +19,8 @@ use crate::{
 
 /// How often the UI gets a statistics reading.
 const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+/// How often a Fence round trip is measured (17 bytes each way).
+const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// What the UI asks the connection to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -259,11 +261,16 @@ async fn session(
     // makes the interval skip, not pile up.
     let mut ticker = tokio::time::interval(STATS_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut pinger = tokio::time::interval(PING_INTERVAL);
+    pinger.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let result: Result<(), String> = async {
         loop {
             tokio::select! {
                 _ = ticker.tick() => {
                     ui.emit(UiEvent::Stats(screen.sample_stats(std::time::Instant::now())));
+                }
+                _ = pinger.tick() => {
+                    screen.ping().await.map_err(|e| e.to_string())?;
                 }
                 event = screen.next_event() => {
                     handle_event(&mut screen, event.map_err(|e| e.to_string())?, ui)

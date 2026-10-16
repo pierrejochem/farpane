@@ -72,6 +72,11 @@ pub enum ServerMessage {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `ServerFence`: a synchronisation request or the answer to ours.
+    Fence {
+        flags: u32,
+        payload: Vec<u8>,
+    },
 }
 
 impl ServerMessage {
@@ -108,6 +113,10 @@ impl ServerMessage {
                         Self::ExtendedClipboard { flags, payload }
                     }
                 }
+            }
+            server_msg::SERVER_FENCE => {
+                let (flags, payload) = super::read_fence(&mut r)?;
+                Self::Fence { flags, payload }
             }
             _ => {
                 return Err(ProtoError::Malformed {
@@ -165,6 +174,9 @@ impl ServerMessage {
                 payload,
                 "ServerCutText length",
             )?,
+            Self::Fence { flags, payload } => {
+                super::write_fence(out, server_msg::SERVER_FENCE, *flags, payload)?;
+            }
         }
         Ok(())
     }
@@ -216,7 +228,43 @@ mod tests {
                 },
                 vec![3, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFC, 0x08, 0x00, 0x00, 0x01],
             ),
+            // rfbproto.rst, ServerFence: type 248, 3 padding bytes, U32 flags
+            // (Request | BlockBefore), U8 length, payload.
+            (
+                ServerMessage::Fence {
+                    flags: 0x8000_0001,
+                    payload: vec![1, 2, 3],
+                },
+                vec![248, 0, 0, 0, 0x80, 0, 0, 1, 3, 1, 2, 3],
+            ),
+            (
+                ServerMessage::Fence {
+                    flags: 0,
+                    payload: vec![],
+                },
+                vec![248, 0, 0, 0, 0, 0, 0, 0, 0],
+            ),
         ]
+    }
+
+    #[test]
+    fn fence_payload_is_bounded() {
+        let mut long = vec![248, 0, 0, 0, 0, 0, 0, 0, 65];
+        long.extend_from_slice(&[0; 65]);
+        assert!(matches!(
+            ServerMessage::parse(&long),
+            Err(ProtoError::LimitExceeded { .. })
+        ));
+        let mut out = Vec::new();
+        let too_long = ServerMessage::Fence {
+            flags: 0,
+            payload: vec![0; 65],
+        };
+        assert!(too_long.write(&mut out).is_err());
+        assert_eq!(out.len(), 0);
+        let mut ok = vec![248, 0, 0, 0, 0, 0, 0, 0, 64];
+        ok.extend_from_slice(&[7; 64]);
+        assert!(ServerMessage::parse(&ok).is_ok());
     }
 
     #[test]

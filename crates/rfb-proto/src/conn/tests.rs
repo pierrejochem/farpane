@@ -681,6 +681,54 @@ mod resize {
     }
 
     #[test]
+    fn fence_needs_the_server_to_speak_first_and_the_client_to_ask_for_it() {
+        use crate::consts::fence;
+        let mut p = pair(); // this client did not ask for Fence
+        let ask = ServerMessage::Fence {
+            flags: fence::REQUEST | fence::BLOCK_BEFORE,
+            payload: vec![1, 2, 3, 4],
+        };
+        let mut out = Vec::new();
+        assert_eq!(
+            p.server.send(&ask, &mut out),
+            Err(ProtoError::ExtensionNotConfirmed("Fence"))
+        );
+        assert_eq!(out.len(), 0);
+
+        // A client that asked for it.
+        let mut p = Pair::new(V::V3_8, security::NONE);
+        p.handshake();
+        p.client_sends(&ClientMessage::SetEncodings(vec![enc::RAW, pseudo::FENCE]));
+        p.server_events();
+        let answer = ClientMessage::Fence {
+            flags: fence::BLOCK_BEFORE,
+            payload: vec![1, 2, 3, 4],
+        };
+        let mut out = Vec::new();
+        assert_eq!(
+            p.client.send(&answer, &mut out),
+            Err(ProtoError::ExtensionNotConfirmed("Fence")),
+            "the server has not announced Fence yet"
+        );
+        assert!(!p.client.supports_fence());
+
+        // The server announces and the client answers; both reach the other side.
+        out.clear();
+        p.server.send(&ask, &mut out).unwrap();
+        p.to_client.extend_from_slice(&out);
+        assert_eq!(
+            p.client_events(),
+            [ClientConnEvent::Fence {
+                flags: fence::REQUEST | fence::BLOCK_BEFORE,
+                payload: vec![1, 2, 3, 4]
+            }]
+        );
+        assert!(p.client.supports_fence());
+        p.client_sends(&answer);
+        assert_eq!(p.server_events(), [ServerConnEvent::Message(answer)]);
+    }
+
+    #[test]
     fn an_oversized_layout_is_fatal() {
         let mut p = pair();
         let big = crate::consts::limits::MAX_FB_DIMENSION + 1;

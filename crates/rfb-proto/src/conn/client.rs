@@ -44,6 +44,13 @@ pub enum ClientConnEvent {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `ServerFence`. A request (`fence::REQUEST` set) must be answered with
+    /// a `ClientFence` that echoes the payload and the flags the client
+    /// understands; otherwise it is the answer to our own request.
+    Fence {
+        flags: u32,
+        payload: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +82,7 @@ pub struct ClientConn {
     /// An `ExtendedDesktopSize` rectangle has arrived, so the server supports
     /// `SetDesktopSize`.
     ext_desktop_seen: bool,
+    fence_seen: bool,
 }
 
 impl ClientConn {
@@ -87,6 +95,7 @@ impl ClientConn {
             height: 0,
             pf: PixelFormat::RGB888,
             ext_desktop_seen: false,
+            fence_seen: false,
         }
     }
 
@@ -112,6 +121,13 @@ impl ClientConn {
     #[must_use]
     pub fn supports_desktop_resize(&self) -> bool {
         self.ext_desktop_seen
+    }
+
+    /// Whether the server has shown it supports the Fence extension (it sent
+    /// a `ServerFence`).
+    #[must_use]
+    pub fn supports_fence(&self) -> bool {
+        self.fence_seen
     }
 
     /// True once `ServerInit` was received.
@@ -187,6 +203,9 @@ impl ClientConn {
         if matches!(msg, ClientMessage::SetDesktopSize { .. }) && !self.ext_desktop_seen {
             return Err(ProtoError::ExtensionNotConfirmed("SetDesktopSize"));
         }
+        if matches!(msg, ClientMessage::Fence { .. }) && !self.fence_seen {
+            return Err(ProtoError::ExtensionNotConfirmed("Fence"));
+        }
         msg.write(out)?;
         if let ClientMessage::SetPixelFormat(pf) = msg {
             self.pf = *pf;
@@ -255,6 +274,10 @@ impl ClientConn {
             ServerMessage::ServerCutText(t) => ClientConnEvent::CutText(t),
             ServerMessage::ExtendedClipboard { flags, payload } => {
                 ClientConnEvent::ExtendedClipboard { flags, payload }
+            }
+            ServerMessage::Fence { flags, payload } => {
+                self.fence_seen = true;
+                ClientConnEvent::Fence { flags, payload }
             }
         }))
     }

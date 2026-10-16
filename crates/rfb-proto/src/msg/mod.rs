@@ -56,6 +56,43 @@ pub(crate) fn read_cut_text(
     Ok(CutText::Extended { flags, payload })
 }
 
+/// `ClientFence` / `ServerFence` after the type byte: 3 bytes padding, `U32`
+/// flags, `U8` length, payload (rfbproto.rst, "`ClientFence`").
+pub(crate) fn read_fence(r: &mut Reader<'_>) -> Result<(u32, Vec<u8>), ProtoError> {
+    r.skip(3)?;
+    let flags = r.u32()?;
+    let len = r.u8()?;
+    if len > limits::MAX_FENCE_PAYLOAD {
+        return Err(ProtoError::LimitExceeded {
+            field: "Fence payload",
+            value: u64::from(len),
+            limit: u64::from(limits::MAX_FENCE_PAYLOAD),
+        });
+    }
+    Ok((flags, r.take(usize::from(len))?.to_vec()))
+}
+
+pub(crate) fn write_fence(
+    out: &mut Vec<u8>,
+    message_type: u8,
+    flags: u32,
+    payload: &[u8],
+) -> Result<(), ProtoError> {
+    let len = u8::try_from(payload.len())
+        .ok()
+        .filter(|&n| n <= limits::MAX_FENCE_PAYLOAD)
+        .ok_or(ProtoError::LimitExceeded {
+            field: "Fence payload",
+            value: payload.len() as u64,
+            limit: u64::from(limits::MAX_FENCE_PAYLOAD),
+        })?;
+    out.extend_from_slice(&[message_type, 0, 0, 0]);
+    out.extend_from_slice(&flags.to_be_bytes());
+    out.push(len);
+    out.extend_from_slice(payload);
+    Ok(())
+}
+
 pub(crate) fn write_extended_cut_text(
     out: &mut Vec<u8>,
     message_type: u8,
