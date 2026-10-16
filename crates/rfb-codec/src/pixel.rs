@@ -257,6 +257,22 @@ impl PixelPacker {
         out.extend_from_slice(bytes);
     }
 
+    /// Bytes per Tight `TPIXEL`.
+    #[must_use]
+    pub fn tpixel_len(&self) -> usize {
+        self.conv.tpixel_len()
+    }
+
+    /// Append one Tight `TPIXEL`: R, G, B when the format allows (see
+    /// [`PixelConverter::tpixel_len`]), otherwise a full wire pixel.
+    pub fn pack_tpixel(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {
+        if self.conv.tight3 {
+            out.extend_from_slice(&[bgrx[2], bgrx[1], bgrx[0]]);
+        } else {
+            self.pack(bgrx, out);
+        }
+    }
+
     /// Append one `CPIXEL`: three bytes when the format allows, otherwise a
     /// full wire pixel.
     pub fn pack_cpixel(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {

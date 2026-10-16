@@ -28,7 +28,10 @@ mod trle;
 mod zrle;
 
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
-pub use encode::{ZrleEncoder, encode_cursor, encode_raw, encode_trle};
+pub use encode::{
+    TIGHT_MAX_WIDTH, TightEncoder, ZrleEncoder, encode_cursor, encode_hextile, encode_raw,
+    encode_trle,
+};
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;
 pub use pixel::{PixelConverter, PixelPacker};

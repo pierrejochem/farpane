@@ -3,7 +3,7 @@
 //! They read the server's 32 bit framebuffer ([`Framebuffer`]) and produce
 //! the payload that [`rfb_proto`]'s framers and the viewer's decoders expect.
 
-use flate2::{Compress, Compression, FlushCompress};
+use flate2::Compression;
 use rfb_proto::types::Rect;
 
 use crate::{Cursor, DecodeError, Framebuffer, PixelPacker, framebuffer::BYTES_PER_PIXEL};
@@ -58,10 +58,32 @@ pub fn encode_cursor(cursor: &Cursor, packer: &PixelPacker) -> Result<Vec<u8>, D
 
 const TILE: u16 = 64;
 
+/// A zlib stream that ends every chunk with a sync flush, as RFB servers do,
+/// so each chunk can be decoded as soon as it arrives.
+struct SyncDeflate(flate2::write::ZlibEncoder<Vec<u8>>);
+
+impl SyncDeflate {
+    fn new() -> Self {
+        Self(flate2::write::ZlibEncoder::new(
+            Vec::new(),
+            Compression::default(),
+        ))
+    }
+
+    /// The compressed form of `input` as the next chunk of the stream.
+    fn compress(&mut self, input: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        // Writing to a `Vec` cannot fail.
+        let _ = self.0.write_all(input);
+        let _ = self.0.flush();
+        std::mem::take(self.0.get_mut())
+    }
+}
+
 /// A ZRLE encoder. One per connection: the zlib stream lives as long as the
 /// connection, so rectangles must be sent in the order they were encoded.
 pub struct ZrleEncoder {
-    z: Compress,
+    z: SyncDeflate,
 }
 
 impl core::fmt::Debug for ZrleEncoder {
@@ -80,7 +102,7 @@ impl ZrleEncoder {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            z: Compress::new(Compression::default(), true),
+            z: SyncDeflate::new(),
         }
     }
 
@@ -94,26 +116,329 @@ impl ZrleEncoder {
         rect: Rect,
         packer: &PixelPacker,
     ) -> Result<Vec<u8>, DecodeError> {
-        let tiles = tiles(fb, rect, packer)?;
-        let mut data = Vec::with_capacity(tiles.len() / 2 + 64);
-        let start = self.z.total_in();
-        loop {
-            let done = usize::try_from(self.z.total_in() - start).unwrap_or(usize::MAX);
-            data.reserve(1024);
-            // Compression of in-memory data cannot fail.
-            let _ = self
-                .z
-                .compress_vec(&tiles[done..], &mut data, FlushCompress::Sync);
-            let done = usize::try_from(self.z.total_in() - start).unwrap_or(usize::MAX);
-            if done == tiles.len() && data.len() < data.capacity() {
-                break;
-            }
-        }
+        let data = self.z.compress(&tiles(fb, rect, packer)?);
         let mut out = Vec::with_capacity(data.len() + 4);
         out.extend_from_slice(&u32::try_from(data.len()).unwrap_or(u32::MAX).to_be_bytes());
         out.extend_from_slice(&data);
         Ok(out)
     }
+}
+
+/// The widest rectangle Tight can carry (RFC 6143 does not say; the Tight
+/// specification does): wider ones must be split by the caller.
+pub const TIGHT_MAX_WIDTH: u16 = 2048;
+
+/// A Tight encoder without JPEG: fill for one colour, the palette filter for
+/// up to 256 colours and the copy filter otherwise, with the zlib streams
+/// kept for the whole connection (stream 0 for full colour, 1 for two
+/// colours, 2 for larger palettes). One per connection; rectangles must be
+/// sent in the order they were encoded.
+pub struct TightEncoder {
+    streams: [SyncDeflate; 3],
+}
+
+impl core::fmt::Debug for TightEncoder {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("TightEncoder")
+    }
+}
+
+impl Default for TightEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Tight's 1 to 3 byte length.
+fn compact_length(out: &mut Vec<u8>, len: usize) {
+    out.push(u8::try_from(len & 0x7F).unwrap_or(0) | if len > 0x7F { 0x80 } else { 0 });
+    if len > 0x7F {
+        out.push(
+            u8::try_from((len >> 7) & 0x7F).unwrap_or(0) | if len > 0x3FFF { 0x80 } else { 0 },
+        );
+        if len > 0x3FFF {
+            out.push(u8::try_from(len >> 14).unwrap_or(0));
+        }
+    }
+}
+
+impl TightEncoder {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            streams: [SyncDeflate::new(), SyncDeflate::new(), SyncDeflate::new()],
+        }
+    }
+
+    /// Encode `rect` (at most [`TIGHT_MAX_WIDTH`] wide).
+    ///
+    /// # Errors
+    /// [`DecodeError::OutOfBounds`] if `rect` is not inside the picture,
+    /// [`DecodeError::Malformed`] if it is too wide.
+    pub fn encode(
+        &mut self,
+        fb: &Framebuffer,
+        rect: Rect,
+        packer: &PixelPacker,
+    ) -> Result<Vec<u8>, DecodeError> {
+        fb.check(rect)?;
+        if rect.width > TIGHT_MAX_WIDTH {
+            return Err(DecodeError::Malformed("Tight rectangle wider than 2048"));
+        }
+        let (w, h) = (usize::from(rect.width), usize::from(rect.height));
+        let tp = packer.tpixel_len();
+        let mut pixels: Vec<[u8; 4]> = Vec::with_capacity(w * h);
+        for row in 0..rect.height {
+            for px in fb.row(rect, row).chunks_exact(BYTES_PER_PIXEL) {
+                pixels.push([px[0], px[1], px[2], 0xFF]);
+            }
+        }
+        // Up to 256 distinct colours, in order of first use.
+        let mut palette: Vec<[u8; 4]> = Vec::new();
+        for px in &pixels {
+            if !palette.contains(px) {
+                palette.push(*px);
+                if palette.len() > 256 {
+                    break;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        if palette.len() == 1 {
+            out.push(0x80);
+            packer.pack_tpixel(palette[0], &mut out);
+            return Ok(out);
+        }
+        let n = palette.len();
+        let indexed_size = if n == 2 { w.div_ceil(8) * h } else { w * h };
+        if n <= 256 && n * tp + indexed_size < w * h * tp {
+            // Palette filter.
+            let stream = if n == 2 { 1 } else { 2 };
+            out.push(0x40 | (stream << 4));
+            out.push(1);
+            out.push(u8::try_from(n - 1).unwrap_or(0));
+            for &px in &palette {
+                packer.pack_tpixel(px, &mut out);
+            }
+            let index = |px: &[u8; 4]| palette.iter().position(|p| p == px).unwrap_or(0);
+            let mut data = Vec::with_capacity(indexed_size);
+            if n == 2 {
+                for row in pixels.chunks_exact(w) {
+                    let mut byte = 0u8;
+                    for (x, px) in row.iter().enumerate() {
+                        if index(px) == 1 {
+                            byte |= 0x80 >> (x % 8);
+                        }
+                        if x % 8 == 7 {
+                            data.push(byte);
+                            byte = 0;
+                        }
+                    }
+                    if w % 8 != 0 {
+                        data.push(byte);
+                    }
+                }
+            } else {
+                data.extend(pixels.iter().map(|px| u8::try_from(index(px)).unwrap_or(0)));
+            }
+            self.finish(&mut out, usize::from(stream), &data);
+        } else {
+            // Copy filter: full-colour rows.
+            let mut data = Vec::with_capacity(w * h * tp);
+            for &px in &pixels {
+                packer.pack_tpixel(px, &mut data);
+            }
+            out.push(0x00);
+            self.finish(&mut out, 0, &data);
+        }
+        Ok(out)
+    }
+
+    /// Data under 12 bytes goes as it is, anything else deflated on `stream`.
+    fn finish(&mut self, out: &mut Vec<u8>, stream: usize, data: &[u8]) {
+        if data.len() < 12 {
+            out.extend_from_slice(data);
+        } else {
+            let z = self.streams[stream].compress(data);
+            compact_length(out, z.len());
+            out.extend_from_slice(&z);
+        }
+    }
+}
+
+/// Hextile subencoding mask bits (RFC 6143 section 7.7.4).
+mod hextile_bits {
+    pub const RAW: u8 = 1;
+    pub const BACKGROUND: u8 = 2;
+    pub const FOREGROUND: u8 = 4;
+    pub const SUBRECTS: u8 = 8;
+    pub const COLOURED: u8 = 16;
+}
+
+/// Hextile: 16 x 16 tiles, each raw or a background plus rectangles of one
+/// or several colours. The background and foreground carry over from tile to
+/// tile and are only sent when they change. Stateless, so a result could be
+/// shared between clients with the same pixel format.
+///
+/// # Errors
+/// [`DecodeError::OutOfBounds`] if `rect` is not inside the picture.
+pub fn encode_hextile(
+    fb: &Framebuffer,
+    rect: Rect,
+    packer: &PixelPacker,
+) -> Result<Vec<u8>, DecodeError> {
+    fb.check(rect)?;
+    let bpp = packer.bytes_per_pixel();
+    let mut out = Vec::new();
+    // What the decoder currently believes; `None` after a raw tile, which
+    // leaves it unspecified.
+    let (mut bg, mut fg): (Option<[u8; 4]>, Option<[u8; 4]>) = (None, None);
+    let mut pixels: Vec<[u8; 4]> = Vec::with_capacity(256);
+    for ty in (0..rect.height).step_by(16) {
+        let th = (rect.height - ty).min(16);
+        for tx in (0..rect.width).step_by(16) {
+            let tw = (rect.width - tx).min(16);
+            let tile = Rect {
+                x: rect.x + tx,
+                y: rect.y + ty,
+                width: tw,
+                height: th,
+            };
+            pixels.clear();
+            for row in 0..th {
+                for px in fb.row(tile, row).chunks_exact(BYTES_PER_PIXEL) {
+                    pixels.push([px[0], px[1], px[2], 0xFF]);
+                }
+            }
+            hextile_tile(
+                &pixels,
+                usize::from(tw),
+                packer,
+                bpp,
+                &mut out,
+                &mut bg,
+                &mut fg,
+            );
+        }
+    }
+    Ok(out)
+}
+
+/// Rectangles covering every pixel that is not `bg`, found greedily: grow to
+/// the right along a row, then downwards while whole rows match.
+fn subrects(
+    pixels: &[[u8; 4]],
+    width: usize,
+    bg: [u8; 4],
+) -> Vec<(usize, usize, usize, usize, [u8; 4])> {
+    let height = pixels.len() / width;
+    let mut covered = vec![false; pixels.len()];
+    let mut found = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            let colour = pixels[y * width + x];
+            if colour == bg || covered[y * width + x] {
+                continue;
+            }
+            let mut w = 1;
+            while x + w < width
+                && pixels[y * width + x + w] == colour
+                && !covered[y * width + x + w]
+            {
+                w += 1;
+            }
+            let mut h = 1;
+            'down: while y + h < height {
+                for dx in 0..w {
+                    let i = (y + h) * width + x + dx;
+                    if pixels[i] != colour || covered[i] {
+                        break 'down;
+                    }
+                }
+                h += 1;
+            }
+            for dy in 0..h {
+                for dx in 0..w {
+                    covered[(y + dy) * width + x + dx] = true;
+                }
+            }
+            found.push((x, y, w, h, colour));
+        }
+    }
+    found
+}
+
+fn hextile_tile(
+    pixels: &[[u8; 4]],
+    width: usize,
+    packer: &PixelPacker,
+    bpp: usize,
+    out: &mut Vec<u8>,
+    bg_before: &mut Option<[u8; 4]>,
+    fg_in_use: &mut Option<[u8; 4]>,
+) {
+    // Colours by frequency (most frequent first), stopping once there are
+    // too many for rectangles to pay off.
+    let mut counts: Vec<([u8; 4], usize)> = Vec::new();
+    for px in pixels {
+        if let Some(entry) = counts.iter_mut().find(|(c, _)| c == px) {
+            entry.1 += 1;
+        } else {
+            counts.push((*px, 1));
+        }
+    }
+    counts.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
+    let bg = counts[0].0;
+    let raw_size = 1 + pixels.len() * bpp;
+    let write_raw = |out: &mut Vec<u8>| {
+        out.push(hextile_bits::RAW);
+        for &px in pixels {
+            packer.pack(px, out);
+        }
+    };
+    let mut mask = 0u8;
+    let mut body = Vec::new();
+    if *bg_before != Some(bg) {
+        mask |= hextile_bits::BACKGROUND;
+        packer.pack(bg, &mut body);
+    }
+    if counts.len() > 1 {
+        let rects = subrects(pixels, width, bg);
+        if rects.len() > 255 {
+            write_raw(out);
+            (*bg_before, *fg_in_use) = (None, None);
+            return;
+        }
+        mask |= hextile_bits::SUBRECTS;
+        let coloured = counts.len() > 2;
+        let fg = counts[1].0;
+        if coloured {
+            mask |= hextile_bits::COLOURED;
+        } else if *fg_in_use != Some(fg) {
+            mask |= hextile_bits::FOREGROUND;
+            packer.pack(fg, &mut body);
+        }
+        body.push(u8::try_from(rects.len()).unwrap_or(255));
+        for (x, y, w, h, colour) in rects {
+            if coloured {
+                packer.pack(colour, &mut body);
+            }
+            // Positions and sizes are below 16: they fit a nibble.
+            body.push(u8::try_from(x << 4 | y).unwrap_or(0));
+            body.push(u8::try_from((w - 1) << 4 | (h - 1)).unwrap_or(0));
+        }
+        if !coloured {
+            *fg_in_use = Some(fg);
+        }
+    }
+    if 1 + body.len() >= raw_size {
+        write_raw(out);
+        (*bg_before, *fg_in_use) = (None, None);
+        return;
+    }
+    out.push(mask);
+    out.extend_from_slice(&body);
+    *bg_before = Some(bg);
 }
 
 /// The uncompressed ZRLE data of `rect`: 64 x 64 tiles, each with the

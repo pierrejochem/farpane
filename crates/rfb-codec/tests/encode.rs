@@ -501,3 +501,301 @@ proptest! {
         }
     }
 }
+
+#[test]
+fn hextile_round_trips_in_every_format() {
+    use rfb_codec::encode_hextile;
+    for (name, pf) in formats() {
+        let packer = PixelPacker::new(&pf).unwrap();
+        let mut decoder = Decoder::new(&pf).unwrap();
+        let mut shown = Framebuffer::new(150, 90).unwrap();
+        for (pattern, f) in patterns() {
+            let fb = picture(150, 90, &f);
+            for rect in [
+                Rect {
+                    x: 5,
+                    y: 3,
+                    width: 133,
+                    height: 71,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                Rect {
+                    x: 16,
+                    y: 16,
+                    width: 16,
+                    height: 16,
+                },
+                Rect {
+                    x: 64,
+                    y: 64,
+                    width: 64,
+                    height: 26,
+                },
+            ] {
+                let payload = encode_hextile(&fb, rect, &packer).unwrap();
+                assert_eq!(
+                    frame(&header(rect, enc::HEXTILE), &pf, &payload),
+                    Ok(payload.len()),
+                    "{name} {pattern}: the framer agrees with the encoder"
+                );
+                decoder
+                    .decode(&mut shown, &header(rect, enc::HEXTILE), &payload)
+                    .unwrap();
+                assert_matches(
+                    &shown,
+                    &fb,
+                    rect,
+                    &pf,
+                    &format!("{name} {pattern} {rect:?}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn hextile_sends_a_repeated_background_only_once() {
+    use rfb_codec::encode_hextile;
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    let fb = picture(32, 16, |_, _| [9, 8, 7]);
+    let payload = encode_hextile(
+        &fb,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 32,
+            height: 16,
+        },
+        &packer,
+    )
+    .unwrap();
+    // Tile one: background specified, then the colour (B G R X). Tile two: nothing.
+    assert_eq!(payload, [2, 7, 8, 9, 0, 0]);
+}
+
+#[test]
+fn hextile_two_colours_use_uncoloured_subrectangles() {
+    use rfb_codec::encode_hextile;
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    // 16 x 16 white with one 3 x 2 black block at (4, 5).
+    let fb = picture(16, 16, |x, y| {
+        if (4..7).contains(&x) && (5..7).contains(&y) {
+            [0, 0, 0]
+        } else {
+            [255; 3]
+        }
+    });
+    let payload = encode_hextile(
+        &fb,
+        Rect {
+            x: 0,
+            y: 0,
+            width: 16,
+            height: 16,
+        },
+        &packer,
+    )
+    .unwrap();
+    // Background and foreground specified, any subrects (2 + 4 + 8 = 14), one
+    // subrect at x=4 y=5, width 3 height 2.
+    assert_eq!(payload, [14, 255, 255, 255, 0, 0, 0, 0, 0, 1, 0x45, 0x21]);
+}
+
+proptest! {
+    #[test]
+    fn hextile_round_trips_random_pictures(
+        w in 1u16..70,
+        h in 1u16..70,
+        colours in 1usize..12,
+        run in 1u16..20,
+        seed in any::<u32>(),
+        fmt in 0usize..7,
+    ) {
+        use rfb_codec::encode_hextile;
+        let (_, pf) = formats().swap_remove(fmt);
+        let colour = move |i: u32| {
+            let v = i.wrapping_mul(2_654_435_761).wrapping_add(seed);
+            [(v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]
+        };
+        let fb = picture(w, h, |x, y| colour((u32::from(x / run) + u32::from(y / 2) * 3) % colours as u32));
+        let rect = Rect { x: 0, y: 0, width: w, height: h };
+        let packer = PixelPacker::new(&pf).unwrap();
+        let payload = encode_hextile(&fb, rect, &packer).unwrap();
+        prop_assert_eq!(frame(&header(rect, enc::HEXTILE), &pf, &payload), Ok(payload.len()));
+        let mut shown = Framebuffer::new(w, h).unwrap();
+        Decoder::new(&pf).unwrap().decode(&mut shown, &header(rect, enc::HEXTILE), &payload).unwrap();
+        let want = expected(&fb, rect, &pf);
+        let mut i = 0;
+        for y in 0..h {
+            for x in 0..w {
+                prop_assert_eq!(shown.pixel(x, y), Some(want[i]));
+                i += 1;
+            }
+        }
+    }
+}
+
+#[test]
+fn tight_round_trips_in_every_format_across_rectangles_of_one_connection() {
+    use rfb_codec::TightEncoder;
+    for (name, pf) in formats() {
+        let packer = PixelPacker::new(&pf).unwrap();
+        let mut encoder = TightEncoder::new();
+        let mut decoder = Decoder::new(&pf).unwrap();
+        let mut shown = Framebuffer::new(150, 90).unwrap();
+        for (pattern, f) in patterns() {
+            let fb = picture(150, 90, &f);
+            for rect in [
+                Rect {
+                    x: 5,
+                    y: 3,
+                    width: 133,
+                    height: 71,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: 1,
+                },
+                Rect {
+                    x: 16,
+                    y: 16,
+                    width: 16,
+                    height: 16,
+                },
+                Rect {
+                    x: 64,
+                    y: 64,
+                    width: 64,
+                    height: 26,
+                },
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 150,
+                    height: 3,
+                },
+            ] {
+                let payload = encoder.encode(&fb, rect, &packer).unwrap();
+                assert_eq!(
+                    frame(&header(rect, enc::TIGHT), &pf, &payload),
+                    Ok(payload.len()),
+                    "{name} {pattern}: the framer agrees with the encoder"
+                );
+                decoder
+                    .decode(&mut shown, &header(rect, enc::TIGHT), &payload)
+                    .unwrap();
+                assert_matches(
+                    &shown,
+                    &fb,
+                    rect,
+                    &pf,
+                    &format!("{name} {pattern} {rect:?}"),
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn tight_picks_fill_palette_or_copy_by_what_the_picture_holds() {
+    use rfb_codec::TightEncoder;
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    let mut encoder = TightEncoder::new();
+    let all = Rect {
+        x: 0,
+        y: 0,
+        width: 8,
+        height: 1,
+    };
+    // One colour: fill, a TPIXEL of R, G, B.
+    let fb = picture(8, 1, |_, _| [1, 2, 3]);
+    assert_eq!(encoder.encode(&fb, all, &packer).unwrap(), [0x80, 1, 2, 3]);
+    // Two colours, 8 x 1: palette filter on stream 1, 1 bit per pixel, under
+    // 12 bytes so not deflated.
+    let fb = picture(8, 1, |x, _| if x < 3 { [255, 0, 0] } else { [0, 0, 255] });
+    assert_eq!(
+        encoder.encode(&fb, all, &packer).unwrap(),
+        [0x50, 1, 1, 255, 0, 0, 0, 0, 255, 0b0001_1111]
+    );
+    // Noise: the copy filter, stream 0.
+    let fb = picture(8, 1, |x, _| {
+        [(x * 37) as u8, (x * 91) as u8, (x * 13 + 5) as u8]
+    });
+    let out = encoder.encode(&fb, all, &packer).unwrap();
+    assert_eq!(out[0], 0x00);
+    // 8 x 1 x 3 = 24 bytes: deflated, with a compact length.
+    assert_eq!(usize::from(out[1]), out.len() - 2);
+}
+
+#[test]
+fn tight_refuses_rectangles_wider_than_2048_and_outside_the_picture() {
+    use rfb_codec::{TIGHT_MAX_WIDTH, TightEncoder};
+    let packer = PixelPacker::new(&PixelFormat::RGB888).unwrap();
+    let fb = Framebuffer::new(2100, 2).unwrap();
+    let mut encoder = TightEncoder::new();
+    let wide = Rect {
+        x: 0,
+        y: 0,
+        width: TIGHT_MAX_WIDTH + 1,
+        height: 1,
+    };
+    assert!(encoder.encode(&fb, wide, &packer).is_err());
+    let ok = Rect {
+        x: 0,
+        y: 0,
+        width: TIGHT_MAX_WIDTH,
+        height: 2,
+    };
+    assert!(encoder.encode(&fb, ok, &packer).is_ok());
+    let outside = Rect {
+        x: 2000,
+        y: 0,
+        width: 200,
+        height: 1,
+    };
+    assert!(encoder.encode(&fb, outside, &packer).is_err());
+}
+
+proptest! {
+    #[test]
+    fn tight_round_trips_random_pictures(
+        w in 1u16..90,
+        h in 1u16..90,
+        colours in 1usize..300,
+        run in 1u16..20,
+        seed in any::<u32>(),
+        fmt in 0usize..7,
+    ) {
+        use rfb_codec::TightEncoder;
+        let (_, pf) = formats().swap_remove(fmt);
+        let colour = move |i: u32| {
+            let v = i.wrapping_mul(2_654_435_761).wrapping_add(seed);
+            [(v >> 8) as u8, (v >> 16) as u8, (v >> 24) as u8]
+        };
+        let fb = picture(w, h, |x, y| colour((u32::from(x / run) + u32::from(y) * 7) % colours as u32));
+        let rect = Rect { x: 0, y: 0, width: w, height: h };
+        let packer = PixelPacker::new(&pf).unwrap();
+        let payload = TightEncoder::new().encode(&fb, rect, &packer).unwrap();
+        prop_assert_eq!(frame(&header(rect, enc::TIGHT), &pf, &payload), Ok(payload.len()));
+        let mut shown = Framebuffer::new(w, h).unwrap();
+        Decoder::new(&pf).unwrap().decode(&mut shown, &header(rect, enc::TIGHT), &payload).unwrap();
+        let want = expected(&fb, rect, &pf);
+        let mut i = 0;
+        for y in 0..h {
+            for x in 0..w {
+                prop_assert_eq!(shown.pixel(x, y), Some(want[i]));
+                i += 1;
+            }
+        }
+    }
+}
