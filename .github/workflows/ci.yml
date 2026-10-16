@@ -24,9 +24,9 @@ jobs:
       - name: Toolchain
         run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
-      - name: X server for the X11 backend tests
+      - name: X server and PipeWire headers (X11 and Wayland backends)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb
+        run: sudo apt-get update && sudo apt-get install -y xvfb libpipewire-0.3-dev pkg-config clang
       - name: Format
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check

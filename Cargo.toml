@@ -7,6 +7,7 @@ members = [
     "crates/rfb-tokio",
     "crates/rfb-server",
     "crates/farpane-x11",
+    "crates/farpane-wayland",
     "crates/farpane-ui",
     "crates/farpane-grab",
     "apps/farpane-viewer",
@@ -29,6 +30,7 @@ rfb-security = { path = "crates/rfb-security" }
 rfb-tokio = { path = "crates/rfb-tokio" }
 rfb-server = { path = "crates/rfb-server" }
 farpane-x11 = { path = "crates/farpane-x11" }
+farpane-wayland = { path = "crates/farpane-wayland" }
 farpane-ui = { path = "crates/farpane-ui" }
 farpane-grab = { path = "crates/farpane-grab" }
 

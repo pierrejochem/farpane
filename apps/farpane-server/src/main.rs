@@ -33,6 +33,8 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --x11 [DISPLAY]        share an X11 display (default $DISPLAY) instead of the
                          test pattern; under XWayland only X11 windows are
                          visible, not the Wayland desktop
+  --wayland              share the Wayland desktop through the portal (the desktop
+                         asks for approval; remembered in the config folder)
   --size WxH             test pattern size (default 1024x768)
   --config-dir DIR       holds users.toml and tls/ (default /etc/farpane if it
                          exists, else ~/.config/farpane; $FARPANE_CONFIG_DIR)
@@ -56,6 +58,7 @@ TLS and have a role: admin, control or view. Passwords are never taken from
 the command line.";
 
 #[allow(clippy::struct_excessive_bools)] // independent command-line switches
+#[derive(Clone)]
 struct Args {
     listen: SocketAddr,
     size: (u16, u16),
@@ -64,6 +67,7 @@ struct Args {
     view_only: bool,
     allow_no_auth: bool,
     x11: bool,
+    wayland: bool,
     x11_display: Option<String>,
     config_dir: Option<PathBuf>,
     self_signed: bool,
@@ -97,6 +101,7 @@ fn parse() -> Result<Args, String> {
         view_only: false,
         allow_no_auth: false,
         x11: false,
+        wayland: false,
         x11_display: None,
         config_dir: None,
         self_signed: false,
@@ -160,6 +165,7 @@ fn parse() -> Result<Args, String> {
                 args.x11 = true;
                 args.x11_display = display;
             }
+            "--wayland" => args.wayland = true,
             "--config-dir" => args.config_dir = Some(value(&mut it, "--config-dir")?.into()),
             "--tls-self-signed" => args.self_signed = true,
             "--ra2" => args.ra2 = true,
@@ -266,8 +272,33 @@ fn tls_choice(args: &Args) -> Result<TlsChoice, String> {
 
 type SourceAndInput = (Box<dyn Source>, Box<dyn Input>, String);
 
-fn open_source(args: &Args) -> Result<SourceAndInput, String> {
-    if args.x11 {
+#[cfg(target_os = "linux")]
+fn open_wayland(config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
+    eprintln!(
+        "farpane-server: asking the desktop for permission to share the screen; \
+         answer the dialog that appears (up to 3 minutes)"
+    );
+    let (source, input) = farpane_wayland::open(&farpane_wayland::Config {
+        restore_token_file: Some(config_dir.join("wayland-restore-token")),
+    })
+    .map_err(|e| format!("cannot share the Wayland screen: {e}"))?;
+    let (w, h) = source.size();
+    Ok((
+        Box::new(source),
+        Box::new(input),
+        format!("Wayland screen, {w}x{h}"),
+    ))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_wayland(_config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
+    Err("--wayland is only available on Linux".to_owned())
+}
+
+fn open_source(args: &Args, config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
+    if args.wayland {
+        open_wayland(config_dir)
+    } else if args.x11 {
         let (source, input) = farpane_x11::open(args.x11_display.as_deref())
             .map_err(|e| format!("cannot open the X11 display: {e}"))?;
         let (w, h) = source.size();
@@ -359,10 +390,19 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             );
         }
     }
-    let (source, input, what) = open_source(args).map_err(|e| {
-        eprintln!("farpane-server: {e}");
-        ExitCode::FAILURE
-    })?;
+    // Opening a screen may wait for the user (the Wayland approval dialog), so
+    // keep it off the async threads.
+    let (a, dir) = (args.clone(), config_dir.clone());
+    let (source, input, what) = tokio::task::spawn_blocking(move || open_source(&a, &dir))
+        .await
+        .map_err(|e| {
+            eprintln!("farpane-server: {e}");
+            ExitCode::FAILURE
+        })?
+        .map_err(|e| {
+            eprintln!("farpane-server: {e}");
+            ExitCode::FAILURE
+        })?;
     let settings = Settings {
         fps: args.fps,
         view_only: args.view_only,
