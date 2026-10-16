@@ -1,0 +1,45 @@
+[package]
+name = "rfb-proto-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+bytes = { version = "1", default-features = false }
+libfuzzer-sys = "0.4"
+rfb-proto = { path = ".." }
+
+# Not part of the main workspace: cargo-fuzz builds with nightly and sanitizer flags.
+[workspace]
+
+[[bin]]
+name = "client_conn"
+path = "fuzz_targets/client_conn.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "server_conn"
+path = "fuzz_targets/server_conn.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "framing"
+path = "fuzz_targets/framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "messages"
+path = "fuzz_targets/messages.rs"
+test = false
+doc = false
+bench = false
