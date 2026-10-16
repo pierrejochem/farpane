@@ -538,22 +538,27 @@ impl Dashboard {
         self.refresh(ctx, now);
         let tokens = self.tokens(ctx);
         style::apply(ctx, &tokens);
+        style::paint_backdrop(ctx, &tokens);
 
         egui::SidePanel::left("nav")
             .exact_width(268.0)
             .resizable(false)
             .show_separator_line(false)
-            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
-                left: 18,
-                right: 0,
-                top: 18,
-                bottom: 18,
-            }))
+            .frame(
+                Frame::NONE
+                    .fill(style::page_fill(&tokens))
+                    .inner_margin(Margin {
+                        left: 18,
+                        right: 0,
+                        top: 18,
+                        bottom: 18,
+                    }),
+            )
             .show(ctx, |ui| self.nav(ui, &tokens));
         egui::TopBottomPanel::bottom("notice")
             .frame(
                 Frame::NONE
-                    .fill(tokens.bg.into())
+                    .fill(style::page_fill(&tokens))
                     .inner_margin(Margin::symmetric(18, 6)),
             )
             .show_animated(ctx, self.notice.is_some(), |ui| {
@@ -569,7 +574,7 @@ impl Dashboard {
         egui::CentralPanel::default()
             .frame(
                 Frame::NONE
-                    .fill(tokens.bg.into())
+                    .fill(style::page_fill(&tokens))
                     .inner_margin(Margin::same(18)),
             )
             .show(ctx, |ui| {
@@ -622,7 +627,11 @@ impl Dashboard {
         let running = self.status.failure.is_none();
         Self::card(ui, tokens, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(self.page.title()).strong().size(18.0));
+                ui.label(
+                    RichText::new(self.page.title())
+                        .family(style::semibold(ui.ctx()))
+                        .size(18.0),
+                );
                 let (text, tone) = if running {
                     ("Sharing", tokens.green)
                 } else {
@@ -680,7 +689,11 @@ impl Dashboard {
                 brand_mark(ui, tokens, 38.0);
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    ui.label(RichText::new("Farpane Server").strong().size(15.0));
+                    ui.label(
+                        RichText::new("Farpane Server")
+                            .family(style::semibold(ui.ctx()))
+                            .size(15.0),
+                    );
                     ui.label(
                         RichText::new(env!("CARGO_PKG_VERSION"))
                             .color(tokens.muted)
@@ -787,7 +800,7 @@ impl Dashboard {
             0.5,
             |ui| {
                 Self::card(ui, tokens, |ui| {
-                    ui.label(heading("Live preview"));
+                    ui.label(heading(ui, "Live preview"));
                     ui.add_space(8.0);
                     if let Some(tex) = &self.preview {
                         let size = tex.size_vec2();
@@ -800,7 +813,7 @@ impl Dashboard {
             },
             |ui| {
                 Self::card(ui, tokens, |ui| {
-                    ui.label(heading("Recent events"));
+                    ui.label(heading(ui, "Recent events"));
                     ui.add_space(8.0);
                     self.log_lines(ui, tokens, Some(6));
                 });
@@ -876,7 +889,7 @@ impl Dashboard {
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(heading("Traffic"));
+                    ui.label(heading(ui, "Traffic"));
                     ui.label(
                         RichText::new("Outgoing frames vs. incoming input")
                             .color(tokens.muted)
@@ -932,7 +945,7 @@ impl Dashboard {
 
     fn sharing_card(&self, ui: &mut Ui, tokens: &Tokens) {
         Self::card(ui, tokens, |ui| {
-            ui.label(heading("Shared screen"));
+            ui.label(heading(ui, "Shared screen"));
             let (w, h) = self.status.screen;
             ui.label(
                 RichText::new(format!("{} ({w} × {h})", self.status.source))
@@ -960,7 +973,7 @@ impl Dashboard {
         let mut view_only_changes = Vec::new();
         let mut kick = None;
         Self::card(ui, tokens, |ui| {
-            ui.label(heading("Connected clients"));
+            ui.label(heading(ui, "Connected clients"));
             ui.add_space(4.0);
             if rows.is_empty() {
                 ui.label(RichText::new("Nobody is connected.").color(tokens.muted));
@@ -1284,7 +1297,7 @@ impl Dashboard {
     fn log_page(&mut self, ui: &mut Ui, tokens: &Tokens) {
         Self::card(ui, tokens, |ui| {
             ui.horizontal(|ui| {
-                ui.label(heading("Event log"));
+                ui.label(heading(ui, "Event log"));
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     if ui.button("Clear").clicked() {
                         self.log.clear();
@@ -1326,7 +1339,11 @@ impl Tile {
             });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
-                ui.label(RichText::new(&self.value).strong().size(26.0));
+                ui.label(
+                    RichText::new(&self.value)
+                        .family(style::semibold(ui.ctx()))
+                        .size(26.0),
+                );
                 ui.label(RichText::new(&self.unit).color(tokens.muted).size(13.0));
             });
             ui.horizontal_wrapped(|ui| {
@@ -1339,8 +1356,10 @@ impl Tile {
     }
 }
 
-fn heading(text: &str) -> RichText {
-    RichText::new(text).strong().size(16.0)
+fn heading(ui: &Ui, text: &str) -> RichText {
+    RichText::new(text)
+        .family(style::semibold(ui.ctx()))
+        .size(16.0)
 }
 
 fn eyebrow(text: &str, tokens: &Tokens) -> RichText {

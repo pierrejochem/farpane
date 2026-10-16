@@ -83,6 +83,8 @@ pub struct Tokens {
     pub dark: bool,
     /// Frosted-glass panels (needs the blurred-backdrop pass).
     pub glass: bool,
+    /// IBM Plex Sans instead of Inter (the Slate theme's typeface).
+    pub plex: bool,
 }
 
 impl Tokens {
@@ -95,7 +97,7 @@ impl Tokens {
                 text: Rgba::hex(0xF4F4F5),
                 muted: Rgba(255, 255, 255, 158),
                 line: Rgba(255, 255, 255, 23),
-                card: Rgba(34, 34, 37, 128),
+                card: Rgba(30, 30, 33, 176),
                 accent: Rgba::hex(0xE8492F),
                 accent_text: Rgba::hex(0xFF8A73),
                 green: Rgba::hex(0x34D399),
@@ -106,6 +108,7 @@ impl Tokens {
                 radius: 18.0,
                 dark: true,
                 glass: true,
+                plex: false,
             },
             Theme::Slate => Self {
                 bg: Rgba::hex(0x0B1015),
@@ -123,6 +126,7 @@ impl Tokens {
                 radius: 14.0,
                 dark: true,
                 glass: false,
+                plex: true,
             },
             Theme::Light => Self {
                 bg: Rgba::hex(0xF3F4F6),
@@ -140,6 +144,7 @@ impl Tokens {
                 radius: 16.0,
                 dark: false,
                 glass: false,
+                plex: false,
             },
         };
         let light = theme == Theme::Light;

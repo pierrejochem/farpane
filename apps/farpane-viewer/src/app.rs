@@ -564,6 +564,7 @@ impl ViewerApp {
             style::apply(ctx, &tokens);
             self.applied = Some(tokens);
         }
+        style::paint_backdrop(ctx, &tokens);
         tokens
     }
 
@@ -936,12 +937,16 @@ impl ViewerApp {
     fn top_bar(&mut self, ctx: &Context, tokens: &Tokens) {
         egui::TopBottomPanel::top("top-bar")
             .show_separator_line(false)
-            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
-                left: 14,
-                right: 14,
-                top: 12,
-                bottom: 2,
-            }))
+            .frame(
+                Frame::NONE
+                    .fill(style::page_fill(tokens))
+                    .inner_margin(Margin {
+                        left: 14,
+                        right: 14,
+                        top: 12,
+                        bottom: 2,
+                    }),
+            )
             .show(ctx, |ui| {
                 Frame::NONE
                     .fill(tokens.card.into())
@@ -961,7 +966,11 @@ impl ViewerApp {
             {
                 ui.horizontal(|ui| {
                     widgets::brand_mark(ui, tokens, 26.0);
-                    ui.label(RichText::new("Farpane").strong().size(16.0));
+                    ui.label(
+                        RichText::new("Farpane")
+                            .family(style::semibold(ui.ctx()))
+                            .size(16.0),
+                    );
                     ui.add_space(8.0);
                     let (text, colour) = match &self.phase {
                         Phase::Home => ("Not connected", tokens.muted),
@@ -1291,12 +1300,16 @@ impl ViewerApp {
             .exact_width(264.0)
             .resizable(false)
             .show_separator_line(false)
-            .frame(Frame::NONE.fill(tokens.bg.into()).inner_margin(Margin {
-                left: 14,
-                right: 0,
-                top: 12,
-                bottom: 14,
-            }))
+            .frame(
+                Frame::NONE
+                    .fill(style::page_fill(tokens))
+                    .inner_margin(Margin {
+                        left: 14,
+                        right: 0,
+                        top: 12,
+                        bottom: 14,
+                    }),
+            )
             .show(ctx, |ui| {
                 Self::card_frame(tokens, 14, 22).show(ui, |ui| {
                     ui.set_min_size(ui.available_size());
@@ -1304,7 +1317,11 @@ impl ViewerApp {
                         widgets::brand_mark(ui, tokens, 38.0);
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.label(RichText::new("Farpane Viewer").strong().size(15.0));
+                            ui.label(
+                                RichText::new("Farpane Viewer")
+                                    .family(style::semibold(ui.ctx()))
+                                    .size(15.0),
+                            );
                             ui.label(RichText::new("Remote desktop").color(tokens.muted).small());
                         });
                     });
@@ -1320,7 +1337,7 @@ impl ViewerApp {
         egui::CentralPanel::default()
             .frame(
                 Frame::NONE
-                    .fill(tokens.bg.into())
+                    .fill(style::page_fill(tokens))
                     .inner_margin(Margin::same(18)),
             )
             .show(ctx, |ui| {
@@ -1332,7 +1349,11 @@ impl ViewerApp {
                             ui.set_min_width(ui.available_width());
                             ui.scope(|ui| {
                                 ui.set_max_width(460.0);
-                                ui.label(RichText::new("Quick connect").size(18.0).strong());
+                                ui.label(
+                                    RichText::new("Quick connect")
+                                        .size(18.0)
+                                        .family(style::semibold(ui.ctx())),
+                                );
                                 ui.add_space(4.0);
                                 ui.label(
                                     RichText::new("Any VNC-compatible server").color(tokens.muted),
@@ -1419,7 +1440,11 @@ impl ViewerApp {
         let mut forget = None;
         Self::card_frame(tokens, 24, 18).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(RichText::new("Saved connections").strong().size(16.0));
+            ui.label(
+                RichText::new("Saved connections")
+                    .family(style::semibold(ui.ctx()))
+                    .size(16.0),
+            );
             ui.label(
                 RichText::new("Sorted by last use")
                     .color(tokens.muted)
