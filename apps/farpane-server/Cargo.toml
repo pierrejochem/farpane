@@ -21,6 +21,15 @@ rfb-server.workspace = true
 farpane-x11.workspace = true
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal"] }
 farpane-ui.workspace = true
+argon2 = "0.6"
+toml = "1.1.8"
+serde = { version = "1.0.229", features = ["derive"] }
+rcgen = "0.14.7"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time", "io-util"] }
 
 [lints]
 workspace = true

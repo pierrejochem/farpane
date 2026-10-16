@@ -1,11 +1,12 @@
 use std::{
     io,
+    net::SocketAddr,
     sync::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use rfb_codec::Framebuffer;
@@ -20,6 +21,7 @@ use tokio::{
 use crate::{
     client,
     source::{Input, Source},
+    throttle::Throttle,
 };
 
 /// What the capture thread tells the clients.
@@ -35,7 +37,6 @@ pub(crate) struct Shared {
     pub fb: RwLock<Framebuffer>,
     pub updates: broadcast::Sender<Arc<Update>>,
     pub input: Arc<dyn Input>,
-    pub view_only: bool,
     stop: AtomicBool,
     /// Why capturing stopped, if it did.
     failure: Mutex<Option<String>>,
@@ -62,10 +63,60 @@ impl Default for Settings {
 
 /// A running server: the capture thread and the shared picture. Dropping it
 /// stops capturing; running connections end.
-#[derive(Debug)]
 pub struct Server {
     shared: Arc<Shared>,
     template: ServerOptions,
+    view_only: bool,
+    policy: Option<Policy>,
+    events: Option<Sink>,
+    throttle: Mutex<Throttle>,
+}
+
+impl std::fmt::Debug for Server {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Server")
+            .field("view_only", &self.view_only)
+            .field("clients", &self.client_count())
+            .finish_non_exhaustive()
+    }
+}
+
+type Sink = Arc<dyn Fn(&Event) + Send + Sync>;
+
+type Policy = Arc<dyn Fn(Option<&str>) -> Permission + Send + Sync>;
+
+/// What a signed-in user may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Permission {
+    /// Look and control.
+    Full,
+    /// Look only: keyboard, pointer and clipboard input is dropped.
+    ViewOnly,
+}
+
+/// Something worth logging, from [`Server::set_events`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// A client signed in. `user` is the account name for password logins
+    /// with a user name, `None` for the shared-password and no-password types.
+    Connected {
+        peer: Option<SocketAddr>,
+        user: Option<String>,
+        permission: Permission,
+    },
+    /// A client's session ended; `error` says why if it was not a plain hang-up.
+    Closed {
+        peer: Option<SocketAddr>,
+        user: Option<String>,
+        error: Option<String>,
+    },
+    /// Wrong or missing credentials.
+    AuthFailed { peer: Option<SocketAddr> },
+    /// The handshake failed for another reason (timeout, bad protocol, TLS).
+    HandshakeFailed {
+        peer: Option<SocketAddr>,
+        error: String,
+    },
 }
 
 impl Server {
@@ -90,7 +141,6 @@ impl Server {
             fb: RwLock::new(fb),
             updates,
             input: Arc::new(input),
-            view_only: settings.view_only,
             stop: AtomicBool::new(false),
             failure: Mutex::new(None),
             clients: AtomicUsize::new(0),
@@ -100,7 +150,34 @@ impl Server {
         thread::Builder::new()
             .name("farpane-capture".into())
             .spawn(move || capture_loop(source, &weak, interval))?;
-        Ok(Self { shared, template })
+        Ok(Self {
+            shared,
+            template,
+            view_only: settings.view_only,
+            policy: None,
+            events: None,
+            throttle: Mutex::new(Throttle::new()),
+        })
+    }
+
+    /// Decide per user what a signed-in client may do. Without a policy every
+    /// client gets [`Permission::Full`] (unless the server is view-only).
+    pub fn set_policy(
+        &mut self,
+        policy: impl Fn(Option<&str>) -> Permission + Send + Sync + 'static,
+    ) {
+        self.policy = Some(Arc::new(policy));
+    }
+
+    /// Receive [`Event`]s: sign-ins, hang-ups, failures.
+    pub fn set_events(&mut self, sink: impl Fn(&Event) + Send + Sync + 'static) {
+        self.events = Some(Arc::new(sink));
+    }
+
+    fn emit(&self, event: &Event) {
+        if let Some(sink) = &self.events {
+            sink(event);
+        }
     }
 
     /// The picture size now.
@@ -130,7 +207,8 @@ impl Server {
         self.shared.clients.load(Ordering::Relaxed)
     }
 
-    /// Serve one connection until it ends.
+    /// Serve one connection until it ends. Same as [`Server::serve`] without
+    /// a peer address (no per-address delays, events carry no address).
     ///
     /// # Errors
     /// Handshake and protocol errors; [`Error::Closed`] when the client hangs up.
@@ -138,50 +216,121 @@ impl Server {
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
+        self.serve(stream, None).await
+    }
+
+    /// Serve one connection from `peer` until it ends. A peer that has
+    /// failed to sign in recently waits before its handshake starts.
+    ///
+    /// # Errors
+    /// Handshake and protocol errors; [`Error::Closed`] when the client hangs up.
+    pub async fn serve<S>(&self, stream: S, peer: Option<SocketAddr>) -> Result<(), Error>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        if let Some(p) = peer {
+            let wait = self
+                .throttle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .delay(p.ip(), Instant::now());
+            if !wait.is_zero() {
+                tokio::time::sleep(wait).await;
+            }
+        }
         let (w, h) = self.size();
         let mut opts = self.template.clone();
         opts.width = w;
         opts.height = h;
-        let session = ServerSession::accept(stream, opts).await?;
+        let session = match ServerSession::accept(stream, opts).await {
+            Ok(s) => s,
+            Err(e) => {
+                if let Some(p) = peer {
+                    if matches!(e, Error::AuthFailed) {
+                        self.throttle
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .record_failure(p.ip(), Instant::now());
+                    }
+                }
+                if matches!(e, Error::AuthFailed) {
+                    self.emit(&Event::AuthFailed { peer });
+                } else if !is_hang_up(&e) {
+                    self.emit(&Event::HandshakeFailed {
+                        peer,
+                        error: e.to_string(),
+                    });
+                }
+                return Err(e);
+            }
+        };
+        if let Some(p) = peer {
+            self.throttle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .record_success(p.ip());
+        }
+        let user = session
+            .username()
+            .map(|u| String::from_utf8_lossy(u).into_owned());
+        let permission = if self.view_only {
+            Permission::ViewOnly
+        } else {
+            self.policy
+                .as_ref()
+                .map_or(Permission::Full, |f| f(user.as_deref()))
+        };
+        self.emit(&Event::Connected {
+            peer,
+            user: user.clone(),
+            permission,
+        });
         self.shared.clients.fetch_add(1, Ordering::Relaxed);
-        let result = client::run(session, Arc::clone(&self.shared)).await;
+        let result = client::run(
+            session,
+            Arc::clone(&self.shared),
+            permission == Permission::ViewOnly,
+        )
+        .await;
         self.shared.clients.fetch_sub(1, Ordering::Relaxed);
+        self.emit(&Event::Closed {
+            peer,
+            user,
+            error: match &result {
+                Err(e) if !is_hang_up(e) => Some(e.to_string()),
+                _ => None,
+            },
+        });
         result
     }
 
-    /// Accept connections on `listener` for ever, one task each. Errors of
-    /// single connections are passed to `on_error` with the peer address.
+    /// Accept connections on `listener` for ever, one task each. Use
+    /// [`Server::set_events`] to hear about them.
     ///
     /// # Errors
     /// The listener failing.
-    pub async fn listen(
-        self: Arc<Self>,
-        listener: TcpListener,
-        on_error: impl Fn(std::net::SocketAddr, &Error) + Send + Sync + 'static,
-    ) -> io::Result<()> {
-        let on_error = Arc::new(on_error);
+    pub async fn listen(self: Arc<Self>, listener: TcpListener) -> io::Result<()> {
         loop {
             let (stream, peer) = listener.accept().await?;
             let _ = stream.set_nodelay(true);
             let server = Arc::clone(&self);
-            let on_error = Arc::clone(&on_error);
             tokio::spawn(async move {
-                if let Err(e) = server.serve_connection(stream).await {
-                    // A client going away is normal, not an error to report.
-                    let hung_up = matches!(e, Error::Closed)
-                        || matches!(&e, Error::Io(io) if matches!(
-                            io.kind(),
-                            io::ErrorKind::ConnectionReset
-                                | io::ErrorKind::BrokenPipe
-                                | io::ErrorKind::UnexpectedEof
-                        ));
-                    if !hung_up {
-                        on_error(peer, &e);
-                    }
-                }
+                // Everything worth reporting went to the event sink.
+                let _ = server.serve(stream, Some(peer)).await;
             });
         }
     }
+}
+
+/// A client going away is normal, not an error to report.
+fn is_hang_up(e: &Error) -> bool {
+    matches!(e, Error::Closed)
+        || matches!(e, Error::Io(io) if matches!(
+            io.kind(),
+            io::ErrorKind::ConnectionReset
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::UnexpectedEof
+        ))
 }
 
 impl Drop for Server {

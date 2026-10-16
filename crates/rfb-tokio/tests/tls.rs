@@ -93,6 +93,8 @@ async fn x509_none_and_x509_vnc_and_x509_plain_all_connect_and_carry_traffic() {
         let (mut client, info) = ClientSession::connect(c, copts).await.unwrap();
         let mut server = server.await.unwrap().unwrap();
         assert_eq!(info.name, b"tls test", "{auth:?}");
+        let expected: Option<&[u8]> = matches!(auth, ServerAuth::Plain(_)).then_some(b"alice");
+        assert_eq!(server.username(), expected, "{auth:?}");
         assert!(client.is_encrypted() && server.is_encrypted(), "{auth:?}");
         // Messages flow both ways inside TLS.
         client

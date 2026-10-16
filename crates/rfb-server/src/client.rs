@@ -33,7 +33,10 @@ const REASON_CLIENT: u16 = 1;
 const STATUS_OK: u16 = 0;
 const STATUS_PROHIBITED: u16 = 1;
 
+#[allow(clippy::struct_excessive_bools)] // independent one-shot flags
 struct State {
+    /// This client may look but not touch.
+    view_only: bool,
     dirty: Region,
     /// The area of the outstanding update request, if any.
     request: Option<Rect>,
@@ -83,7 +86,11 @@ fn layout_rect(size: (u16, u16), reason: u16, status: u16) -> (RectHeader, Vec<u
     )
 }
 
-pub(crate) async fn run<S>(mut session: ServerSession<S>, shared: Arc<Shared>) -> Result<(), Error>
+pub(crate) async fn run<S>(
+    mut session: ServerSession<S>,
+    shared: Arc<Shared>,
+    view_only: bool,
+) -> Result<(), Error>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -96,6 +103,7 @@ where
         (fb.width(), fb.height())
     };
     let mut st = State {
+        view_only,
         dirty: Region::new(),
         request: None,
         zrle: ZrleEncoder::new(),
@@ -181,17 +189,17 @@ where
             st.request = Some(st.request.map_or(rect, |old| region::union(old, rect)));
         }
         ClientMessage::KeyEvent { down, keysym } => {
-            if !shared.view_only {
+            if !st.view_only {
                 shared.input.key(keysym, down);
             }
         }
         ClientMessage::PointerEvent { buttons, x, y } => {
-            if !shared.view_only {
+            if !st.view_only {
                 shared.input.pointer(x, y, buttons);
             }
         }
         ClientMessage::ClientCutText(latin1) => {
-            if !shared.view_only {
+            if !st.view_only {
                 let text: String = latin1.iter().map(|&b| char::from(b)).collect();
                 shared.input.clipboard(&text);
             }
@@ -207,7 +215,7 @@ where
                     .await?;
             }
             if let Some(text) = reaction.received {
-                if !shared.view_only {
+                if !st.view_only {
                     // The wire has CR LF; backends get plain LF.
                     shared.input.clipboard(&text.replace("\r\n", "\n"));
                 }

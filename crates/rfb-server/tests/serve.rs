@@ -745,3 +745,106 @@ async fn vnc_password_authentication_and_the_client_count() {
     v.update().await;
     assert_eq!(server.client_count(), 1);
 }
+
+#[tokio::test]
+async fn a_policy_can_make_a_client_view_only_and_events_report_the_session() {
+    use rfb_server::{Event, Permission};
+    let input = Recording::default();
+    let opts = ServerOptions::new(ServerAuth::VncPassword(b"secret".to_vec()), 1, 1, b"x");
+    let mut server = Server::new(
+        TestPattern::new(64, 64),
+        input.clone(),
+        opts,
+        Settings::default(),
+    )
+    .unwrap();
+    server.set_policy(|user| {
+        assert_eq!(user, None, "a shared password has no user name");
+        Permission::ViewOnly
+    });
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    server.set_events(move |e| sink.lock().unwrap().push(e.clone()));
+    let server = Arc::new(server);
+
+    let right = ClientOptions {
+        password: Some(b"secret".to_vec()),
+        ..ClientOptions::default()
+    };
+    let (mut v, task) = connect_with(&server, PixelFormat::RGB888, ZRLE, right).await;
+    v.session
+        .send(&ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0x61,
+        })
+        .await
+        .unwrap();
+    v.quiet(Duration::from_millis(200)).await;
+    assert_eq!(input.seen().len(), 0, "view-only drops input");
+    drop(v);
+    let _ = task.await;
+
+    let (near, far) = duplex(1 << 16);
+    let s = Arc::clone(&server);
+    let bad = tokio::spawn(async move { s.serve_connection(far).await });
+    let wrong = ClientOptions {
+        password: Some(b"nope".to_vec()),
+        ..ClientOptions::default()
+    };
+    let _ = ClientSession::connect(near, wrong).await;
+    let _ = bad.await;
+
+    let seen = events.lock().unwrap().clone();
+    assert!(
+        matches!(
+            seen.as_slice(),
+            [
+                Event::Connected {
+                    user: None,
+                    permission: Permission::ViewOnly,
+                    ..
+                },
+                Event::Closed { error: None, .. },
+                Event::AuthFailed { .. },
+            ]
+        ),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_peer_that_failed_to_sign_in_waits_before_the_next_attempt() {
+    let opts = ServerOptions::new(ServerAuth::VncPassword(b"secret".to_vec()), 1, 1, b"x");
+    let server = Arc::new(
+        Server::new(TestPattern::new(64, 64), NoInput, opts, Settings::default()).unwrap(),
+    );
+    let peer: std::net::SocketAddr = "192.0.2.7:4000".parse().unwrap();
+    let attempt = |password: &'static [u8]| {
+        let server = Arc::clone(&server);
+        async move {
+            let (near, far) = duplex(1 << 16);
+            let task = tokio::spawn(async move { server.serve(far, Some(peer)).await });
+            let options = ClientOptions {
+                password: Some(password.to_vec()),
+                ..ClientOptions::default()
+            };
+            let started = tokio::time::Instant::now();
+            let result = ClientSession::connect(near, options).await;
+            (started.elapsed(), result.is_ok(), task)
+        }
+    };
+    let (first, ok, _t) = attempt(b"nope").await;
+    assert!(
+        !ok && first < Duration::from_millis(500),
+        "the first failure is not delayed: {first:?}"
+    );
+    let (second, ok, _t) = attempt(b"nope").await;
+    assert!(!ok && second >= Duration::from_secs(1), "{second:?}");
+    let (third, ok, _t) = attempt(b"nope").await;
+    assert!(!ok && third >= Duration::from_secs(2), "{third:?}");
+    // A correct password still waits for the delay it has earned, then clears it.
+    let (fourth, ok, _t4) = attempt(b"secret").await;
+    assert!(ok && fourth >= Duration::from_secs(4), "{fourth:?}");
+    let (fifth, ok, _t5) = attempt(b"secret").await;
+    assert!(ok && fifth < Duration::from_millis(500), "{fifth:?}");
+}
