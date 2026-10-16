@@ -785,7 +785,11 @@ async fn the_statistics_overlay_shows_live_readings_when_switched_on() {
     let text = drawn_text(&out);
     assert!(text.contains(" fps"), "{text}");
     assert!(text.contains("800×400"), "the remote size is shown: {text}");
-    assert!(text.contains("received") && text.contains("sent"), "{text}");
+    let lower = text.to_lowercase();
+    assert!(
+        lower.contains("received") && lower.contains("sent"),
+        "{text}"
+    );
     let s = app.stats().unwrap();
     assert!(s.total_rx > 0 && s.total_tx > 0, "{s:?}");
 

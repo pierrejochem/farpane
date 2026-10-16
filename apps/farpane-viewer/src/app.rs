@@ -980,9 +980,11 @@ impl ViewerApp {
                     // A drawn dot: egui's default font has no "●" glyph.
                     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, colour);
-                    ui.label(RichText::new(text).color(colour));
                     // The controls fill the bar in a narrow window.
                     let roomy = ctx.screen_rect().width() > 1280.0;
+                    if roomy || !matches!(self.phase, Phase::Connected { .. }) {
+                        ui.label(RichText::new(text).color(colour));
+                    }
                     if let (true, Phase::Connected { name }, Some(since)) =
                         (roomy, &self.phase, self.connected_at)
                     {
@@ -1195,73 +1197,138 @@ impl ViewerApp {
     }
 
     /// The statistics card in the top-right corner of the picture.
+    /// The "Live stats" card of the session board: four figures, the
+    /// bandwidth chart and the pixel encoding mix, over the picture.
+    #[allow(clippy::too_many_lines)] // one card, easier to read whole
     fn stats_overlay(&self, ctx: &Context, tokens: &Tokens) {
         let tokens = &tokens.reduce_transparency();
         // Below the top bar in a window; clear of the toolbar tab in full screen.
-        let top = if self.fullscreen { 16.0 } else { 52.0 };
+        let top = if self.fullscreen { 16.0 } else { 70.0 };
         egui::Area::new(egui::Id::new("stats-overlay"))
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::RIGHT_TOP, vec2(-12.0, top))
+            .anchor(egui::Align2::RIGHT_TOP, vec2(-18.0, top))
             .interactable(false)
             .show(ctx, |ui| {
-                Frame::NONE
-                    .fill(tokens.card.into())
-                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
-                    .corner_radius(style::radius(tokens.radius / 2.0))
-                    .inner_margin(Margin::symmetric(12, 8))
-                    .show(ui, |ui| {
-                        ui.set_min_width(200.0);
-                        let Some(s) = &self.stats else {
-                            ui.label(RichText::new("Waiting for data…").color(tokens.muted));
-                            return;
-                        };
-                        let (w, h) = self.remote_size;
+                Self::card_frame(tokens, 18, 18).show(ui, |ui| {
+                    ui.set_width(284.0);
+                    ui.spacing_mut().item_spacing.y = 12.0;
+                    ui.label(RichText::new("SESSION").color(tokens.muted).size(10.5));
+                    ui.label(
+                        RichText::new("Live stats")
+                            .family(style::semibold(ui.ctx()))
+                            .size(16.0),
+                    );
+                    let Some(s) = &self.stats else {
+                        ui.label(RichText::new("Waiting for data…").color(tokens.muted));
+                        return;
+                    };
+                    let (rtt_value, rtt_unit) = match s.rtt {
+                        Some(d) => (d.as_millis().to_string(), "ms"),
+                        None => ("n/a".to_owned(), ""),
+                    };
+                    let (rx_value, rx_unit) = split_rate(stats::format_rate(s.rx_per_sec));
+                    let (tx_value, tx_unit) = split_rate(stats::format_rate(s.tx_per_sec));
+                    let figures = [
+                        ("Round trip", rtt_value, rtt_unit.to_owned()),
+                        ("Received", rx_value, rx_unit),
+                        ("Sent", tx_value, tx_unit),
+                        (
+                            "Updates",
+                            format!("{:.0}", s.updates_per_sec),
+                            "per s".to_owned(),
+                        ),
+                    ];
+                    egui::Grid::new("stats-tiles")
+                        .spacing([10.0, 10.0])
+                        .show(ui, |ui| {
+                            for (i, (label, value, unit)) in figures.iter().enumerate() {
+                                Frame::NONE
+                                    .fill(widgets::inset(tokens))
+                                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                                    .corner_radius(style::radius(12.0))
+                                    .inner_margin(Margin::same(12))
+                                    .show(ui, |ui| {
+                                        ui.set_width(113.0);
+                                        ui.spacing_mut().item_spacing.y = 2.0;
+                                        ui.label(
+                                            RichText::new(*label).color(tokens.muted).size(11.5),
+                                        );
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 4.0;
+                                            ui.label(
+                                                RichText::new(value)
+                                                    .family(style::semibold(ui.ctx()))
+                                                    .size(20.0),
+                                            );
+                                            ui.label(
+                                                RichText::new(unit).color(tokens.muted).size(11.0),
+                                            );
+                                        });
+                                    });
+                                if i % 2 == 1 {
+                                    ui.end_row();
+                                }
+                            }
+                        });
+                    ui.horizontal(|ui| {
                         ui.label(
-                            RichText::new(format!(
-                                "{:.0} fps   in {}   out {}   {}",
-                                s.updates_per_sec,
-                                stats::format_rate(s.rx_per_sec),
-                                stats::format_rate(s.tx_per_sec),
-                                stats::format_rtt(s.rtt)
-                            ))
-                            .strong(),
-                        );
-                        let mix = stats::pixel_mix(s, 3)
-                            .into_iter()
-                            .map(|(e, pct)| format!("{} {pct}%", stats::encoding_name(e)))
-                            .collect::<Vec<_>>()
-                            .join("  ");
-                        let mix = if mix.is_empty() {
-                            "no pixel data yet".to_owned()
-                        } else {
-                            mix
-                        };
-                        ui.label(RichText::new(format!("{w}×{h}   {mix}")).color(tokens.muted));
-                        ui.add_space(4.0);
-                        let history: Vec<f32> = self.rx_history.iter().copied().collect();
-                        farpane_ui::widgets::sparkline(
-                            ui,
-                            &history,
-                            vec2(200.0, 30.0),
-                            HISTORY_LEN,
-                            None,
-                            Color32::from(tokens.accent_text),
-                        );
-                        ui.label(
-                            RichText::new(format!("keyboard: {}", self.capture_summary()))
+                            RichText::new("Bandwidth, last 60 s")
                                 .color(tokens.muted)
-                                .size(11.0),
+                                .size(12.0),
                         );
-                        ui.label(
-                            RichText::new(format!(
-                                "received {}   sent {}",
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            ui.label(
+                                RichText::new(stats::format_rate(s.rx_per_sec))
+                                    .strong()
+                                    .size(12.0),
+                            );
+                        });
+                    });
+                    let history: Vec<f32> = self.rx_history.iter().copied().collect();
+                    widgets::area_chart(
+                        ui,
+                        vec2(284.0, 90.0),
+                        &[(&history, Color32::from(tokens.accent))],
+                        HISTORY_LEN,
+                        16_384.0,
+                        Color32::from(tokens.line),
+                    );
+                    ui.separator();
+                    let (w, h) = self.remote_size;
+                    let mix = stats::pixel_mix(s, 3)
+                        .into_iter()
+                        .map(|(e, pct)| format!("{} {pct}%", stats::encoding_name(e)))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mix = if mix.is_empty() {
+                        "no pixel data yet".to_owned()
+                    } else {
+                        mix
+                    };
+                    let rows = [
+                        ("Encoding", mix),
+                        ("Screen", format!("{w}×{h}")),
+                        (
+                            "Transferred",
+                            format!(
+                                "{} in, {} out",
                                 stats::format_bytes(precise(s.total_rx)),
                                 stats::format_bytes(precise(s.total_tx))
-                            ))
-                            .color(tokens.muted)
-                            .size(11.0),
-                        );
-                    });
+                            ),
+                        ),
+                        ("Keyboard", self.capture_summary()),
+                        ("Rate", format!("{:.0} fps", s.updates_per_sec)),
+                    ];
+                    ui.spacing_mut().item_spacing.y = 8.0;
+                    for (key, value) in rows {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(key).color(tokens.muted).size(12.5));
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(RichText::new(value).strong().size(12.5));
+                            });
+                        });
+                    }
+                });
             });
     }
 
@@ -1925,5 +1992,13 @@ impl eframe::App for ViewerApp {
     fn update(&mut self, ctx: &Context, frame: &mut eframe::Frame) {
         self.ensure_grabber(frame);
         self.ui(ctx);
+    }
+}
+
+/// `1.5 MB/s` as `("1.5", "MB/s")`.
+fn split_rate(text: String) -> (String, String) {
+    match text.rsplit_once(' ') {
+        Some((value, unit)) => (value.to_owned(), unit.to_owned()),
+        None => (text, String::new()),
     }
 }
