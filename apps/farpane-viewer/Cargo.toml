@@ -18,8 +18,10 @@ rfb-codec.workspace = true
 rfb-security.workspace = true
 rfb-tokio.workspace = true
 farpane-ui.workspace = true
-tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time"] }
+tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time", "sync"] }
 png = "0.18.1"
+eframe = { version = "0.32.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
+egui = { version = "0.32.3", default-features = false }
 
 [lints]
 workspace = true
