@@ -8,6 +8,14 @@ order: 3
 
 Start `farpane-viewer` (optionally with `HOST:PORT`). The home screen has a **Quick connect** card for the address, a user name (only if the server asks) and a password (if the server asks), and a list of **Saved connections**. Press Enter or **Connect**.
 
+![Farpane Viewer home screen in the Glass theme with the Quick connect card and saved connections](screenshots/viewer-home-glass.png){: width="1100" height="720" loading="lazy"}
+
+The same screen in the Slate and Light themes:
+
+![Farpane Viewer home screen in the Slate theme](screenshots/viewer-home-slate.png){: width="1100" height="720" loading="lazy"}
+
+![Farpane Viewer home screen in the Light theme](screenshots/viewer-home-light.png){: width="1100" height="720" loading="lazy"}
+
 ## Signing in and trusting servers
 
 The viewer prefers encrypted connections and never falls back to plain VNC Auth for a server you have already pinned.
@@ -19,6 +27,8 @@ The viewer prefers encrypted connections and never falls back to plain VNC Auth 
 Passwords are never stored and never taken from a command-line argument. For scripts, set `FARPANE_PASSWORD` or use `--password-file`.
 
 ## In a session
+
+![A live session in Farpane Viewer with the Live stats card, the top bar and the footer showing protocol and security](screenshots/viewer-session.png){: width="1100" height="720" loading="lazy"}
 
 | Control | What it does |
 |---|---|

@@ -132,7 +132,10 @@ def build():
         shutil.rmtree(OUT)
     OUT.mkdir()
     for f in (ROOT / "site" / "static").iterdir():
-        shutil.copy(f, OUT / f.name)
+        if f.is_dir():
+            shutil.copytree(f, OUT / f.name)
+        else:
+            shutil.copy(f, OUT / f.name)
 
     pages = []
     for md in sorted((ROOT / "docs" / "handbook").glob("*.md")):
@@ -167,6 +170,7 @@ def build():
             return 'href="' + (sib if name == "introduction" else f"{sib}{name}/") + '"'
 
         content = re.sub(r'href="([a-z]+)\.html"', fix, content)
+        content = content.replace('src="screenshots/', f'src="{root}screenshots/')
         # Each page's own h1 stays the only h1; give headings anchors via toc ids.
         toc = "".join(
             f'<li><a href="{sib if q["slug"] == "introduction" else sib + q["slug"] + "/"}"'
@@ -286,6 +290,13 @@ def build():
 <img src="icon-512.png" width="200" height="200" alt="Farpane icon: three receding panes">
 </section>
 <section class="section" aria-labelledby="features"><h2 id="features">What it does</h2><div class="grid">{cards}</div></section>
+<section class="section" aria-labelledby="look"><h2 id="look">What it looks like</h2>
+<div class="shots">
+<figure><img src="screenshots/server-overview.png" width="1100" height="760" loading="lazy" alt="Farpane Server dashboard: live traffic chart, connected clients, shared screen and sign-in methods"><figcaption>Server dashboard (Glass theme)</figcaption></figure>
+<figure><img src="screenshots/viewer-session.png" width="1100" height="720" loading="lazy" alt="Farpane Viewer in a live session with the Live stats card and a footer showing protocol and security"><figcaption>Viewer in a live session</figcaption></figure>
+<figure><img src="screenshots/server-clients.png" width="1100" height="760" loading="lazy" alt="Farpane Server clients page in the dark Slate theme"><figcaption>Clients page (Slate theme)</figcaption></figure>
+<figure><img src="screenshots/viewer-home-light.png" width="1100" height="720" loading="lazy" alt="Farpane Viewer home screen in the Light theme with saved connections"><figcaption>Viewer home (Light theme)</figcaption></figure>
+</div></section>
 <section class="section" aria-labelledby="try"><h2 id="try">Try it</h2>
 <p>There is no release yet, so build from source (Rust 1.85 or newer):</p>
 <pre><code>git clone {REPO}.git

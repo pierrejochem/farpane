@@ -15,6 +15,10 @@ There are two applications:
 
 Both share a protocol core written without any I/O (`rfb-proto`) and an egui user interface with the **Glass**, **Slate** and **Light** themes.
 
+![Farpane Viewer showing a remote desktop with the Live stats card and the footer bar](screenshots/viewer-session.png){: width="1100" height="720" loading="lazy"}
+
+![Farpane Server dashboard overview with live figures, traffic chart, shared screen and security card](screenshots/server-overview.png){: width="1100" height="760" loading="lazy"}
+
 ## Status
 
 Farpane is in early development and has **not been released**. The viewer and server work against each other and against real servers (QEMU and a kiosk VNC server). It has not yet been tested against TigerVNC, RealVNC or macOS Screen Sharing, so compatibility with those is expected but unverified.

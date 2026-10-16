@@ -58,3 +58,8 @@ footer.site .bar{justify-content:space-between}
 .card h3{margin:.1rem 0 .4rem;font-size:1.05rem}
 .card p{margin:0;color:var(--muted)}
 .section h2{font-size:1.6rem;letter-spacing:-.01em;margin:2.5rem 0 .5rem}
+article img{max-width:100%;height:auto;border-radius:12px;border:1px solid var(--line);margin:.6rem 0 1rem;display:block}
+.shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(26rem,1fr));gap:1.2rem;margin:1.5rem 0}
+.shots figure{margin:0}
+.shots img{width:100%;height:auto;border-radius:12px;border:1px solid var(--line);display:block}
+.shots figcaption{color:var(--muted);font-size:.9rem;margin-top:.4rem}

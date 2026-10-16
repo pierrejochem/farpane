@@ -30,10 +30,21 @@ Accounts sign in by name and password inside encryption: TLS (`--tls-self-signed
 
 ## The dashboard
 
+![The Overview page of the Farpane Server dashboard](screenshots/server-overview.png){: width="1100" height="760" loading="lazy"}
+
 - **Overview**: status, four live figures, a traffic chart (1 minute, 5 minutes or 1 hour), the shared screen, the offered sign-in methods, connected clients, a live preview and recent events.
 - **Clients**: protection, encoding, bitrate, round trip, **View only** toggle and **Disconnect** per client.
+
+![The Clients page in the Slate theme listing three connected clients](screenshots/server-clients.png){: width="1100" height="760" loading="lazy"}
+
 - **Users**: the same rules as the command line.
+
+![The Users page listing three accounts with roles and an Add a user form](screenshots/server-users.png){: width="1100" height="760" loading="lazy"}
+
 - **Security**: listen address, TLS, RSA-AES and view-only, saved to `server.toml`; also forgets the TLS certificate or RSA key. Changes apply at the next start.
+
+![The Security page in the Light theme with settings and key management](screenshots/server-security.png){: width="1100" height="760" loading="lazy"}
+
 - **Displays** and **Event log** (export as JSON).
 
 The top bar has a search box for clients and events and **Pause sharing**, which stops new pictures and ignores input while clients stay connected.

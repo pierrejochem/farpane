@@ -55,6 +55,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
+  --theme NAME           start with glass, slate, light or system (default glass)
   --page NAME            start on overview, clients, users, security, displays or log
 
 Settings saved by the dashboard's Security page (server.toml in the config
@@ -71,6 +72,7 @@ struct Args {
     size: (u16, u16),
     fps: u32,
     max_connections: Option<usize>,
+    theme: Option<farpane_ui::ThemePreference>,
     password: Option<Vec<u8>>,
     view_only: bool,
     allow_no_auth: bool,
@@ -108,6 +110,7 @@ fn parse() -> Result<Args, String> {
         size: (1024, 768),
         fps: 30,
         max_connections: None,
+        theme: None,
         password: std::env::var("FARPANE_PASSWORD")
             .ok()
             .filter(|p| !p.is_empty())
@@ -141,6 +144,17 @@ fn parse() -> Result<Args, String> {
                 args.ui_delay = value(&mut it, "--ui-delay")?
                     .parse()
                     .map_err(|_| "--ui-delay: seconds")?;
+            }
+            "--theme" => {
+                use farpane_ui::ThemePreference as T;
+                let name = value(&mut it, "--theme")?;
+                args.theme = Some(match name.to_ascii_lowercase().as_str() {
+                    "glass" => T::Glass,
+                    "slate" => T::Slate,
+                    "light" => T::Light,
+                    "system" => T::System,
+                    _ => return Err("--theme: glass, slate, light or system".into()),
+                });
             }
             "--page" => {
                 let name = value(&mut it, "--page")?;
@@ -618,6 +632,9 @@ fn main() -> ExitCode {
     });
     let mut dashboard = Dashboard::new(backend, events, config_dir.join("users.toml"), config_dir);
     dashboard.set_screenshot(args.ui_screenshot.clone(), args.page, args.ui_delay);
+    if let Some(theme) = args.theme {
+        dashboard.set_theme(theme);
+    }
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Farpane Server")

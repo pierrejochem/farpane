@@ -345,6 +345,11 @@ impl Dashboard {
         self.screenshot_delay = delay_secs;
     }
 
+    /// Start with this theme.
+    pub fn set_theme(&mut self, theme: ThemePreference) {
+        self.theme = theme;
+    }
+
     #[must_use]
     pub fn page(&self) -> Page {
         self.page
