@@ -361,3 +361,92 @@ fn cursor_uses_the_session_pixel_format() {
     };
     assert_eq!(c.rgba, [255, 0, 0, 255]);
 }
+
+fn ext_payload(screens: &[rfb_proto::types::Screen]) -> Vec<u8> {
+    let mut p = vec![u8::try_from(screens.len()).unwrap(), 0, 0, 0];
+    for s in screens {
+        s.write(&mut p);
+    }
+    p
+}
+
+#[test]
+fn an_extended_layout_resizes_the_picture_and_reports_the_screens() {
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    dec.decode(&mut fb, &header(enc::RAW, 0, 0, 1, 1), &[9, 9, 9, 0])
+        .unwrap();
+    let screens = [rfb_proto::types::Screen {
+        id: 3,
+        x: 0,
+        y: 0,
+        width: 8,
+        height: 6,
+        flags: 0,
+    }];
+    // Reason 1 (we asked), status 0 (granted), new size 8 x 6.
+    let h = header(pseudo::EXT_DESKTOP_SIZE, 1, 0, 8, 6);
+    let Ok(Damage::Layout(l)) = dec.decode(&mut fb, &h, &ext_payload(&screens)) else {
+        panic!("expected a layout");
+    };
+    assert_eq!((l.reason, l.status, l.width, l.height), (1, 0, 8, 6));
+    assert!(l.resized);
+    assert_eq!(l.screens, screens);
+    assert_eq!((fb.width(), fb.height()), (8, 6));
+    assert_eq!(
+        fb.pixel(0, 0),
+        Some([0, 0, 0, 255]),
+        "a resize clears the picture"
+    );
+}
+
+#[test]
+fn repeating_the_same_size_does_not_clear_the_picture() {
+    // Servers send the layout on every full refresh.
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    dec.decode(&mut fb, &header(enc::RAW, 0, 0, 1, 1), &[9, 9, 9, 0])
+        .unwrap();
+    let h = header(pseudo::EXT_DESKTOP_SIZE, 0, 0, 4, 4);
+    let Ok(Damage::Layout(l)) = dec.decode(&mut fb, &h, &ext_payload(&[])) else {
+        panic!("expected a layout");
+    };
+    assert!(!l.resized);
+    assert_eq!(fb.pixel(0, 0), Some([9, 9, 9, 255]), "the picture survived");
+}
+
+#[test]
+fn a_refusal_never_resizes_whatever_its_size_fields_say() {
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    for status in [1u16, 2, 3, 4, 99] {
+        let h = header(pseudo::EXT_DESKTOP_SIZE, 1, status, 9999, 9999);
+        let Ok(Damage::Layout(l)) = dec.decode(&mut fb, &h, &ext_payload(&[])) else {
+            panic!("expected a layout");
+        };
+        assert_eq!((l.status, l.resized), (status, false));
+        assert_eq!((fb.width(), fb.height()), (4, 4));
+    }
+}
+
+#[test]
+fn a_layout_payload_must_match_its_screen_count() {
+    let mut fb = Framebuffer::new(4, 4).unwrap();
+    let mut dec = Decoder::new(&PixelFormat::RGB888).unwrap();
+    let h = header(pseudo::EXT_DESKTOP_SIZE, 0, 0, 4, 4);
+    let mut short = ext_payload(&[rfb_proto::types::Screen::default()]);
+    short.pop();
+    assert!(matches!(
+        dec.decode(&mut fb, &h, &short),
+        Err(DecodeError::Malformed(_))
+    ));
+    let mut long = ext_payload(&[]);
+    long.push(0);
+    assert!(matches!(
+        dec.decode(&mut fb, &h, &long),
+        Err(DecodeError::Malformed(_))
+    ));
+    // A too large size is refused by the framebuffer limit, not allocated.
+    let h = header(pseudo::EXT_DESKTOP_SIZE, 0, 0, 30_000, 30_000);
+    assert!(dec.decode(&mut fb, &h, &ext_payload(&[])).is_err());
+}

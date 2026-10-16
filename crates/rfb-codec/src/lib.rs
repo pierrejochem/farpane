@@ -22,7 +22,7 @@ mod pixel;
 mod rre;
 mod zrle;
 
-pub use decoder::{Cursor, Damage, Decoder};
+pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;
 pub use pixel::PixelConverter;
