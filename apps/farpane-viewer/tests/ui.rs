@@ -364,3 +364,171 @@ async fn the_servers_cursor_replaces_the_local_one_over_the_picture() {
     assert_eq!(hidden.platform_output.cursor_icon, egui::CursorIcon::None);
     assert_eq!(image_meshes(&hidden), pictures);
 }
+
+/// Run a frame and return what egui asked the platform to put on the clipboard.
+fn copied_text(ctx: &Context, app: &mut ViewerApp, events: Vec<Event>) -> Vec<String> {
+    let input = RawInput {
+        screen_rect: Some(UiRect::from_min_size(Pos2::ZERO, SCREEN)),
+        events,
+        focused: true,
+        ..RawInput::default()
+    };
+    ctx.run(input, |ctx| app.ui(ctx))
+        .platform_output
+        .commands
+        .into_iter()
+        .filter_map(|c| match c {
+            egui::OutputCommand::CopyText(text) => Some(text),
+            _ => None,
+        })
+        .collect()
+}
+
+const CTRL_KEY: Modifiers = Modifiers {
+    ctrl: true,
+    command: true,
+    ..Modifiers::NONE
+};
+
+#[tokio::test]
+async fn paste_sends_the_text_before_ctrl_v() {
+    let (ctx, mut app, mut server) = connected().await;
+    // egui-winit reports Ctrl+V as a Paste event carrying the local clipboard.
+    frame_with(
+        &ctx,
+        &mut app,
+        vec![Event::Paste("caf\u{e9} \u{20ac}5\r\nok".into())],
+        CTRL_KEY,
+    );
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::ClientCutText(b"caf\xe9 ?5\nok".to_vec())
+    );
+    for (keysym, down) in [(0xFFE3, true), (0x76, true), (0x76, false)] {
+        assert_eq!(
+            next_input(&mut server).await,
+            ClientMessage::KeyEvent { down, keysym }
+        );
+    }
+    assert!(
+        app.notice().is_some_and(|n| n.contains("Latin-1")),
+        "{:?}",
+        app.notice()
+    );
+}
+
+#[tokio::test]
+async fn copy_and_cut_reach_the_remote_as_keys() {
+    let (ctx, mut app, mut server) = connected().await;
+    frame_with(&ctx, &mut app, vec![Event::Copy], CTRL_KEY);
+    for (keysym, down) in [(0xFFE3, true), (0x63, true), (0x63, false)] {
+        assert_eq!(
+            next_input(&mut server).await,
+            ClientMessage::KeyEvent { down, keysym }
+        );
+    }
+    frame_with(&ctx, &mut app, vec![Event::Cut], CTRL_KEY);
+    for (keysym, down) in [(0x78, true), (0x78, false)] {
+        assert_eq!(
+            next_input(&mut server).await,
+            ClientMessage::KeyEvent { down, keysym }
+        );
+    }
+}
+
+#[tokio::test]
+async fn with_sharing_off_only_the_keys_go_through() {
+    let (ctx, mut app, mut server) = connected().await;
+    app.set_clipboard_sync(false);
+    frame_with(
+        &ctx,
+        &mut app,
+        vec![Event::Paste("secret".into())],
+        CTRL_KEY,
+    );
+    // No ClientCutText: the first thing the server sees is the keystrokes.
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0xFFE3
+        }
+    );
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0x76
+        }
+    );
+    // And text from the server is not copied.
+    server
+        .send(&rfb_proto::msg::server::ServerMessage::ServerCutText(
+            b"remote".to_vec(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..30 {
+        assert_eq!(copied_text(&ctx, &mut app, vec![]), Vec::<String>::new());
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+#[tokio::test]
+async fn server_text_lands_on_the_local_clipboard_without_control_characters() {
+    let (ctx, mut app, mut server) = connected().await;
+    server
+        .send(&rfb_proto::msg::server::ServerMessage::ServerCutText(
+            b"rm -rf \x1b[2J\x07 caf\xe9\r\nline2".to_vec(),
+        ))
+        .await
+        .unwrap();
+    for _ in 0..600 {
+        let copied = copied_text(&ctx, &mut app, vec![]);
+        if let Some(text) = copied.first() {
+            assert_eq!(text, "rm -rf [2J caf\u{e9}\nline2");
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("the server's text never reached the clipboard");
+}
+
+#[tokio::test]
+async fn oversized_clipboard_text_is_not_sent_and_the_session_survives() {
+    let (ctx, mut app, mut server) = connected().await;
+    let big = "x".repeat(1024 * 1024 + 1);
+    frame_with(&ctx, &mut app, vec![Event::Paste(big)], CTRL_KEY);
+    assert!(
+        app.notice().is_some_and(|n| n.contains("too large")),
+        "{:?}",
+        app.notice()
+    );
+    // No ClientCutText came through, only the shortcut keys, and the
+    // connection is still usable afterwards.
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0xFFE3
+        }
+    );
+    assert_eq!(
+        next_input(&mut server).await,
+        ClientMessage::KeyEvent {
+            down: true,
+            keysym: 0x76
+        }
+    );
+    frame(&ctx, &mut app, vec![Event::Text("z".into())]);
+    loop {
+        match next_input(&mut server).await {
+            ClientMessage::KeyEvent {
+                keysym: 0x7A,
+                down: true,
+            } => break,
+            ClientMessage::ClientCutText(_) => panic!("oversized text was sent"),
+            _ => {}
+        }
+    }
+}

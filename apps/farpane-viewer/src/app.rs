@@ -14,6 +14,7 @@ use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
 
 use crate::{
+    clipboard::{self, ClipboardError},
     core::{Command, Core, UiEvent},
     input::{Canvas, KeyTranslator, PointerTranslator},
 };
@@ -60,6 +61,10 @@ pub struct ViewerApp {
     theme: ThemePreference,
     applied: Option<Tokens>,
     one_to_one: bool,
+    /// Copy text between the local and the remote clipboard.
+    clipboard_sync: bool,
+    /// A short message for the top bar, with the time it expires.
+    notice: Option<(String, Instant)>,
     texture: Option<TextureHandle>,
     remote_size: (u16, u16),
     /// `None` until the server sends a shape: then the local arrow is shown.
@@ -104,6 +109,8 @@ impl ViewerApp {
             theme: ThemePreference::default(),
             applied: None,
             one_to_one: false,
+            clipboard_sync: true,
+            notice: None,
             texture: None,
             remote_size: (0, 0),
             cursor: None,
@@ -132,6 +139,20 @@ impl ViewerApp {
     #[must_use]
     pub fn remote_size(&self) -> (u16, u16) {
         self.remote_size
+    }
+
+    /// Turn clipboard sharing on or off.
+    pub fn set_clipboard_sync(&mut self, on: bool) {
+        self.clipboard_sync = on;
+    }
+
+    /// The message currently shown in the top bar, if any.
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice
+            .as_ref()
+            .filter(|(_, until)| Instant::now() < *until)
+            .map(|(message, _)| message.as_str())
     }
 
     /// Size of the remote cursor shape: `None` before the server sent one,
@@ -207,7 +228,15 @@ impl ViewerApp {
                 UiEvent::Resized { width, height } => self.new_texture(ctx, width, height),
                 UiEvent::Frame { rect, rgba } => self.upload(rect, &rgba),
                 UiEvent::Cursor(cursor) => self.set_cursor(ctx, &cursor),
-                UiEvent::Bell | UiEvent::CutText(_) => {}
+                UiEvent::CutText(text) => {
+                    if self.clipboard_sync {
+                        let text = clipboard::from_remote(&text);
+                        if !text.is_empty() {
+                            ctx.copy_text(text);
+                        }
+                    }
+                }
+                UiEvent::Bell => {}
                 UiEvent::Disconnected(reason) => {
                     self.phase = Phase::Home;
                     self.error = reason;
@@ -237,6 +266,28 @@ impl ViewerApp {
                 }
             },
         );
+    }
+
+    fn say(&mut self, message: String) {
+        self.notice = Some((message, Instant::now() + Duration::from_secs(5)));
+    }
+
+    /// Send the local clipboard text to the remote machine (on paste).
+    fn send_clipboard(&mut self, text: &str) {
+        match clipboard::to_remote(text) {
+            Ok(out) => {
+                if out.replaced > 0 {
+                    self.say(format!(
+                        "{} character(s) outside Latin-1 were sent as “?”",
+                        out.replaced
+                    ));
+                }
+                self.core.send(Command::CutText(out.latin1));
+            }
+            Err(ClipboardError::TooLarge { .. }) => {
+                self.say("Clipboard text is too large to send (limit 1 MiB)".to_owned());
+            }
+        }
     }
 
     fn new_texture(&mut self, ctx: &Context, width: u16, height: u16) {
@@ -299,6 +350,13 @@ impl ViewerApp {
                     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, colour);
                     ui.label(RichText::new(text).color(colour));
+                    if let Some((message, until)) = &self.notice {
+                        if Instant::now() < *until {
+                            ui.add_space(12.0);
+                            ui.label(RichText::new(message).color(tokens.amber));
+                            ctx.request_repaint_after(Duration::from_millis(500));
+                        }
+                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
                             .selected_text(theme_name(self.theme))
@@ -313,6 +371,13 @@ impl ViewerApp {
                                 }
                             });
                         ui.label(RichText::new("Theme").color(tokens.muted));
+                        if matches!(self.phase, Phase::Connected { .. }) {
+                            ui.add_space(8.0);
+                            ui.checkbox(&mut self.clipboard_sync, "Clipboard")
+                                .on_hover_text(
+                                    "Share text between this computer and the remote one",
+                                );
+                        }
                         if matches!(self.phase, Phase::Connected { .. }) {
                             ui.add_space(12.0);
                             if ui.button("Disconnect").clicked() {
@@ -516,6 +581,14 @@ impl ViewerApp {
             return;
         }
         if response.has_focus() {
+            // The remote machine must have the text before it sees Ctrl+V.
+            let pasted = events.iter().rev().find_map(|e| match e {
+                egui::Event::Paste(text) => Some(text.clone()),
+                _ => None,
+            });
+            if let (true, Some(text)) = (self.clipboard_sync, pasted) {
+                self.send_clipboard(&text);
+            }
             for k in self.keys.translate(&events, mods) {
                 self.core.send(Command::Key {
                     keysym: k.keysym,

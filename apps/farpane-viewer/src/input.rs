@@ -126,6 +126,9 @@ fn types_text(key: Key) -> bool {
 pub struct KeyTranslator {
     mods: Modifiers,
     held: Vec<u32>,
+    /// Keys sent as a tap for a clipboard shortcut, whose release event is
+    /// still to come and must not be sent again.
+    tapped: Vec<u32>,
 }
 
 impl KeyTranslator {
@@ -143,6 +146,20 @@ impl KeyTranslator {
                             down: false,
                         });
                     }
+                }
+                // egui-winit turns the Ctrl/Cmd+C, X and V presses into these
+                // events and drops the key itself, so tap the key here.
+                Event::Copy => self.tap_shortcut(u32::from(b'c'), frame_mods, &mut out),
+                Event::Cut => self.tap_shortcut(u32::from(b'x'), frame_mods, &mut out),
+                Event::Paste(_) => self.tap_shortcut(u32::from(b'v'), frame_mods, &mut out),
+                Event::Key {
+                    key: key @ (Key::C | Key::X | Key::V),
+                    pressed: false,
+                    ..
+                } if keysym_for_key(*key).is_some_and(|k| self.tapped.contains(&k)) => {
+                    // The release that belongs to a shortcut already sent as a tap.
+                    let keysym = keysym_for_key(*key);
+                    self.tapped.retain(|k| Some(*k) != keysym);
                 }
                 Event::Key {
                     key,
@@ -171,9 +188,23 @@ impl KeyTranslator {
         out
     }
 
+    /// A press and release of `keysym` with the frame's modifiers held.
+    fn tap_shortcut(&mut self, keysym: u32, frame_mods: Modifiers, out: &mut Vec<KeyAction>) {
+        self.sync_modifiers(frame_mods, out);
+        if !self.tapped.contains(&keysym) {
+            self.tapped.push(keysym);
+        }
+        out.push(KeyAction { keysym, down: true });
+        out.push(KeyAction {
+            keysym,
+            down: false,
+        });
+    }
+
     /// Release everything still held (focus lost, disconnect).
     pub fn release_all(&mut self) -> Vec<KeyAction> {
         self.mods = Modifiers::NONE;
+        self.tapped.clear();
         self.held
             .drain(..)
             .rev()
@@ -525,6 +556,60 @@ mod tests {
             modifiers: SHIFT,
         };
         assert_eq!(t.translate(&[repeat], SHIFT), [act(keysym::RETURN, true)]);
+    }
+
+    #[test]
+    fn clipboard_shortcuts_become_key_taps_with_the_modifier_held() {
+        let mut t = KeyTranslator::default();
+        // egui-winit: Ctrl+V press -> Paste (no key event); the release is a key event.
+        let out = t.translate(&[Event::Paste("text".into())], CTRL);
+        assert_eq!(
+            out,
+            [
+                act(keysym::CONTROL_L, true),
+                act(0x76, true),
+                act(0x76, false)
+            ]
+        );
+        // The release of V (Ctrl still down) adds nothing.
+        assert_eq!(t.translate(&[key(Key::V, false, CTRL)], CTRL), []);
+        // Holding Ctrl and pasting again does not repeat the modifier.
+        assert_eq!(
+            t.translate(&[Event::Paste("text".into())], CTRL),
+            [act(0x76, true), act(0x76, false)]
+        );
+        assert_eq!(
+            t.translate(&[Event::Copy], CTRL),
+            [act(0x63, true), act(0x63, false)]
+        );
+        assert_eq!(
+            t.translate(&[Event::Cut], CTRL),
+            [act(0x78, true), act(0x78, false)]
+        );
+        // Letting go of Ctrl first: the later V release is plain text-key noise.
+        assert_eq!(
+            t.translate(&[key(Key::V, false, Modifiers::NONE)], Modifiers::NONE),
+            [act(keysym::CONTROL_L, false)]
+        );
+    }
+
+    #[test]
+    fn ctrl_shift_c_taps_c_with_both_modifiers() {
+        let mut t = KeyTranslator::default();
+        let both = Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        };
+        assert_eq!(
+            t.translate(&[Event::Copy], both),
+            [
+                act(keysym::SHIFT_L, true),
+                act(keysym::CONTROL_L, true),
+                act(0x63, true),
+                act(0x63, false)
+            ]
+        );
     }
 
     #[test]
