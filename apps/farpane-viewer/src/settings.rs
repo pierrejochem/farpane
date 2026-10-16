@@ -34,6 +34,8 @@ pub struct Appearance {
     /// Interface size in percent: 90, 100 or 115.
     pub interface_size: u32,
     pub reduce_transparency: bool,
+    /// Show the bar with protocol, security and size under the picture.
+    pub show_footer: bool,
 }
 
 impl Default for Appearance {
@@ -43,6 +45,7 @@ impl Default for Appearance {
             accent: "default".into(),
             interface_size: 100,
             reduce_transparency: false,
+            show_footer: true,
         }
     }
 }
