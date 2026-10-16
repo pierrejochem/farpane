@@ -199,6 +199,82 @@ impl PixelConverter {
     }
 }
 
+/// Converts framebuffer pixels (`B, G, R, 0xFF`) to one wire pixel format: the
+/// reverse of [`PixelConverter`], used by encoders.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PixelPacker {
+    conv: PixelConverter,
+    /// (shift, max) for red, green and blue.
+    channels: [(u32, u32); 3],
+}
+
+impl PixelPacker {
+    /// # Errors
+    /// As [`PixelConverter::new`].
+    pub fn new(pf: &PixelFormat) -> Result<Self, DecodeError> {
+        let conv = PixelConverter::new(pf)?;
+        Ok(Self {
+            conv,
+            channels: conv.channels,
+        })
+    }
+
+    /// Bytes per wire pixel.
+    #[must_use]
+    pub fn bytes_per_pixel(&self) -> usize {
+        self.conv.bytes_per_pixel
+    }
+
+    /// Bytes per `CPIXEL` (ZRLE).
+    #[must_use]
+    pub fn cpixel_len(&self) -> usize {
+        self.conv.cpixel_len()
+    }
+
+    fn wire(&self, bgrx: [u8; 4]) -> [u8; 4] {
+        let [r, g, b] = [bgrx[2], bgrx[1], bgrx[0]];
+        let mut raw = 0u32;
+        for (value, (shift, max)) in [r, g, b].into_iter().zip(self.channels) {
+            raw |= ((u32::from(value) * max + 127) / 255) << shift;
+        }
+        if self.conv.big_endian {
+            raw.to_be_bytes()
+        } else {
+            raw.to_le_bytes()
+        }
+    }
+
+    /// Append one wire pixel.
+    pub fn pack(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {
+        let full = self.wire(bgrx);
+        let n = self.conv.bytes_per_pixel;
+        // A 16 or 8 bit pixel was built in a `u32`: keep the bytes that count.
+        let bytes = if self.conv.big_endian {
+            &full[4 - n..]
+        } else {
+            &full[..n]
+        };
+        out.extend_from_slice(bytes);
+    }
+
+    /// Append one `CPIXEL`: three bytes when the format allows, otherwise a
+    /// full wire pixel.
+    pub fn pack_cpixel(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {
+        match self.conv.cpixel {
+            CPixel::Full => self.pack(bgrx, out),
+            mode => {
+                let full = self.wire(bgrx);
+                // Little-endian: the low bytes come first. Big-endian: last.
+                let first_three = matches!(
+                    (mode, self.conv.big_endian),
+                    (CPixel::Low3, false) | (CPixel::High3, true)
+                );
+                out.extend_from_slice(if first_three { &full[..3] } else { &full[1..] });
+            }
+        }
+    }
+}
+
 /// Scale `value` in `0..=max` to `0..=255`, rounding to nearest.
 fn scale(value: u32, max: u32) -> u8 {
     // `value <= max`, so the quotient is at most 255.

@@ -15,6 +15,7 @@
 
 pub mod clipboard;
 mod decoder;
+mod encode;
 mod error;
 mod framebuffer;
 mod hextile;
@@ -25,7 +26,8 @@ mod tight;
 mod zrle;
 
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
+pub use encode::{ZrleEncoder, encode_raw};
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;
-pub use pixel::PixelConverter;
+pub use pixel::{PixelConverter, PixelPacker};
 pub use rfb_proto::consts::enc;

@@ -107,6 +107,12 @@ impl Framebuffer {
         }
     }
 
+    /// The bytes of row `row` of `rect`. `rect` must have been checked.
+    pub(crate) fn row(&self, rect: Rect, row: u16) -> &[u8] {
+        let at = self.offset(rect.x, rect.y + row);
+        &self.pixels[at..at + usize::from(rect.width) * BYTES_PER_PIXEL]
+    }
+
     /// The bytes of row `row` of `rect`, mutable. `rect` must have been
     /// checked with [`Framebuffer::check`].
     pub(crate) fn row_mut(&mut self, rect: Rect, row: u16) -> &mut [u8] {
