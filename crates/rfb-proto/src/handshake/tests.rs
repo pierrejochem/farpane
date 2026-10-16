@@ -121,6 +121,8 @@ fn expect_init(run: &Run) {
 
 #[test]
 fn golden_3_8_none_client_bytes() {
+    // rfbproto.rst: ProtocolVersion, Security (U8 chosen), ClientInit. With
+    // None, 3.8 still sends SecurityResult (server side), 3.7 does not.
     let (c, s) = cfg(V::V3_8, &[security::NONE]);
     let (r, ..) = run(c, s, usize::MAX, true);
     let r = r.unwrap();
@@ -133,6 +135,7 @@ fn golden_3_8_none_client_bytes() {
 
 #[test]
 fn golden_3_8_vnc_auth_client_bytes() {
+    // rfbproto.rst, VNC Authentication: 16-byte response, then ClientInit.
     let (c, s) = cfg(V::V3_8, &[security::VNC_AUTH]);
     let (r, ..) = run(c, s, usize::MAX, true);
     let r = r.unwrap();
