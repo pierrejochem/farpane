@@ -6,6 +6,7 @@ pub mod backend;
 pub mod config;
 pub mod dashboard;
 pub mod lockout;
+pub mod settings;
 pub mod tlsconf;
 pub mod usercmd;
 pub mod users;

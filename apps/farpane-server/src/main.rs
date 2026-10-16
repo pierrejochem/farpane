@@ -16,6 +16,7 @@ use farpane_server::{
     backend::{EventLog, Level, LiveBackend},
     config::{self, TlsChoice},
     dashboard::{Dashboard, Page},
+    settings::{ServerSettings, TlsMode},
     usercmd,
 };
 use rfb_security::tls::format_fingerprint;
@@ -53,7 +54,10 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
-  --page NAME            start on overview, clients, users or log
+  --page NAME            start on overview, clients, users, security or log
+
+Settings saved by the dashboard's Security page (server.toml in the config
+folder) apply unless an option here says otherwise.
 
 Users (farpane-server user add NAME) sign in with name and password inside
 TLS and have a role: admin, control or view. Passwords are never taken from
@@ -76,6 +80,8 @@ struct Args {
     config_dir: Option<PathBuf>,
     self_signed: bool,
     ra2: bool,
+    /// `--listen` was given (so a saved address does not replace it).
+    listen_given: bool,
     headless: bool,
     ui_screenshot: Option<PathBuf>,
     page: Page,
@@ -111,6 +117,7 @@ fn parse() -> Result<Args, String> {
         config_dir: None,
         self_signed: false,
         ra2: false,
+        listen_given: false,
         headless: false,
         ui_screenshot: None,
         page: Page::Overview,
@@ -139,6 +146,7 @@ fn parse() -> Result<Args, String> {
                 args.listen = value(&mut it, "--listen")?
                     .parse()
                     .map_err(|e| format!("--listen: {e}"))?;
+                args.listen_given = true;
             }
             "--size" => {
                 let v = value(&mut it, "--size")?;
@@ -184,6 +192,29 @@ fn parse() -> Result<Args, String> {
             other => return Err(format!("unknown option {other}")),
         }
     }
+    Ok(args)
+}
+
+/// Add what the dashboard saved in `server.toml`; options given on the command
+/// line win.
+fn with_saved_settings(mut args: Args) -> Result<Args, String> {
+    let config_dir = args
+        .config_dir
+        .clone()
+        .unwrap_or_else(config::default_config_dir);
+    let saved = ServerSettings::load(&config_dir.join("server.toml")).map_err(|e| e.to_string())?;
+    if !args.listen_given {
+        if let Some(listen) = saved.listen {
+            args.listen = listen
+                .parse()
+                .map_err(|e| format!("server.toml: listen: {e}"))?;
+        }
+    }
+    if saved.tls == TlsMode::SelfSigned && args.tls_cert.is_none() && args.tls_key.is_none() {
+        args.self_signed = true;
+    }
+    args.ra2 |= saved.ra2;
+    args.view_only |= saved.view_only;
     Ok(args)
 }
 
@@ -481,7 +512,7 @@ fn main() -> ExitCode {
     if raw.next().as_deref() == Some("user") {
         return user_command();
     }
-    let args = match parse() {
+    let args = match parse().and_then(with_saved_settings) {
         Ok(a) => a,
         Err(e) => {
             if e.is_empty() {
