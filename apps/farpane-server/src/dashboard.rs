@@ -61,6 +61,17 @@ impl Page {
         }
     }
 
+    fn icon(self) -> farpane_ui::icons::Icon {
+        use farpane_ui::icons::Icon;
+        match self {
+            Self::Overview => Icon::Overview,
+            Self::Clients => Icon::Clients,
+            Self::Users => Icon::Users,
+            Self::Security => Icon::Security,
+            Self::Log => Icon::Log,
+        }
+    }
+
     fn title(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
@@ -625,7 +636,8 @@ impl Dashboard {
 
     fn top_bar(&mut self, ui: &mut Ui, tokens: &Tokens) {
         let running = self.status.failure.is_none();
-        Self::card(ui, tokens, |ui| {
+        Self::card_frame(tokens, 16, 12).show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(
                     RichText::new(self.page.title())
@@ -708,7 +720,14 @@ impl Dashboard {
                     Page::Clients if !self.clients.is_empty() => Some(self.clients.len()),
                     _ => None,
                 };
-                if nav_item(ui, tokens, self.page == page, page.title(), count) {
+                if nav_item(
+                    ui,
+                    tokens,
+                    self.page == page,
+                    page.icon(),
+                    page.title(),
+                    count,
+                ) {
                     self.page = page;
                 }
             }
@@ -733,7 +752,7 @@ impl Dashboard {
 
     /// A panel as wide as the space it is in.
     fn card<R>(ui: &mut Ui, tokens: &Tokens, add: impl FnOnce(&mut Ui) -> R) -> R {
-        Self::card_frame(tokens, 20, 16)
+        Self::card_frame(tokens, 24, 22)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 add(ui)

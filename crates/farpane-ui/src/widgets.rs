@@ -187,11 +187,12 @@ pub fn nav_item(
     ui: &mut Ui,
     tokens: &crate::theme::Tokens,
     active: bool,
+    icon: crate::icons::Icon,
     title: &str,
     count: Option<usize>,
 ) -> bool {
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 38.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 42.0), egui::Sense::click());
     let label = count.map_or_else(|| title.to_owned(), |n| format!("{title} ({n})"));
     response
         .widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
@@ -216,20 +217,21 @@ pub fn nav_item(
             egui::StrokeKind::Inside,
         );
     }
-    if active {
-        let mark = egui::Rect::from_min_size(
-            rect.left_center() + egui::vec2(0.0, -8.0),
-            egui::vec2(3.0, 16.0),
-        );
-        painter.rect_filled(
-            mark,
-            crate::style::radius(2.0),
-            egui::Color32::from(tokens.accent),
-        );
-    }
+    let icon_colour = if active {
+        tokens.accent_text
+    } else {
+        tokens.muted
+    };
+    crate::icons::paint(
+        painter,
+        rect.left_center() + egui::vec2(21.0, 0.0),
+        18.0,
+        icon,
+        egui::Color32::from(icon_colour),
+    );
     let colour = if active { tokens.text } else { tokens.muted };
     painter.text(
-        rect.left_center() + egui::vec2(16.0, 0.0),
+        rect.left_center() + egui::vec2(42.0, 0.0),
         egui::Align2::LEFT_CENTER,
         title,
         egui::FontId::proportional(14.0),
