@@ -87,6 +87,15 @@ pub mod enc {
     pub const TIGHT_PNG: i32 = -260;
 }
 
+/// Fence flags (rfbproto.rst, "`ClientFence`").
+pub mod fence {
+    pub const BLOCK_BEFORE: u32 = 1 << 0;
+    pub const BLOCK_AFTER: u32 = 1 << 1;
+    pub const SYNC_NEXT: u32 = 1 << 2;
+    /// Set on a request, cleared on the response.
+    pub const REQUEST: u32 = 1 << 31;
+}
+
 /// Pseudo-encodings (capability flags announced in `SetEncodings`).
 pub mod pseudo {
     pub const JPEG_QUALITY_9: i32 = -23;

@@ -1172,10 +1172,11 @@ impl ViewerApp {
                         let (w, h) = self.remote_size;
                         ui.label(
                             RichText::new(format!(
-                                "{:.0} fps   in {}   out {}",
+                                "{:.0} fps   in {}   out {}   {}",
                                 s.updates_per_sec,
                                 stats::format_rate(s.rx_per_sec),
-                                stats::format_rate(s.tx_per_sec)
+                                stats::format_rate(s.tx_per_sec),
+                                stats::format_rtt(s.rtt)
                             ))
                             .strong(),
                         );

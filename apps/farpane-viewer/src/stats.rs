@@ -1,12 +1,15 @@
 //! Connection statistics for the overlay: update rate, bandwidth and the mix
 //! of encodings the server uses.
 //!
-//! Round-trip time is not here: measuring it properly needs the Fence
-//! extension (design doc, section 8), which is not built. A number derived
-//! from update requests would mostly measure how long the screen stayed
-//! unchanged, so the overlay shows none rather than a misleading one.
+//! Round-trip time comes only from the Fence extension (a `ClientFence`
+//! that blocks before, answered once the server has processed everything we
+//! sent). A figure derived from update requests would mostly measure how
+//! long the screen stayed unchanged, so a server without Fence shows none.
 
-use std::{collections::BTreeMap, time::Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use rfb_codec::enc;
 use rfb_proto::consts::pseudo;
@@ -32,6 +35,9 @@ pub struct Snapshot {
     pub total_tx: u64,
     /// Encodings seen, the one that carried the most bytes first.
     pub encodings: Vec<EncodingShare>,
+    /// The latest Fence round trip, if the server supports Fence and has
+    /// answered at least once.
+    pub rtt: Option<Duration>,
 }
 
 /// Accumulates counts between readings.
@@ -42,6 +48,7 @@ pub struct Collector {
     last_tx: u64,
     updates: u32,
     by_encoding: BTreeMap<i32, (u64, u64)>,
+    rtt: Option<Duration>,
 }
 
 impl Collector {
@@ -53,12 +60,18 @@ impl Collector {
             last_tx: 0,
             updates: 0,
             by_encoding: BTreeMap::new(),
+            rtt: None,
         }
     }
 
     /// A `FramebufferUpdate` finished.
     pub fn record_update(&mut self) {
         self.updates = self.updates.saturating_add(1);
+    }
+
+    /// A Fence answer arrived `rtt` after its request.
+    pub fn record_rtt(&mut self, rtt: Duration) {
+        self.rtt = Some(rtt);
     }
 
     /// A rectangle with `payload_bytes` of encoded data arrived.
@@ -81,6 +94,7 @@ impl Collector {
             total_rx,
             total_tx,
             encodings: self.shares(),
+            rtt: self.rtt,
         };
         self.last_at = now;
         self.last_rx = total_rx;
@@ -145,6 +159,17 @@ pub fn encoding_name(encoding: i32) -> String {
         pseudo::CURSOR => "Cursor".into(),
         pseudo::DESKTOP_SIZE => "DesktopSize".into(),
         other => format!("#{other}"),
+    }
+}
+
+/// The round-trip time for the overlay: `12 ms`, or `rtt n/a` when the
+/// server has not answered a Fence request (it may lack the extension).
+#[must_use]
+pub fn format_rtt(rtt: Option<Duration>) -> String {
+    match rtt {
+        Some(d) if d < Duration::from_millis(1) => "rtt <1 ms".to_owned(),
+        Some(d) => format!("rtt {} ms", d.as_millis()),
+        None => "rtt n/a".to_owned(),
     }
 }
 
@@ -269,6 +294,7 @@ mod tests {
             total_rx: 0,
             total_tx: 0,
             encodings,
+            rtt: None,
         };
         let share = |encoding, bytes| EncodingShare {
             encoding,
