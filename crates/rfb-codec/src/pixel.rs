@@ -11,6 +11,18 @@ pub struct PixelConverter {
     channels: [(u32, u32); 3],
     /// The wire format already is the framebuffer layout.
     identity: bool,
+    cpixel: CPixel,
+}
+
+/// How a compressed pixel (`CPIXEL`, used by ZRLE) is cut from a wire pixel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CPixel {
+    /// Same as the wire pixel.
+    Full,
+    /// The three least significant bytes.
+    Low3,
+    /// The three most significant bytes.
+    High3,
 }
 
 impl PixelConverter {
@@ -36,11 +48,29 @@ impl PixelConverter {
         let identity = pf.bits_per_pixel == 32
             && !pf.big_endian
             && channels == [(16, 255), (8, 255), (0, 255)];
+        // ZRLE spec: 3-byte CPIXELs for 32 bpp, depth <= 24, when all colour
+        // bits fit the low or the high three bytes (low wins when both do).
+        let cpixel = if pf.bits_per_pixel == 32 && pf.depth <= 24 {
+            let fits_low = channels
+                .iter()
+                .all(|&(shift, max)| shift + (32 - max.leading_zeros()) <= 24);
+            let fits_high = channels.iter().all(|&(shift, _)| shift >= 8);
+            if fits_low {
+                CPixel::Low3
+            } else if fits_high {
+                CPixel::High3
+            } else {
+                CPixel::Full
+            }
+        } else {
+            CPixel::Full
+        };
         Ok(Self {
             bytes_per_pixel: pf.bytes_per_pixel(),
             big_endian: pf.big_endian,
             channels,
             identity,
+            cpixel,
         })
     }
 
@@ -48,6 +78,30 @@ impl PixelConverter {
     #[must_use]
     pub fn bytes_per_pixel(&self) -> usize {
         self.bytes_per_pixel
+    }
+
+    /// Bytes per compressed pixel (`CPIXEL`) in ZRLE.
+    #[must_use]
+    pub fn cpixel_len(&self) -> usize {
+        match self.cpixel {
+            CPixel::Full => self.bytes_per_pixel,
+            CPixel::Low3 | CPixel::High3 => 3,
+        }
+    }
+
+    /// Convert one `CPIXEL`. `src` must hold at least
+    /// [`PixelConverter::cpixel_len`] bytes.
+    #[must_use]
+    pub fn cpixel(&self, src: &[u8]) -> [u8; 4] {
+        let s = |i: usize| src[i];
+        // Rebuild the full 4-byte wire pixel: the three bytes sit at the
+        // low or high end, in the format's byte order.
+        let full = match (self.cpixel, self.big_endian) {
+            (CPixel::Full, _) => return self.pixel(src),
+            (CPixel::Low3, false) | (CPixel::High3, true) => [s(0), s(1), s(2), 0],
+            (CPixel::Low3, true) | (CPixel::High3, false) => [0, s(0), s(1), s(2)],
+        };
+        self.pixel(&full)
     }
 
     /// Convert one wire pixel. `src` must hold at least
