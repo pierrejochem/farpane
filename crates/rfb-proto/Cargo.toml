@@ -1,0 +1,19 @@
+[package]
+name = "rfb-proto"
+description = "Sans-IO implementation of the RFB (VNC) protocol: wire types, framing and handshake state machines"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytes.workspace = true
+
+[features]
+default = []
+std = ["bytes/std"]
+
+[lints]
+workspace = true

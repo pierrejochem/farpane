@@ -1,0 +1,15 @@
+[package]
+name = "rfb-security"
+description = "RFB security types: None, VNC Auth, VeNCrypt (TLS), RA2/RA2-256, Apple DH"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-proto.workspace = true
+
+[lints]
+workspace = true

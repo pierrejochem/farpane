@@ -1,0 +1,54 @@
+# nfpm config for the viewer. Run from the repo root:
+#   VERSION=0.3.0 NFPM_ARCH=amd64 nfpm package -f packaging/linux/nfpm-farpane-viewer.yaml -p deb -t dist/
+name: farpane-viewer
+arch: ${NFPM_ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: net
+priority: optional
+maintainer: "Farpane maintainers <maintainers@example.org>"   # TODO: set before first release
+description: |
+  Remote desktop viewer for the VNC/RFB protocol, written in Rust,
+  with a dashboard UI for connections and live session statistics.
+vendor: Farpane
+homepage: https://github.com/OWNER/REPO                       # TODO
+license: MIT OR Apache-2.0                                    # TODO: match Cargo.toml
+
+contents:
+  - src: target/release/farpane-viewer
+    dst: /usr/bin/farpane-viewer
+    file_info: { mode: 0755 }
+  - src: packaging/linux/farpane-viewer.desktop
+    dst: /usr/share/applications/farpane-viewer.desktop
+  - src: packaging/icons/png/farpane-viewer-16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-24.png
+    dst: /usr/share/icons/hicolor/24x24/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-64.png
+    dst: /usr/share/icons/hicolor/64x64/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/farpane-viewer.png
+  - src: packaging/icons/png/farpane-viewer-512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/farpane-viewer.png
+  - src: packaging/icons/svg/farpane-viewer.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/farpane-viewer.svg
+
+# Graphics/windowing libraries are loaded at runtime (dlopen) by the UI stack,
+# so they are recommendations, not hard dependencies.
+overrides:
+  deb:
+    depends: ["libc6 (>= 2.34)"]
+    recommends: ["libxkbcommon0", "libwayland-client0", "libegl1", "libvulkan1"]
+  rpm:
+    depends: ["glibc >= 2.34"]
+    recommends: ["libxkbcommon", "libwayland-client", "mesa-libEGL", "vulkan-loader"]
+  archlinux:
+    depends: ["glibc", "libxkbcommon", "wayland", "libglvnd", "vulkan-icd-loader"]

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>Farpane Server</string>
+  <key>CFBundleDisplayName</key><string>Farpane Server</string>
+  <key>CFBundleIdentifier</key><string>org.example.farpane.server</string>
+  <key>CFBundleExecutable</key><string>farpane-server</string>
+  <key>CFBundleIconFile</key><string>farpane-server</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>__VERSION__</string>
+  <key>CFBundleVersion</key><string>__VERSION__</string>
+  <key>LSMinimumSystemVersion</key><string>12.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
+  <!-- Screen capture and input injection need the user's approval in
+       System Settings > Privacy & Security (Screen Recording, Accessibility). -->
+  <key>NSScreenCaptureUsageDescription</key><string>Farpane Server shares this screen with connected viewers.</string>
+  <key>NSAppleEventsUsageDescription</key><string>Farpane Server forwards keyboard and mouse input from connected viewers.</string>
+  <key>NSLocalNetworkUsageDescription</key><string>Farpane Server accepts connections from viewers on your local network.</string>
+</dict>
+</plist>

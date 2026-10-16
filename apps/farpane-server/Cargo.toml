@@ -1,0 +1,22 @@
+[package]
+name = "farpane-server"
+description = "Farpane Server: VNC-compatible remote desktop server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "farpane-server"
+path = "src/main.rs"
+
+[dependencies]
+rfb-proto.workspace = true
+rfb-codec.workspace = true
+rfb-security.workspace = true
+farpane-ui.workspace = true
+
+[lints]
+workspace = true

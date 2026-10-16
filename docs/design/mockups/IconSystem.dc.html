@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane icon system</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div style="width: 1600px; height: 1180px; box-sizing: border-box; padding: 64px 72px; background: #F4F2EE; color: #16161A; font-family: Inter, system-ui, sans-serif; display: flex; flex-direction: column; gap: 28px">
+  <div>
+    <div style="font-size: 12px; letter-spacing: .16em; text-transform: uppercase; color: #6B6660">Concept 03 · Receding panes</div>
+    <h1 style="margin: 6px 0 0; font-family: Sora, Inter, sans-serif; font-size: 40px; font-weight: 700; letter-spacing: -.02em">Icon system</h1>
+  </div>
+
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px">
+    <section style="background: #0E0E11; color: #F4F4F5; border-radius: 24px; padding: 32px; display: flex; gap: 40px; align-items: center">
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 14px">
+        <dc-import name="Mark" concept="tunnel" tile="dark" size="200" hint-size="200px,200px"></dc-import>
+        <div style="text-align: center"><div style="font-family: Sora, Inter, sans-serif; font-weight: 600">Farpane Viewer</div><div style="font-size: 12.5px; color: rgba(255,255,255,.6)">Night tile, ember mark</div></div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: center; gap: 14px">
+        <dc-import name="Mark" concept="tunnel" tile="ember" size="200" hint-size="200px,200px"></dc-import>
+        <div style="text-align: center"><div style="font-family: Sora, Inter, sans-serif; font-weight: 600">Farpane Server</div><div style="font-size: 12.5px; color: rgba(255,255,255,.6)">Ember tile, white mark</div></div>
+      </div>
+      <p style="margin: 0; font-size: 14px; line-height: 1.55; color: rgba(255,255,255,.72)">Same mark, inverted tile: the two apps sit side by side in a dock or taskbar and are told apart at a glance.</p>
+    </section>
+
+    <section style="background: #FFFFFF; border-radius: 24px; padding: 32px; display: flex; flex-direction: column; justify-content: center; gap: 28px">
+      <div style="display: flex; align-items: center; gap: 22px">
+        <dc-import name="Mark" concept="tunnel" tile="none" size="88" hint-size="88px,88px"></dc-import>
+        <span style="font-family: Sora, Inter, sans-serif; font-size: 72px; font-weight: 700; letter-spacing: -.035em; line-height: 1">Farpane</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 16px; padding: 18px 22px; border-radius: 16px; background: #0E0E11">
+        <dc-import name="Mark" concept="tunnel" tile="none" size="48" hint-size="48px,48px"></dc-import>
+        <span style="font-family: Sora, Inter, sans-serif; font-size: 36px; font-weight: 700; letter-spacing: -.03em; color: #F4F4F5">Farpane</span>
+        <span style="margin-left: auto; font-size: 13px; color: rgba(255,255,255,.6)">VNC-compatible remote desktop</span>
+      </div>
+    </section>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1.1fr 1fr; gap: 28px; flex: 1">
+    <section style="background: #FFFFFF; border-radius: 24px; padding: 32px; display: flex; gap: 32px; align-items: center">
+      <div style="position: relative; width: 280px; height: 280px; flex: none">
+        <dc-import name="Mark" concept="tunnel" tile="light" size="280" hint-size="280px,280px"></dc-import>
+        <svg viewBox="0 0 1024 1024" width="280" height="280" aria-hidden="true" style="position: absolute; inset: 0; pointer-events: none">
+          <g transform="translate(16 0)">
+            <path d="M420 812 L772 300" stroke="#2E7BD6" stroke-opacity=".7" stroke-width="5" stroke-dasharray="14 12"></path>
+            <circle cx="492" cy="532" r="12" fill="#2E7BD6"></circle><circle cx="560" cy="460" r="12" fill="#2E7BD6"></circle><circle cx="630" cy="390" r="12" fill="#2E7BD6"></circle><circle cx="700" cy="320" r="12" fill="#2E7BD6"></circle>
+          </g>
+        </svg>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 14px">
+        <h2 style="margin: 0; font-family: Sora, Inter, sans-serif; font-size: 22px; font-weight: 600">Construction</h2>
+        <dl style="margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 14px">
+          <dt style="color: #6B6660">Panes</dt><dd style="margin: 0">4, sized 520 → 390 → 270 → 160 units</dd>
+          <dt style="color: #6B6660">Path</dt><dd style="margin: 0">Centres step up-right along a 45° line</dd>
+          <dt style="color: #6B6660">Depth</dt><dd style="margin: 0">Frame opacity 38 → 62 → 86 %, last pane solid</dd>
+          <dt style="color: #6B6660">Strokes</dt><dd style="margin: 0">44 → 36 → 30 units, corner radius 22 % of each pane</dd>
+          <dt style="color: #6B6660">Tile radius</dt><dd style="margin: 0">228 units (22 %)</dd>
+          <dt style="color: #6B6660">48 px and below</dt><dd style="margin: 0">3 panes, strokes doubled, larger far pane</dd>
+        </dl>
+      </div>
+    </section>
+
+    <section style="background: #FFFFFF; border-radius: 24px; padding: 32px; display: flex; flex-direction: column; gap: 22px">
+      <h2 style="margin: 0; font-family: Sora, Inter, sans-serif; font-size: 22px; font-weight: 600">Colour</h2>
+      <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px">
+        <sc-for list="{{swatches}}" as="s" hint-placeholder-count="4">
+          <div>
+            <div style="height: 76px; border-radius: 14px; background: {{s.fill}}; border: 1px solid rgba(20,20,25,.08)"></div>
+            <div style="margin-top: 8px; font-weight: 600; font-size: 13.5px">{{s.name}}</div>
+            <div style="font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #6B6660">{{s.hex}}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="display: flex; align-items: center; gap: 20px; padding-top: 18px; border-top: 1px solid #ECE8E2">
+        <span style="font-size: 13px; color: #6B6660; min-width: 74px">One colour</span>
+        <dc-import name="Mark" concept="tunnel" tile="mono" size="64" hint-size="64px,64px"></dc-import>
+        <span style="font-size: 13px; color: #6B6660; min-width: 54px; margin-left: 12px">Sizes</span>
+        <dc-import name="Mark" concept="tunnel" tile="dark" size="48" hint-size="48px,48px"></dc-import>
+        <dc-import name="Mark" concept="tunnel" tile="dark" size="32" hint-size="32px,32px"></dc-import>
+        <dc-import name="Mark" concept="tunnel" tile="dark" size="24" hint-size="24px,24px"></dc-import>
+        <dc-import name="Mark" concept="tunnel" tile="dark" size="16" hint-size="16px,16px"></dc-import>
+        <dc-import name="Mark" concept="tunnel" tile="ember" size="16" hint-size="16px,16px"></dc-import>
+      </div>
+    </section>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1600,"height":1180}}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      swatches: [
+        { name: 'Ember', hex: '#F4623A → #D23B21', fill: 'linear-gradient(135deg, #F4623A, #D23B21)' },
+        { name: 'Far pane', hex: '#FFB59C', fill: '#FFB59C' },
+        { name: 'Night', hex: '#202025 → #0B0B0E', fill: 'linear-gradient(180deg, #202025, #0B0B0E)' },
+        { name: 'Paper', hex: '#FFFFFF → #F0ECE6', fill: 'linear-gradient(180deg, #FFFFFF, #F0ECE6)' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

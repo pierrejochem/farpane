@@ -1,0 +1,365 @@
+# Release pipeline: builds both GUI apps (viewer + server dashboard) for
+# Windows, macOS and Linux, signs what it can, and attaches everything to a
+# draft GitHub Release.
+#
+# Trigger: push a tag like v0.3.0, or run manually with an existing tag.
+#
+# Product: Farpane. Binaries `farpane-viewer` / `farpane-server`, apps
+# "Farpane Viewer" / "Farpane Server".
+#
+# Signing is optional; each signing step is skipped when its secrets are unset
+# (forks, early development). See packaging/README.md for the secret list.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.3.0)"
+        required: true
+
+permissions:
+  contents: write       # create the release
+  id-token: write       # OIDC for Azure signing + provenance attestation
+  attestations: write
+
+defaults:
+  run:
+    shell: bash        # arrays in build steps; Windows job overrides with pwsh
+
+env:
+  CARGO_TERM_COLOR: always
+  BINS: "farpane-viewer farpane-server"
+  NFPM_VERSION: "2.43.0"     # pin; https://github.com/goreleaser/nfpm/releases
+  WIX_VERSION: "5.0.2"       # pin; https://www.nuget.org/packages/wix
+
+jobs:
+  meta:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "Bad tag: $TAG"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------ Linux --
+  # Built in AlmaLinux 9 (glibc 2.34): one binary runs on RHEL/Alma/Rocky 9+,
+  # Fedora, Debian 12+, Ubuntu 22.04+, openSUSE Leap 15.6/Tumbleweed and Arch.
+  linux:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04,     arch: x86_64,  goarch: amd64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64, goarch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    container: almalinux:9
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      NFPM_ARCH: ${{ matrix.goarch }}
+    steps:
+      - name: Install git (needed by checkout inside the container)
+        run: dnf -y install git
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+
+      - name: Install build dependencies
+        run: |
+          dnf -y install dnf-plugins-core
+          dnf config-manager --set-enabled crb
+          dnf -y install gcc gcc-c++ make cmake clang nasm perl file which tar gzip xz \
+            pkgconf-pkg-config pipewire-devel libxkbcommon-devel wayland-devel \
+            libxcb-devel libX11-devel libXi-devel libXtst-devel mesa-libEGL-devel \
+            fontconfig-devel
+
+      - name: Install Rust
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: |
+          ARGS=(); for b in $BINS; do ARGS+=(--bin "$b"); done
+          cargo build --release --locked "${ARGS[@]}"
+          for b in $BINS; do strip "target/release/$b"; done
+
+      - name: Install nfpm
+        run: |
+          case "${{ matrix.arch }}" in x86_64) A=x86_64;; aarch64) A=arm64;; esac
+          curl -sSfL -o nfpm.tgz \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${A}.tar.gz"
+          tar -xzf nfpm.tgz nfpm && mv nfpm /usr/local/bin/
+
+      - name: Native packages (.deb, .rpm, Arch .pkg.tar.zst)
+        run: |
+          mkdir -p dist
+          for b in $BINS; do
+            for fmt in deb rpm archlinux; do
+              nfpm package --config "packaging/linux/nfpm-${b}.yaml" --packager "$fmt" --target dist/
+            done
+          done
+
+      - name: AppImages
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+          ARCH: ${{ matrix.arch }}
+        run: |
+          curl -sSfL -o linuxdeploy \
+            "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-${{ matrix.arch }}.AppImage"
+          chmod +x linuxdeploy
+          for b in $BINS; do
+            rm -rf AppDir out-appimage && mkdir out-appimage
+            (cd out-appimage && ../linuxdeploy --appdir ../AppDir \
+              --executable "../target/release/$b" \
+              --desktop-file "../packaging/linux/$b.desktop" \
+              --icon-file "../packaging/icons/$b.png" \
+              --output appimage)
+            mv out-appimage/*.AppImage "dist/$b-${VERSION}-linux-${{ matrix.arch }}.AppImage"
+          done
+
+      - name: Portable tarball
+        run: |
+          D="farpane-${VERSION}-linux-${{ matrix.arch }}"
+          mkdir "$D"
+          for b in $BINS; do cp "target/release/$b" "$D/"; done
+          cp LICENSE* README* "$D/" 2>/dev/null || true
+          tar -czf "dist/$D.tar.gz" "$D"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: dist/*
+
+  # ------------------------------------------------------------------ macOS --
+  macos:
+    needs: meta
+    runs-on: macos-15
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      HAS_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+      HAS_NOTARY: ${{ secrets.APPLE_NOTARY_KEY_P8 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+
+      - name: Build universal binaries
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          ARGS=(); for b in $BINS; do ARGS+=(--bin "$b"); done
+          for t in aarch64-apple-darwin x86_64-apple-darwin; do
+            MACOSX_DEPLOYMENT_TARGET=12.0 cargo build --release --locked --target "$t" "${ARGS[@]}"
+          done
+          mkdir -p out
+          for b in $BINS; do
+            lipo -create -output "out/$b" \
+              "target/aarch64-apple-darwin/release/$b" "target/x86_64-apple-darwin/release/$b"
+          done
+
+      - name: Assemble app bundles
+        run: |
+          SHORT="${VERSION%%-*}"
+          for b in $BINS; do
+            NAME="$(sed -n 's/^Name=//p' "packaging/linux/$b.desktop")"   # one source of truth for display names
+            APP="out/$NAME.app"
+            mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+            cp "out/$b" "$APP/Contents/MacOS/"
+            sed -e "s/__VERSION__/$SHORT/g" "packaging/macos/$b.Info.plist" > "$APP/Contents/Info.plist"
+            if [ -f "packaging/icons/$b.icns" ]; then cp "packaging/icons/$b.icns" "$APP/Contents/Resources/"; fi
+          done
+
+      - name: Import signing certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          KC_PW="$(uuidgen)"
+          security create-keychain -p "$KC_PW" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "$KC_PW" build.keychain
+          security set-keychain-settings -lut 3600 build.keychain
+          echo "$APPLE_CERT_P12" | base64 --decode > cert.p12
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KC_PW" build.keychain
+          rm cert.p12
+
+      - name: Sign app bundles (hardened runtime)
+        if: env.HAS_SIGNING == 'true'
+        env:
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          for app in out/*.app; do
+            codesign --force --timestamp --options runtime \
+              --entitlements packaging/macos/entitlements.plist --sign "$IDENTITY" "$app"
+            codesign --verify --strict --verbose=2 "$app"
+          done
+
+      - name: Build disk images
+        env:
+          IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          mkdir -p dist
+          for app in out/*.app; do
+            NAME="$(basename "$app" .app)"
+            SLUG="$(echo "$NAME" | tr '[:upper:] ' '[:lower:]-')"
+            rm -rf dmgroot && mkdir dmgroot
+            cp -R "$app" dmgroot/
+            ln -s /Applications dmgroot/Applications
+            DMG="dist/${SLUG}-${VERSION}-macos-universal.dmg"
+            hdiutil create -volname "$NAME" -srcfolder dmgroot -ov -format UDZO "$DMG"
+            if [ "$HAS_SIGNING" = "true" ]; then codesign --force --timestamp --sign "$IDENTITY" "$DMG"; fi
+          done
+
+      - name: Notarize and staple
+        if: env.HAS_SIGNING == 'true' && env.HAS_NOTARY == 'true'
+        env:
+          KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          echo "$KEY_P8" | base64 --decode > AuthKey.p8
+          for dmg in dist/*.dmg; do
+            xcrun notarytool submit "$dmg" --key AuthKey.p8 --key-id "$KEY_ID" --issuer "$ISSUER" --wait --timeout 30m
+            xcrun stapler staple "$dmg"
+          done
+          rm AuthKey.p8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-universal
+          path: dist/*
+
+  # ---------------------------------------------------------------- Windows --
+  # Both architectures build on the x64 runner (ARM64 is cross-compiled with the
+  # MSVC ARM64 tools in the image), because Azure Artifact Signing runs on x64.
+  windows:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-pc-windows-msvc,  arch: x64 }
+          - { target: aarch64-pc-windows-msvc, arch: arm64 }
+    runs-on: windows-2025
+    env:
+      VERSION: ${{ needs.meta.outputs.version }}
+      HAS_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' }}
+      BINDIR: target\${{ matrix.target }}\release
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.meta.outputs.tag }}
+
+      - name: Build
+        run: |
+          rustup target add ${{ matrix.target }}
+          $binArgs = $env:BINS.Split(' ') | ForEach-Object { '--bin', $_ }
+          cargo build --release --locked --target ${{ matrix.target }} @binArgs
+
+      - name: Azure login (OIDC)
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign executables
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\${{ env.BINDIR }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Build MSI
+        run: |
+          dotnet tool install --global wix --version $env:WIX_VERSION
+          wix extension add --global WixToolset.UI.wixext/$env:WIX_VERSION
+          wix extension add --global WixToolset.Firewall.wixext/$env:WIX_VERSION
+          $msiVersion = ($env:VERSION -split '-')[0]          # MSI needs plain x.y.z
+          New-Item -ItemType Directory -Force msi | Out-Null
+          wix build packaging\windows\farpane.wxs -arch ${{ matrix.arch }} `
+            -ext WixToolset.UI.wixext -ext WixToolset.Firewall.wixext `
+            -d Version=$msiVersion -d BinDir="$env:BINDIR" `
+            -o "msi\farpane-$env:VERSION-windows-${{ matrix.arch }}.msi"
+
+      - name: Sign MSI
+        if: env.HAS_SIGNING == 'true'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}\msi
+          files-folder-filter: msi
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Collect MSI and portable zip
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Move-Item msi\*.msi dist\
+          $d = "farpane-$env:VERSION-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory $d | Out-Null
+          foreach ($b in $env:BINS.Split(' ')) { Copy-Item "$env:BINDIR\$b.exe" $d }
+          Copy-Item LICENSE* $d -ErrorAction SilentlyContinue
+          Compress-Archive -Path $d -DestinationPath "dist\$d.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: dist/*
+
+  # ---------------------------------------------------------------- Release --
+  release:
+    needs: [meta, linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum -- * > SHA256SUMS
+
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+
+      - name: Create or update draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.tag }}
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            PRE=""; [[ "$TAG" == *-* ]] && PRE="--prerelease"
+            gh release create "$TAG" dist/* --draft $PRE --generate-notes --verify-tag \
+              --title "$TAG" --repo "$GITHUB_REPOSITORY"
+          fi

@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Farpane – Appearance settings</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#050505}
+.theme-glass{--bg:#050505;--text:#f4f4f5;--muted:rgba(255,255,255,.62);--faint:rgba(255,255,255,.5);--line:rgba(255,255,255,.09);--inset:rgba(255,255,255,.05);--inset-hi:rgba(255,255,255,.12);--sel:rgba(255,255,255,.14);--card-bg:linear-gradient(135deg,rgba(255,255,255,.07),transparent 42%),rgba(34,34,37,.5);--card-solid:rgba(26,26,29,.92);--card-shadow:inset 0 1px 0 rgba(255,255,255,.09),0 18px 40px -18px rgba(0,0,0,.8);--blur:blur(22px) saturate(130%);--radius:18px;--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(232,73,47,.8),inset 0 1px 0 rgba(255,255,255,.25);--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--red:#f87171;--violet:#a78bfa;--switch-off:rgba(255,255,255,.14);--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.theme-slate{--bg:#0b1015;--text:#e6edf3;--muted:#9aa7b5;--faint:#8593a3;--line:#1f2933;--inset:#16202b;--inset-hi:#1c2835;--sel:#24313f;--card-bg:#111821;--card-solid:#0f151c;--card-shadow:none;--blur:none;--radius:14px;--accent:#38bdf8;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:#38bdf8;--btn-fg:#06202e;--btn-shadow:none;--green:#34d399;--blue:#38bdf8;--amber:#fbbf24;--red:#f87171;--violet:#a78bfa;--switch-off:#2a3644;--font:'IBM Plex Sans',ui-sans-serif,system-ui,sans-serif}
+.theme-light{--bg:#f3f4f6;--text:#14171c;--muted:#525b68;--faint:#69727f;--line:#e2e5ea;--inset:#f2f4f7;--inset-hi:#e8ebf0;--sel:#ffffff;--card-bg:#ffffff;--card-solid:#ffffff;--card-shadow:0 1px 2px rgba(16,24,40,.06),0 8px 24px -12px rgba(16,24,40,.14);--blur:none;--radius:16px;--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(201,60,37,.6);--green:#0f7b55;--blue:#0b69a3;--amber:#9a5b05;--red:#be3a32;--violet:#6d4fd6;--switch-off:#d3d8df;--font:Inter,ui-sans-serif,system-ui,sans-serif}
+.scene{background:var(--bg);color:var(--text);font-family:var(--font);font-size:14px;line-height:1.45}
+.theme-glass.scene,.theme-glass.mini{background:#050505 url(/_blob/5cc1bcf3849c5d846f68d22d68cbb4f3) center/cover no-repeat}
+.card{background:var(--card-bg);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--card-shadow);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.btn-primary{background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow);border:0;cursor:pointer}
+.inset{background:var(--inset);border:1px solid var(--line);color:var(--text);cursor:pointer}
+.inset:hover{background:var(--inset-hi)}
+.badge{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border-radius:99px;font-size:11.5px;font-weight:600;white-space:nowrap;color:var(--tone);background:color-mix(in srgb,var(--tone) 13%,transparent);border:1px solid color-mix(in srgb,var(--tone) 35%,transparent)}
+.dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.t-green{--tone:var(--green)}.t-blue{--tone:var(--blue)}.t-amber{--tone:var(--amber)}.t-grey{--tone:var(--muted)}.t-accent{--tone:var(--accent-text)}
+.muted{color:var(--muted)}.faint{color:var(--faint)}
+.eyebrow{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.nav-a{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:12px;border:1px solid transparent;color:var(--muted);text-decoration:none;font-weight:500}
+.nav-a:hover{background:var(--inset);color:var(--text)}
+.nav-a.active{background:var(--sel);border-color:var(--line);color:var(--text)}
+.theme-glass .nav-a.active{background:rgba(255,255,255,.09);border-color:rgba(255,255,255,.12);box-shadow:inset 0 1px 0 rgba(255,255,255,.1)}
+.theme-light .nav-a.active{background:var(--inset)}
+.nav-a.active svg{color:var(--accent-hi)}
+.brand-mark{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:var(--btn-bg);color:var(--btn-fg);box-shadow:var(--btn-shadow)}
+.pick{display:flex;flex-direction:column;gap:12px;padding:12px;border-radius:16px;background:var(--inset);border:2px solid var(--line);color:var(--text);text-align:left;cursor:pointer;font:inherit}
+.pick:hover{border-color:var(--muted)}
+.pick[aria-pressed="true"]{border-color:var(--accent-hi);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent-hi) 25%,transparent)}
+.mini{height:150px;border-radius:10px;overflow:hidden;background:var(--bg);display:flex;gap:8px;padding:8px;box-sizing:border-box;position:relative;border:1px solid var(--line)}
+.mini .card{border-radius:8px;box-shadow:none}
+.half{position:absolute;inset:0;display:flex;gap:8px;padding:8px;box-sizing:border-box}
+.vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.th{padding:10px;text-align:left;font-size:10.5px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--faint);white-space:nowrap}
+.td{padding:12px 10px;border-top:1px solid var(--line);vertical-align:top}
+a{color:var(--accent-text)}
+:focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px}
+
+.acc-ember{--accent:#e8492f;--accent-hi:#f4623a;--accent-text:#ff8a73;--btn-bg:linear-gradient(180deg,#f4623a,#e8492f);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(232,73,47,.8),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-cyan{--accent:#0ea5e9;--accent-hi:#38bdf8;--accent-text:#7dd3fc;--btn-bg:linear-gradient(180deg,#38bdf8,#0ea5e9);--btn-fg:#04202c;--btn-shadow:0 8px 20px -8px rgba(14,165,233,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-violet{--accent:#8b5cf6;--accent-hi:#a78bfa;--accent-text:#c4b5fd;--btn-bg:linear-gradient(180deg,#8b5cf6,#7c3aed);--btn-fg:#fff;--btn-shadow:0 8px 20px -8px rgba(139,92,246,.75),inset 0 1px 0 rgba(255,255,255,.25)}
+.acc-green{--accent:#10b981;--accent-hi:#34d399;--accent-text:#6ee7b7;--btn-bg:linear-gradient(180deg,#34d399,#10b981);--btn-fg:#022c22;--btn-shadow:0 8px 20px -8px rgba(16,185,129,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.acc-amber{--accent:#f59e0b;--accent-hi:#fbbf24;--accent-text:#fcd34d;--btn-bg:linear-gradient(180deg,#fbbf24,#f59e0b);--btn-fg:#2a1a02;--btn-shadow:0 8px 20px -8px rgba(245,158,11,.7),inset 0 1px 0 rgba(255,255,255,.3)}
+.theme-light.acc-ember{--accent:#d9432a;--accent-hi:#e8492f;--accent-text:#b5361f;--btn-bg:linear-gradient(180deg,#e8492f,#c93c25);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(201,60,37,.6)}
+.theme-light.acc-cyan{--accent:#0284c7;--accent-hi:#0284c7;--accent-text:#075985;--btn-bg:linear-gradient(180deg,#0284c7,#0369a1);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(3,105,161,.6)}
+.theme-light.acc-violet{--accent:#7c3aed;--accent-hi:#7c3aed;--accent-text:#6d28d9;--btn-bg:linear-gradient(180deg,#7c3aed,#6d28d9);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(109,40,217,.6)}
+.theme-light.acc-green{--accent:#059669;--accent-hi:#059669;--accent-text:#047857;--btn-bg:linear-gradient(180deg,#059669,#047857);--btn-fg:#fff;--btn-shadow:0 6px 16px -8px rgba(4,120,87,.6)}
+.theme-light.acc-amber{--accent:#d97706;--accent-hi:#d97706;--accent-text:#92400e;--btn-bg:linear-gradient(180deg,#f59e0b,#d97706);--btn-fg:#1f1300;--btn-shadow:0 6px 16px -8px rgba(180,83,9,.55)}
+.reduce-tr .card,.reduce-tr .card-solid,.reduce-tr .pill{-webkit-backdrop-filter:none!important;backdrop-filter:none!important}
+.reduce-tr.theme-glass .card{background:#1b1b1e}
+.reduce-tr.theme-glass .card-solid{background:#1b1b1e}
+.reduce-tr.theme-glass{--pill:#1b1b1e}
+.reduce-motion *,.reduce-motion *::before,.reduce-motion *::after{transition:none!important;animation:none!important}
+.seg{display:inline-flex;flex-wrap:wrap;gap:2px;padding:3px;border-radius:10px;background:var(--inset);border:1px solid var(--line)}
+.seg button{padding:5px 12px;border:0;border-radius:7px;background:none;color:var(--muted);font:500 12px var(--font);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--sel);color:var(--text)}
+.theme-light .seg button[aria-pressed="true"]{box-shadow:0 1px 2px rgba(16,24,40,.14)}
+.opt-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 24px;padding:16px 0;border-top:1px solid var(--line)}
+.opt-row:first-of-type{border-top:0}
+.sw{width:36px;height:36px;border-radius:50%;border:2px solid var(--line);padding:3px;background:none;cursor:pointer;display:grid;place-items:center}
+.sw span{width:100%;height:100%;border-radius:50%;display:block}
+.sw[aria-pressed="true"]{border-color:var(--text)}
+.seg-wide button{padding:6px 14px}
+</style>
+</helmet>
+<div class="theme-{{theme}} {{prefCls}} scene" style="min-height: 940px">
+<div style="zoom: {{zoom}}; display: flex; flex-wrap: wrap; gap: 18px; max-width: 1320px; margin: 0 auto; padding: 20px; align-items: flex-start; box-sizing: border-box">
+
+  <nav aria-label="Settings" class="card" style="flex: 1 1 250px; max-width: 250px; min-height: 900px; box-sizing: border-box; padding: 22px 14px 14px; display: flex; flex-direction: column; gap: 4px">
+    <div style="display: flex; align-items: center; gap: 12px; padding: 0 8px 22px">
+      <dc-import name="Mark" concept="tunnel" tile="dark" size="38" hint-size="38px,38px"></dc-import>
+      <div><div style="font-weight: 600; font-size: 15px">Settings</div><div class="muted" style="font-size: 12px">Viewer and server</div></div>
+    </div>
+    <a href="Main.dc.html" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"></path></svg>Back to connections</a>
+    <div class="eyebrow" style="padding: 14px 10px 8px">Preferences</div>
+    <a href="#appearance" class="nav-a active"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"></path></svg>Appearance</a>
+    <a href="#input" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"></rect><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"></path></svg>Keyboard &amp; mouse</a>
+    <a href="#security" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"></path></svg>Security &amp; trust</a>
+    <a href="#network" class="nav-a"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"></path><circle cx="12" cy="12" r="10"></circle></svg>Network &amp; quality</a>
+  </nav>
+
+  <main style="flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 18px">
+    <section class="card" aria-labelledby="th-h" style="padding: 24px">
+      <div class="eyebrow">Appearance</div>
+      <h1 id="th-h" style="margin: 4px 0 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em">Theme</h1>
+      <p class="muted" style="margin: 6px 0 0; font-size: 13px">Applies to both Farpane Viewer and Farpane Server. The remote screen itself is never recoloured.</p>
+
+      <div role="group" aria-label="Choose a theme" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px">
+        <sc-for list="{{choices}}" as="c" hint-placeholder-count="4">
+          <button type="button" class="pick" aria-pressed="{{c.on}}" onClick="{{c.pick}}">
+            <sc-if value="{{c.isSystem}}" hint-placeholder-val="{{false}}">
+              <div class="mini" aria-hidden="true" style="padding: 0">
+                <div class="theme-light {{prefCls}} mini" style="position: absolute; inset: 0; clip-path: polygon(0 0, 100% 0, 0 100%); border: 0; border-radius: 0">
+                  <div class="card" style="width: 26%"></div>
+                  <div style="flex: 1; display: flex; flex-direction: column; gap: 8px"><div class="card" style="height: 26px"></div><div class="card" style="flex: 1"></div></div>
+                </div>
+                <div class="theme-glass {{prefCls}} mini" style="position: absolute; inset: 0; clip-path: polygon(100% 0, 100% 100%, 0 100%); border: 0; border-radius: 0">
+                  <div class="card" style="width: 26%"></div>
+                  <div style="flex: 1; display: flex; flex-direction: column; gap: 8px"><div class="card" style="height: 26px"></div><div class="card" style="flex: 1"></div></div>
+                </div>
+              </div>
+            </sc-if>
+            <sc-if value="{{c.isPlain}}" hint-placeholder-val="{{true}}">
+              <div class="theme-{{c.id}} {{prefCls}} mini" aria-hidden="true">
+                <div class="card" style="width: 26%; display: flex; flex-direction: column; gap: 6px; padding: 8px; box-sizing: border-box">
+                  <div class="brand-mark" style="width: 16px; height: 16px; border-radius: 5px"></div>
+                  <div style="height: 6px; border-radius: 3px; background: var(--sel); margin-top: 6px"></div>
+                  <div style="height: 6px; width: 70%; border-radius: 3px; background: var(--inset)"></div>
+                  <div style="height: 6px; width: 80%; border-radius: 3px; background: var(--inset)"></div>
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 8px">
+                  <div class="card" style="height: 26px; display: flex; align-items: center; justify-content: flex-end; padding: 0 6px"><span class="btn-primary" style="width: 30px; height: 12px; border-radius: 4px"></span></div>
+                  <div style="display: flex; gap: 8px"><div class="card" style="flex: 1; height: 34px; padding: 6px; box-sizing: border-box"><div style="height: 6px; width: 50%; border-radius: 3px; background: var(--muted); opacity: .5"></div><div style="height: 10px; width: 40%; margin-top: 6px; border-radius: 3px; background: var(--text); opacity: .85"></div></div><div class="card" style="flex: 1; height: 34px"></div></div>
+                  <div class="card" style="flex: 1; position: relative; overflow: hidden"><svg viewBox="0 0 100 40" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%"><path d="M0 30 C15 26 25 22 35 24 S55 8 65 12 S85 20 100 14" fill="none" style="stroke: var(--accent-hi)" stroke-width="2" vector-effect="non-scaling-stroke"></path></svg></div>
+                </div>
+              </div>
+            </sc-if>
+            <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px">
+              <span style="font-weight: 600; font-size: 14px">{{c.name}}</span>
+              <sc-if value="{{c.on}}" hint-placeholder-val="{{false}}"><span class="badge t-accent"><span class="dot"></span>In use</span></sc-if>
+            </div>
+            <span class="muted" style="font-size: 12.5px; line-height: 1.45">{{c.desc}}</span>
+          </button>
+        </sc-for>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="look-h" style="padding: 22px 24px">
+      <h2 id="look-h" style="margin: 0; font-size: 16px; font-weight: 600">Look and feel</h2>
+      <p class="muted" style="margin: 4px 0 0; font-size: 12.5px">Saved with the theme and used by viewer and server.</p>
+      <div style="margin-top: 8px">
+        <div class="opt-row">
+          <div><div style="font-weight: 600; font-size: 13.5px">Accent colour</div><div class="muted" style="font-size: 12px">Buttons, active items, switches and the main chart line</div></div>
+          <div role="group" aria-label="Accent colour" style="display: flex; flex-wrap: wrap; gap: 10px">
+            <sc-for list="{{accents}}" as="a" hint-placeholder-count="6">
+              <button type="button" class="sw" aria-pressed="{{a.on}}" aria-label="{{a.label}}" title="{{a.label}}" onClick="{{a.pick}}"><span class="{{a.cls}}" style="background: {{a.fill}}"></span></button>
+            </sc-for>
+          </div>
+        </div>
+        <div class="opt-row">
+          <div><div style="font-weight: 600; font-size: 13.5px">Reduce transparency</div><div class="muted" style="font-size: 12px">Solid panels instead of frosted glass; also lighter on the GPU</div></div>
+          <div role="group" aria-label="Reduce transparency" class="seg seg-wide">
+            <sc-for list="{{trOpts}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.on}}" onClick="{{o.pick}}">{{o.label}}</button></sc-for>
+          </div>
+        </div>
+        <div class="opt-row">
+          <div><div style="font-weight: 600; font-size: 13.5px">Interface size</div><div class="muted" style="font-size: 12px">Scales panels and text; the remote screen keeps its own scaling</div></div>
+          <div role="group" aria-label="Interface size" class="seg seg-wide">
+            <sc-for list="{{sizeOpts}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.on}}" onClick="{{o.pick}}">{{o.label}}</button></sc-for>
+          </div>
+        </div>
+        <div class="opt-row">
+          <div><div style="font-weight: 600; font-size: 13.5px">Reduce motion</div><div class="muted" style="font-size: 12px">Turns off panel and toolbar animations</div></div>
+          <div role="group" aria-label="Reduce motion" class="seg seg-wide">
+            <sc-for list="{{moOpts}}" as="o" hint-placeholder-count="3"><button type="button" aria-pressed="{{o.on}}" onClick="{{o.pick}}">{{o.label}}</button></sc-for>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="cmp-h" style="padding: 22px 24px">
+      <h2 id="cmp-h" style="margin: 0; font-size: 16px; font-weight: 600">How the themes differ</h2>
+      <div style="overflow-x: auto; margin: 10px -8px 0">
+        <table style="width: 100%; min-width: 640px; border-collapse: collapse; font-size: 13px">
+          <thead><tr><th scope="col" class="th">Theme</th><th scope="col" class="th">Surfaces</th><th scope="col" class="th">Accent</th><th scope="col" class="th">Typeface</th><th scope="col" class="th">GPU cost</th></tr></thead>
+          <tbody>
+            <tr><th scope="row" class="td" style="text-align: left; font-weight: 600">Glass</th><td class="td">Frosted panels over a dark slab backdrop</td><td class="td">Ember orange</td><td class="td">Inter</td><td class="td"><span class="badge t-amber">Blur pass</span></td></tr>
+            <tr><th scope="row" class="td" style="text-align: left; font-weight: 600">Slate</th><td class="td">Solid dark panels, flat, high density</td><td class="td">Cyan</td><td class="td">IBM Plex Sans</td><td class="td"><span class="badge t-green">Minimal</span></td></tr>
+            <tr><th scope="row" class="td" style="text-align: left; font-weight: 600">Light</th><td class="td">White cards on light grey, soft shadows</td><td class="td">Ember, darkened for contrast</td><td class="td">Inter</td><td class="td"><span class="badge t-green">Minimal</span></td></tr>
+            <tr><th scope="row" class="td" style="text-align: left; font-weight: 600">System</th><td class="td">Light by day, Glass in dark mode</td><td class="td">Follows the active theme</td><td class="td">Follows</td><td class="td"><span class="badge t-grey">Varies</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["glass","slate","light","system"],"default":"glass"},"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) { super(props); this.state = { theme: null, sys: 'dark' }; }
+  componentDidMount() {
+    this.loadPrefs();
+    try { this.setState({ osTr: window.matchMedia('(prefers-reduced-transparency: reduce)').matches, osMo: window.matchMedia('(prefers-reduced-motion: reduce)').matches }); } catch (e) {}
+    this.onStore = (e) => { if (e.key && e.key.indexOf('farpane-') === 0) this.loadPrefs(); };
+    window.addEventListener('storage', this.onStore);
+    try {
+      this.mq = window.matchMedia('(prefers-color-scheme: light)');
+      this.onMq = () => this.setState({ sys: this.mq.matches ? 'light' : 'dark' });
+      this.onMq(); this.mq.addEventListener('change', this.onMq);
+    } catch (e) {}
+  }
+  loadPrefs() {
+    const g = (k) => { try { return window.localStorage.getItem(k); } catch (e) { return null; } };
+    this.setState({ theme: g('farpane-theme') || this.state.theme, accent: g('farpane-accent') || 'default', reduceTr: g('farpane-reduce-tr'), motion: g('farpane-reduce-motion'), scale: g('farpane-scale') || '1' });
+  }
+  setPref(k, v) {
+    try { if (v == null) window.localStorage.removeItem(k); else window.localStorage.setItem(k, v); } catch (e) {}
+    this.loadPrefs();
+  }
+  prefCls() {
+    const s = this.state, c = [];
+    if (s.accent && s.accent !== 'default') c.push('acc-' + s.accent);
+    if (s.reduceTr === 'on' || (s.reduceTr == null && s.osTr)) c.push('reduce-tr');
+    if (s.motion === 'on' || (s.motion == null && s.osMo)) c.push('reduce-motion');
+    return c.join(' ');
+  }
+  componentWillUnmount() {
+    window.removeEventListener('storage', this.onStore);
+    try { this.mq.removeEventListener('change', this.onMq); } catch (e) {}
+  }
+  pickTheme(t) { this.setState({ theme: t }); try { window.localStorage.setItem('farpane-theme', t); } catch (e) {} }
+  renderVals() {
+    const pref = this.state.theme ?? this.props.theme ?? 'glass';
+    const theme = pref === 'system' ? (this.state.sys === 'light' ? 'light' : 'glass') : pref;
+    const opt = (id, name, desc) => ({ id, name, desc, on: pref === id, isSystem: id === 'system', isPlain: id !== 'system', pick: () => this.pickTheme(id) });
+    const zoom = this.state.scale || '1';
+    return {
+      theme,
+      prefCls: this.prefCls(),
+      zoom,
+      minH940: Math.round(940 / parseFloat(zoom)) + 'px',
+      accents: [['default', 'Theme default', ''], ['ember', 'Ember', '#f4623a'], ['cyan', 'Cyan', '#38bdf8'], ['violet', 'Violet', '#a78bfa'], ['green', 'Green', '#34d399'], ['amber', 'Amber', '#fbbf24']].map(([id, label, fill]) => ({ label, cls: id === 'default' ? 'theme-' + theme : '', fill: fill || 'var(--accent-hi)', on: (this.state.accent || 'default') === id, pick: () => this.setPref('farpane-accent', id === 'default' ? null : id) })),
+      trOpts: [[null, 'Follow system'], ['on', 'On'], ['off', 'Off']].map(([v, label]) => ({ label, on: (this.state.reduceTr ?? null) === v, pick: () => this.setPref('farpane-reduce-tr', v) })),
+      sizeOpts: [['0.9', '90 %'], ['1', '100 %'], ['1.15', '115 %']].map(([v, label]) => ({ label, on: (this.state.scale || '1') === v, pick: () => this.setPref('farpane-scale', v === '1' ? null : v) })),
+      moOpts: [[null, 'Follow system'], ['on', 'On'], ['off', 'Off']].map(([v, label]) => ({ label, on: (this.state.motion ?? null) === v, pick: () => this.setPref('farpane-reduce-motion', v) })),
+      choices: [
+        opt('system', 'System', 'Matches your operating system: Light in light mode, Glass in dark mode.'),
+        opt('glass', 'Glass', 'Frosted panels over a dark shattered backdrop with an ember accent.'),
+        opt('slate', 'Slate', 'Flat, solid dark panels with a cyan accent. Lightest on the GPU.'),
+        opt('light', 'Light', 'White cards on light grey for bright rooms and daytime work.')
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
