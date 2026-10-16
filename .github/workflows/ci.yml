@@ -36,3 +36,25 @@ jobs:
         run: |
           rustup target add thumbv7em-none-eabihf
           cargo build -p rfb-proto --target thumbv7em-none-eabihf --locked
+
+  fuzz:
+    # A short run of every fuzz target: catches a parser that panics or
+    # hangs on input the proptests did not reach. Long runs are done by hand.
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: "" # cargo-fuzz adds its own flags; warnings are checked by the other job
+    steps:
+      - uses: actions/checkout@v4
+      - name: Nightly toolchain and cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal
+          cargo install cargo-fuzz --locked
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/rfb-proto/fuzz
+      - name: Fuzz
+        working-directory: crates/rfb-proto
+        run: |
+          for target in messages framing client_conn server_conn; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=30
+          done
