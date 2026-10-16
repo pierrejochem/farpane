@@ -506,6 +506,50 @@ async fn input_reaches_the_backend_and_view_only_stops_it() {
 }
 
 #[tokio::test]
+async fn keys_and_buttons_are_let_go_when_the_client_leaves_or_becomes_view_only() {
+    for leave in [true, false] {
+        let input = Recording::default();
+        let server = Arc::new(
+            Server::new(
+                TestPattern::new(64, 64),
+                input.clone(),
+                options(),
+                Settings::default(),
+            )
+            .unwrap(),
+        );
+        let (mut v, _task) = connect(&server, PixelFormat::RGB888, ZRLE).await;
+        v.session
+            .send(&ClientMessage::KeyEvent {
+                down: true,
+                keysym: 0xFFE3,
+            })
+            .await
+            .unwrap();
+        v.session
+            .send(&ClientMessage::PointerEvent {
+                buttons: 1,
+                x: 5,
+                y: 6,
+            })
+            .await
+            .unwrap();
+        v.quiet(Duration::from_millis(200)).await;
+        assert_eq!(input.seen(), ["key ffe3 true", "pointer 5,6 1"]);
+        if leave {
+            drop(v);
+        } else {
+            let id = server.clients()[0].id;
+            assert!(server.set_view_only(id, true));
+        }
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let seen = input.seen();
+        assert!(seen.contains(&"key ffe3 false".to_owned()), "{seen:?}");
+        assert!(seen.contains(&"pointer 5,6 0".to_owned()), "{seen:?}");
+    }
+}
+
+#[tokio::test]
 async fn utf8_clipboard_works_through_extended_clipboard() {
     let input = Recording::default();
     let server = Arc::new(
@@ -1115,6 +1159,9 @@ async fn the_dashboard_can_see_clients_switch_view_only_and_disconnect_them() {
     let id = info.id;
     assert!(server.set_view_only(id, true));
     assert!(server.clients()[0].view_only);
+    // The key held down above is let go when the client becomes view only.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(input.seen(), ["key 61 true", "key 61 false"]);
     input.0.0.lock().unwrap().clear();
     v.key(0x62).await;
     tokio::time::sleep(Duration::from_millis(150)).await;

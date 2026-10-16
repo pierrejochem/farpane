@@ -148,7 +148,10 @@ fn write_private(path: &std::path::Path, data: &[u8]) -> io::Result<()> {
     }
     let tmp = path.with_extension("tmp");
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    // `create_new` refuses a leftover file or a planted symlink, which
+    // would keep its own (possibly wider) permissions.
+    let _ = std::fs::remove_file(&tmp);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

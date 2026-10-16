@@ -57,7 +57,15 @@ impl Lockout {
                         .is_some_and(|&t| now.duration_since(t) < WINDOW)
             });
             if self.names.len() >= MAX_TRACKED {
-                self.names.clear();
+                // Still full: a flood of made-up names. Forget the names that
+                // are only counting failures, never one that is locked.
+                self.names
+                    .retain(|_, r| r.locked_until.is_some_and(|u| u > now));
+            }
+            if self.names.len() >= MAX_TRACKED {
+                if let Some(any) = self.names.keys().next().cloned() {
+                    self.names.remove(&any);
+                }
             }
         }
         let record = self.names.entry(key(name)).or_default();

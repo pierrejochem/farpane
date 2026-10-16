@@ -159,7 +159,10 @@ async fn admins_control_and_view_users_only_look() {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         let seen = s.input.0.lock().unwrap().clone();
-        assert_eq!(!seen.is_empty(), expect_input, "{user}: {seen:?}");
+        // The previous user's session ends with a key release; only presses
+        // show that input got through.
+        let pressed = seen.iter().any(|e| e.ends_with("true"));
+        assert_eq!(pressed, expect_input, "{user}: {seen:?}");
     }
 }
 
@@ -264,6 +267,9 @@ async fn users_can_sign_in_over_rsa_aes_without_tls_and_roles_still_apply() {
             .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         let seen = input.0.lock().unwrap().clone();
-        assert_eq!(!seen.is_empty(), expect_input, "{user}: {seen:?}");
+        // The previous user's session ends with a key release; only presses
+        // show that input got through.
+        let pressed = seen.iter().any(|e| e.ends_with("true"));
+        assert_eq!(pressed, expect_input, "{user}: {seen:?}");
     }
 }

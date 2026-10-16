@@ -39,6 +39,9 @@ const REASON_CLIENT: u16 = 1;
 const STATUS_OK: u16 = 0;
 const STATUS_PROHIBITED: u16 = 1;
 
+/// A single update that takes longer than this to write ends the connection.
+const WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 #[allow(clippy::struct_excessive_bools)] // independent one-shot flags
 struct State {
     /// Live state shared with the dashboard (view-only switch, counters).
@@ -67,6 +70,29 @@ struct State {
     /// carried in the payload and when it was sent. They pace the updates.
     in_flight: std::collections::VecDeque<(u32, std::time::Instant)>,
     next_fence: u32,
+    /// Keys and pointer buttons this client holds down on the shared
+    /// machine, so they can be let go when it leaves or is made view-only.
+    held_keys: std::collections::HashSet<u32>,
+    pointer: (u16, u16, u8),
+}
+
+impl State {
+    fn holds_input(&self) -> bool {
+        !self.held_keys.is_empty() || self.pointer.2 != 0
+    }
+
+    /// Release everything the client still holds down. Without this a client
+    /// that disconnects (or is switched to view only) with a key or button
+    /// down would leave it stuck on the shared machine.
+    fn release_input(&mut self, shared: &Shared) {
+        for key in self.held_keys.drain() {
+            shared.input.key(key, false);
+        }
+        if self.pointer.2 != 0 {
+            shared.input.pointer(self.pointer.0, self.pointer.1, 0);
+            self.pointer.2 = 0;
+        }
+    }
 }
 
 fn whole(size: (u16, u16)) -> Rect {
@@ -139,10 +165,17 @@ where
         announced_fence: false,
         in_flight: std::collections::VecDeque::new(),
         next_fence: 0,
+        held_keys: std::collections::HashSet::new(),
+        pointer: (0, 0, 0),
     };
     st.dirty.add(whole(size));
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let result: Result<(), Error> = tokio::select! {
+        // A kick (the dashboard's Disconnect) ends the task wherever it waits,
+        // including inside a write to a client that has stopped reading.
+        () = handle.kick.notified() => Err(Error::Closed),
+        result = async {
     loop {
         // A client that never answers a fence must not stall for ever.
         let now = std::time::Instant::now();
@@ -163,9 +196,22 @@ where
             // intermediate frames (the changes pile up in `dirty`) instead of
             // queueing them.
             let paced = st.in_flight.len() < MAX_IN_FLIGHT;
-            if ready && paced && send_update(&mut session, &shared, &mut st, request).await? {
-                st.request = None;
+            if ready && paced {
+                // A client that stops reading must not hold this task (and
+                // its slot) for ever; `kick` is handled around the loop.
+                let sent = tokio::time::timeout(
+                    WRITE_TIMEOUT,
+                    send_update(&mut session, &shared, &mut st, request),
+                )
+                .await
+                .map_err(|_| Error::Io(std::io::ErrorKind::TimedOut.into()))??;
+                if sent {
+                    st.request = None;
+                }
             }
+        }
+        if st.holds_input() && handle.view_only.load(Ordering::Relaxed) {
+            st.release_input(&shared);
         }
         handle
             .bytes_in
@@ -174,7 +220,6 @@ where
             .bytes_out
             .store(session.bytes_sent(), Ordering::Relaxed);
         tokio::select! {
-            () = handle.kick.notified() => return Err(Error::Closed),
             _ = tick.tick() => {}
             message = session.next_message() => {
                 handle_message(&mut session, &shared, &mut st, message?).await?;
@@ -225,6 +270,10 @@ where
             },
         }
     }
+        } => result,
+    };
+    st.release_input(&shared);
+    result
 }
 
 #[allow(clippy::too_many_lines)] // one arm per client message
@@ -292,11 +341,17 @@ where
         }
         ClientMessage::KeyEvent { down, keysym } => {
             if !st.handle.view_only.load(Ordering::Relaxed) {
+                if down {
+                    st.held_keys.insert(keysym);
+                } else {
+                    st.held_keys.remove(&keysym);
+                }
                 shared.input.key(keysym, down);
             }
         }
         ClientMessage::PointerEvent { buttons, x, y } => {
             if !st.handle.view_only.load(Ordering::Relaxed) {
+                st.pointer = (x, y, buttons);
                 shared.input.pointer(x, y, buttons);
             }
         }

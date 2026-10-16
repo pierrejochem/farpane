@@ -427,3 +427,23 @@ async fn a_self_signed_certificate_flagged_as_a_ca_is_still_pinnable() {
         .unwrap();
     server.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn a_client_that_requires_encryption_refuses_a_server_that_offers_none() {
+    for auth in [
+        ServerAuth::None,
+        ServerAuth::VncPassword(b"hunter2".to_vec()),
+    ] {
+        let (c, s) = duplex(4096);
+        // A plain server: no TLS configuration, so only None / VNC Auth.
+        tokio::spawn(ServerSession::accept(
+            s,
+            ServerOptions::new(auth, 64, 48, b"plain"),
+        ));
+        let mut opts = client_opts(vec![[0; 32]]);
+        opts.password = Some(b"hunter2".to_vec());
+        opts.require_encryption = true;
+        let result = ClientSession::connect(c, opts).await;
+        assert!(result.is_err(), "must not fall back to the clear");
+    }
+}

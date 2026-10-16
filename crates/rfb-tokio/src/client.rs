@@ -34,6 +34,11 @@ pub struct ClientOptions {
     /// RSA-AES settings. Without them RA2 types are never chosen (the
     /// server's key must be pinned, so the caller has to be able to ask).
     pub ra2: Option<crate::Ra2Options>,
+    /// Refuse any server that does not offer an encrypted type (`VeNCrypt`
+    /// or RSA-AES). Set it when the user already trusts this server's key:
+    /// otherwise someone on the path could answer "None" or "VNC Auth" and
+    /// the connection would silently fall back to the clear.
+    pub require_encryption: bool,
     pub handshake_timeout: Duration,
 }
 
@@ -56,6 +61,7 @@ impl Default for ClientOptions {
             username: None,
             tls: None,
             ra2: None,
+            require_encryption: false,
             handshake_timeout: HANDSHAKE_TIMEOUT,
         }
     }
@@ -89,6 +95,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
         let mut config = opts.handshake.clone();
         if opts.tls.is_none() {
             config.security.retain(|t| *t != security::VENCRYPT);
+        }
+        if opts.require_encryption {
+            config.security.retain(|t| {
+                matches!(
+                    *t,
+                    security::VENCRYPT
+                        | security::RA2
+                        | security::RA2NE
+                        | security::RA2_256
+                        | security::RA2NE_256
+                )
+            });
         }
         if opts.ra2.is_none() || opts.password.is_none() {
             config.security.retain(|t| {

@@ -248,8 +248,10 @@ impl KeyPair {
     /// # Errors
     /// [`Ra2Error::Rsa`] if it does not decrypt.
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, Ra2Error> {
+        // Blinded, so the timing of the private-key operation does not depend
+        // on the (attacker-chosen) ciphertext.
         self.private
-            .decrypt(Pkcs1v15Encrypt, ciphertext)
+            .decrypt_blinded(&mut rng(), Pkcs1v15Encrypt, ciphertext)
             .map_err(|_| Ra2Error::Rsa)
     }
 }

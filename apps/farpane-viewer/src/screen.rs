@@ -178,6 +178,9 @@ impl RemoteScreen {
                     server_name: host_of(addr).to_owned(),
                     pins: options.pins.clone(),
                 }),
+                // A server the user already pinned must keep encrypting: an
+                // attacker on the path cannot talk us into plain VNC Auth.
+                require_encryption: !options.pins.is_empty(),
                 ..ClientOptions::default()
             },
         )

@@ -286,8 +286,11 @@ fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     let tmp = path.with_extension("toml.tmp");
     {
+        // `create_new` refuses a leftover file or a planted symlink, which
+        // would keep its own (possibly wider) permissions.
+        let _ = fs::remove_file(&tmp);
         let mut options = fs::OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
         let mut file = options.open(&tmp)?;
