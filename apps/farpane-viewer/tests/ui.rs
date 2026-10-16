@@ -746,3 +746,88 @@ async fn clicks_on_the_toolbar_do_not_reach_the_remote_machine() {
         }
     }
 }
+
+/// All text drawn in a frame, joined by newlines.
+fn drawn_text(output: &egui::FullOutput) -> String {
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for clipped in &output.shapes {
+        collect(&clipped.shape, &mut out);
+    }
+    out.join("\n")
+}
+
+const HOTKEY: Modifiers = Modifiers {
+    ctrl: true,
+    alt: true,
+    shift: true,
+    ..Modifiers::NONE
+};
+
+#[tokio::test]
+async fn the_statistics_overlay_shows_live_readings_when_switched_on() {
+    let (ctx, mut app, _server) = connected().await;
+    // Off by default: nothing about statistics is drawn.
+    let out = frame_at(&ctx, &mut app, 1.0, None, vec![]);
+    assert!(!drawn_text(&out).contains(" fps"), "{}", drawn_text(&out));
+
+    app.set_stats_visible(true);
+    // The connection thread produces a reading every quarter second.
+    until(&ctx, &mut app, "a reading", |a| {
+        a.stats().is_some() && a.history_len() >= 2
+    })
+    .await;
+    let out = frame_at(&ctx, &mut app, 2.0, None, vec![]);
+    let text = drawn_text(&out);
+    assert!(text.contains(" fps"), "{text}");
+    assert!(text.contains("800×400"), "the remote size is shown: {text}");
+    assert!(text.contains("received") && text.contains("sent"), "{text}");
+    let s = app.stats().unwrap();
+    assert!(s.total_rx > 0 && s.total_tx > 0, "{s:?}");
+
+    app.set_stats_visible(false);
+    let out = frame_at(&ctx, &mut app, 3.0, None, vec![]);
+    assert!(!drawn_text(&out).contains(" fps"));
+}
+
+#[tokio::test]
+async fn the_hotkey_toggles_the_overlay_and_stays_local() {
+    let (ctx, mut app, mut server) = connected().await;
+    assert!(!app.stats_visible());
+    let chord = |pressed| key(Key::S, pressed, HOTKEY);
+    frame_with(&ctx, &mut app, vec![chord(true), chord(false)], HOTKEY);
+    assert!(app.stats_visible());
+    frame_with(&ctx, &mut app, vec![chord(true), chord(false)], HOTKEY);
+    assert!(!app.stats_visible());
+    // The remote machine never saw an 's' (0x73); the modifiers it may have.
+    frame(&ctx, &mut app, vec![Event::Text("q".into())]);
+    loop {
+        match next_input(&mut server).await {
+            ClientMessage::KeyEvent {
+                keysym: 0x71,
+                down: true,
+            } => break,
+            ClientMessage::KeyEvent {
+                keysym: 0x73 | 0x53,
+                ..
+            } => panic!("the hotkey leaked to the remote"),
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn readings_are_dropped_when_the_connection_ends() {
+    let (ctx, mut app, server) = connected().await;
+    until(&ctx, &mut app, "a reading", |a| a.stats().is_some()).await;
+    drop(server);
+    until(&ctx, &mut app, "disconnect", |a| !a.is_connected()).await;
+    assert!(app.stats().is_none());
+    assert_eq!(app.history_len(), 0);
+}

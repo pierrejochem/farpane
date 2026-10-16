@@ -22,6 +22,7 @@ struct Args {
     ui_screenshot: Option<PathBuf>,
     fullscreen: bool,
     pin_toolbar: bool,
+    show_stats: bool,
     password_file: Option<PathBuf>,
     encodings: Vec<i32>,
     /// Keep applying updates for this long before saving, so a slowly drawn
@@ -32,7 +33,7 @@ struct Args {
 fn parse_args() -> Result<Args, String> {
     let mut args = std::env::args().skip(1);
     let (mut addr, mut screenshot, mut ui_screenshot, mut password_file) = (None, None, None, None);
-    let (mut fullscreen, mut pin_toolbar) = (false, false);
+    let (mut fullscreen, mut pin_toolbar, mut show_stats) = (false, false, false);
     let mut settle = Duration::from_millis(1500);
     let mut encodings = DEFAULT_ENCODINGS.to_vec();
     while let Some(a) = args.next() {
@@ -41,6 +42,7 @@ fn parse_args() -> Result<Args, String> {
                 screenshot = Some(args.next().ok_or("--screenshot needs a file")?.into());
             }
             "--fullscreen" => fullscreen = true,
+            "--stats" => show_stats = true,
             "--ui-pin-toolbar" => pin_toolbar = true,
             "--ui-screenshot" => {
                 ui_screenshot = Some(args.next().ok_or("--ui-screenshot needs a file")?.into());
@@ -70,6 +72,7 @@ fn parse_args() -> Result<Args, String> {
         ui_screenshot,
         fullscreen,
         pin_toolbar,
+        show_stats,
         password_file,
         encodings,
         settle,
@@ -78,7 +81,7 @@ fn parse_args() -> Result<Args, String> {
 
 fn usage() {
     eprintln!(
-        "usage: farpane-viewer [--fullscreen] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--password-file FILE] HOST:PORT\n\
+        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--password-file FILE] HOST:PORT\n\
          The password comes from $FARPANE_PASSWORD or --password-file, never from an argument."
     );
 }
@@ -127,6 +130,7 @@ fn gui(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         ui_screenshot: args.ui_screenshot.clone(),
         fullscreen: args.fullscreen,
         pin_toolbar: args.pin_toolbar,
+        show_stats: args.show_stats,
         settings_path: farpane_viewer::settings::default_path(),
     };
     let options = eframe::NativeOptions {

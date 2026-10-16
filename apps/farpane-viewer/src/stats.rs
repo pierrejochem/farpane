@@ -104,6 +104,31 @@ impl Collector {
     }
 }
 
+/// The pixel encodings' shares of the received payload as whole percentages,
+/// largest first, at most `limit` of them. Pseudo-encodings (cursor shape,
+/// desktop size: negative numbers) carry no pixels and are left out.
+#[must_use]
+pub fn pixel_mix(snapshot: &Snapshot, limit: usize) -> Vec<(i32, u32)> {
+    let pixels: Vec<&EncodingShare> = snapshot
+        .encodings
+        .iter()
+        .filter(|e| e.encoding >= 0)
+        .collect();
+    let total: u64 = pixels.iter().map(|e| e.bytes).sum();
+    if total == 0 {
+        return Vec::new();
+    }
+    pixels
+        .into_iter()
+        .take(limit)
+        .map(|e| {
+            // 0..=100, so the conversion is exact.
+            let percent = (e.bytes * 100 + total / 2) / total;
+            (e.encoding, u32::try_from(percent).unwrap_or(100))
+        })
+        .collect()
+}
+
 /// A human name for an encoding number.
 #[must_use]
 pub fn encoding_name(encoding: i32) -> String {
@@ -233,6 +258,41 @@ mod tests {
         c.record_rect(enc::COPY_RECT, 4);
         let second = c.sample(at(t0, 2.0), 0, 0);
         assert_eq!(second.encodings.last().unwrap().rects, 2);
+    }
+
+    #[test]
+    fn the_pixel_mix_leaves_out_pseudo_encodings_and_rounds_to_percent() {
+        let snap = |encodings: Vec<EncodingShare>| Snapshot {
+            updates_per_sec: 0.0,
+            rx_per_sec: 0.0,
+            tx_per_sec: 0.0,
+            total_rx: 0,
+            total_tx: 0,
+            encodings,
+        };
+        let share = |encoding, bytes| EncodingShare {
+            encoding,
+            rects: 1,
+            bytes,
+        };
+        let s = snap(vec![
+            share(enc::ZRLE, 7500),
+            share(enc::HEXTILE, 2000),
+            share(enc::RAW, 500),
+            share(pseudo::CURSOR, 99_999), // not pixels: ignored however large
+        ]);
+        assert_eq!(
+            pixel_mix(&s, 8),
+            [(enc::ZRLE, 75), (enc::HEXTILE, 20), (enc::RAW, 5)]
+        );
+        assert_eq!(pixel_mix(&s, 2), [(enc::ZRLE, 75), (enc::HEXTILE, 20)]);
+        assert_eq!(pixel_mix(&snap(vec![]), 3), []);
+        assert_eq!(pixel_mix(&snap(vec![share(pseudo::CURSOR, 10)]), 3), []);
+        assert_eq!(
+            pixel_mix(&snap(vec![share(enc::RAW, 0)]), 3),
+            [],
+            "no bytes, no percentages"
+        );
     }
 
     #[test]
