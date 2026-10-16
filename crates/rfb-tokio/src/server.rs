@@ -91,6 +91,8 @@ pub struct ServerSession<S> {
     io: Io<Transport<S>>,
     conn: ServerConn,
     shared: bool,
+    /// Who signed in with `X509Plain`.
+    username: Option<Vec<u8>>,
     /// The VNC Auth challenge in flight.
     challenge: [u8; 16],
 }
@@ -125,6 +127,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
             io,
             conn,
             shared: false,
+            username: None,
             challenge: [0; 16],
         };
         timeout(opts.handshake_timeout, session.handshake(&opts))
@@ -181,7 +184,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
                         let ServerAuth::Plain(verifier) = &opts.auth else {
                             unreachable!("Plain credentials are only offered with a verifier");
                         };
-                        let ok = (verifier.0)(&username, &password);
+                        // Checking a password hash is deliberately slow: keep it
+                        // off the async worker threads.
+                        let check = Arc::clone(&verifier.0);
+                        let (user, pass) = (username.clone(), password);
+                        let ok = tokio::task::spawn_blocking(move || check(&user, &pass))
+                            .await
+                            .map_err(|e| Error::Io(std::io::Error::other(e)))?;
+                        if ok {
+                            self.username = Some(username.clone());
+                        }
                         self.conn.security_result(
                             ok,
                             b"authentication failed",
@@ -218,6 +230,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ServerSession<S> {
     #[must_use]
     pub fn shared(&self) -> bool {
         self.shared
+    }
+
+    /// The user name the client signed in with (`X509Plain`), if it did.
+    #[must_use]
+    pub fn username(&self) -> Option<&[u8]> {
+        self.username.as_deref()
     }
 
     /// Wait for the next client message. Cancel safe.

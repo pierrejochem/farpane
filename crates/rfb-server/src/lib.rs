@@ -9,7 +9,9 @@ mod client;
 mod region;
 mod server;
 mod source;
+mod throttle;
 
 pub use region::Region;
-pub use server::{Server, Settings};
+pub use server::{Event, Permission, Server, Settings};
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
+pub use throttle::Throttle;

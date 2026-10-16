@@ -44,3 +44,8 @@ module_name_repetitions = "allow"
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Password hashing is deliberately heavy; keep it fast enough in debug builds
+# and tests.
+[profile.dev.package.argon2]
+opt-level = 3
