@@ -79,6 +79,8 @@ pub struct Tokens {
     pub red: Rgba,
     pub violet: Rgba,
     pub radius: f32,
+    /// Dark surfaces (Glass, Slate) rather than light ones.
+    pub dark: bool,
     /// Frosted-glass panels (needs the blurred-backdrop pass).
     pub glass: bool,
 }
@@ -102,6 +104,7 @@ impl Tokens {
                 red: Rgba::hex(0xF87171),
                 violet: Rgba::hex(0xA78BFA),
                 radius: 18.0,
+                dark: true,
                 glass: true,
             },
             Theme::Slate => Self {
@@ -118,6 +121,7 @@ impl Tokens {
                 red: Rgba::hex(0xF87171),
                 violet: Rgba::hex(0xA78BFA),
                 radius: 14.0,
+                dark: true,
                 glass: false,
             },
             Theme::Light => Self {
@@ -134,6 +138,7 @@ impl Tokens {
                 red: Rgba::hex(0xBE3A32),
                 violet: Rgba::hex(0x6D4FD6),
                 radius: 16.0,
+                dark: false,
                 glass: false,
             },
         };
