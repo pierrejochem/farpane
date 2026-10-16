@@ -27,11 +27,32 @@ pub struct Startup {
     pub password: Option<Vec<u8>>,
     /// Save a screenshot of the window to this file and quit (for testing).
     pub ui_screenshot: Option<PathBuf>,
+    /// Start the window in full screen.
+    pub fullscreen: bool,
+    /// Keep the full-screen toolbar open and pinned (for screenshots).
+    pub pin_toolbar: bool,
 }
 
 /// Cursors wider or taller than this are not drawn (the server still thinks
 /// we show them, so we hide ours rather than the local one).
 const MAX_CURSOR_PX: u16 = 512;
+
+/// The full-screen toolbar: a slim tab at the top edge that opens a pill of
+/// controls. Times are egui's clock, in seconds, so tests can drive them.
+#[derive(Debug, Default)]
+struct Toolbar {
+    open: bool,
+    pinned: bool,
+    /// When the pointer last touched the tab, the top edge or the pill.
+    last_active: f64,
+    /// Where the pill was drawn last frame, to know if the pointer is on it.
+    rect: Option<egui::Rect>,
+}
+
+/// The pill closes this long after the pointer leaves it, unless pinned.
+const TOOLBAR_HIDE_AFTER: f64 = 2.0;
+/// The pointer counts as "at the top edge" within this many points.
+const TOP_EDGE: f32 = 4.0;
 
 /// The server's cursor, drawn by us at the pointer.
 enum RemoteCursor {
@@ -52,6 +73,7 @@ enum Phase {
 }
 
 /// The viewer window.
+#[allow(clippy::struct_excessive_bools)] // independent UI switches
 pub struct ViewerApp {
     core: Core,
     phase: Phase,
@@ -63,6 +85,9 @@ pub struct ViewerApp {
     one_to_one: bool,
     /// Copy text between the local and the remote clipboard.
     clipboard_sync: bool,
+    toolbar: Toolbar,
+    /// Whether the window was in full screen at the last frame.
+    fullscreen: bool,
     /// A short message for the top bar, with the time it expires.
     notice: Option<(String, Instant)>,
     texture: Option<TextureHandle>,
@@ -110,6 +135,12 @@ impl ViewerApp {
             applied: None,
             one_to_one: false,
             clipboard_sync: true,
+            toolbar: Toolbar {
+                open: startup.pin_toolbar,
+                pinned: startup.pin_toolbar,
+                ..Toolbar::default()
+            },
+            fullscreen: startup.fullscreen,
             notice: None,
             texture: None,
             remote_size: (0, 0),
@@ -168,18 +199,70 @@ impl ViewerApp {
     /// Draw one frame: handle connection events, draw, forward input.
     pub fn ui(&mut self, ctx: &Context) {
         let tokens = self.apply_theme(ctx);
+        self.fullscreen = ctx
+            .input(|i| i.viewport().fullscreen)
+            .unwrap_or(self.fullscreen);
+        // F11 belongs to the viewer, not the remote machine.
+        if ctx.input(|i| i.key_pressed(Key::F11)) {
+            self.set_fullscreen(ctx, !self.fullscreen);
+        }
         self.drain_events(ctx);
         let title = match &self.phase {
             Phase::Connected { name } => format!("{name} — Farpane Viewer"),
             _ => "Farpane Viewer".to_owned(),
         };
         ctx.send_viewport_cmd(ViewportCommand::Title(title));
-        self.top_bar(ctx, &tokens);
+        let immersive = self.fullscreen && self.is_connected();
+        if !immersive {
+            self.top_bar(ctx, &tokens);
+        }
         match self.phase {
             Phase::Connected { .. } => self.session(ctx),
             Phase::Home | Phase::Connecting => self.home(ctx, &tokens),
         }
+        if immersive {
+            self.toolbar_overlay(ctx, &tokens);
+        }
+        self.toast(ctx, &tokens);
         self.screenshot_driver(ctx);
+    }
+
+    /// Whether the window is in full screen.
+    #[must_use]
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
+
+    /// Whether the full-screen toolbar pill is open (or sliding open).
+    #[must_use]
+    pub fn toolbar_open(&self) -> bool {
+        self.toolbar.open
+    }
+
+    /// Pin the toolbar open, or let it auto-hide again.
+    pub fn set_toolbar_pinned(&mut self, pinned: bool) {
+        self.toolbar.pinned = pinned;
+    }
+
+    fn set_fullscreen(&mut self, ctx: &Context, on: bool) {
+        self.fullscreen = on;
+        self.toolbar.open = false;
+        ctx.send_viewport_cmd(ViewportCommand::Fullscreen(on));
+    }
+
+    /// Send Ctrl+Alt+Delete: the local OS would otherwise swallow it.
+    pub fn send_ctrl_alt_del(&self) {
+        use crate::input::keysym::{ALT_L, CONTROL_L, DELETE};
+        for (keysym, down) in [
+            (CONTROL_L, true),
+            (ALT_L, true),
+            (DELETE, true),
+            (DELETE, false),
+            (ALT_L, false),
+            (CONTROL_L, false),
+        ] {
+            self.core.send(Command::Key { keysym, down });
+        }
     }
 
     fn connect(&self) {
@@ -239,6 +322,9 @@ impl ViewerApp {
                 UiEvent::Bell => {}
                 UiEvent::Disconnected(reason) => {
                     self.phase = Phase::Home;
+                    if self.fullscreen {
+                        self.set_fullscreen(ctx, false);
+                    }
                     self.error = reason;
                     self.texture = None;
                     self.cursor = None;
@@ -350,13 +436,6 @@ impl ViewerApp {
                     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, colour);
                     ui.label(RichText::new(text).color(colour));
-                    if let Some((message, until)) = &self.notice {
-                        if Instant::now() < *until {
-                            ui.add_space(12.0);
-                            ui.label(RichText::new(message).color(tokens.amber));
-                            ctx.request_repaint_after(Duration::from_millis(500));
-                        }
-                    }
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
                             .selected_text(theme_name(self.theme))
@@ -383,17 +462,11 @@ impl ViewerApp {
                             if ui.button("Disconnect").clicked() {
                                 self.core.send(Command::Disconnect);
                             }
-                            let fullscreen =
-                                ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
-                            if ui
-                                .button(if fullscreen {
-                                    "Exit full screen"
-                                } else {
-                                    "Full screen"
-                                })
-                                .clicked()
-                            {
-                                ctx.send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
+                            if ui.button("Full screen").clicked() {
+                                self.set_fullscreen(ctx, true);
+                            }
+                            if ui.button("Ctrl+Alt+Del").clicked() {
+                                self.send_ctrl_alt_del();
                             }
                             let label = if self.one_to_one {
                                 "Fit to window"
@@ -406,6 +479,126 @@ impl ViewerApp {
                         }
                     });
                 });
+            });
+    }
+
+    /// The slim tab and the pill of controls, drawn over the picture.
+    fn toolbar_overlay(&mut self, ctx: &Context, tokens: &Tokens) {
+        // Over the remote picture the panels must be opaque, or the text is
+        // unreadable: use the "reduce transparency" variant of the tokens.
+        let tokens = &tokens.reduce_transparency();
+        let now = ctx.input(|i| i.time);
+        let pointer = ctx.input(|i| i.pointer.hover_pos());
+        let at_edge = pointer.is_some_and(|p| p.y <= TOP_EDGE);
+        let on_pill = pointer
+            .zip(self.toolbar.rect)
+            .is_some_and(|(p, r)| r.expand(4.0).contains(p));
+        if at_edge || on_pill {
+            self.toolbar.open = true;
+            self.toolbar.last_active = now;
+        } else if self.toolbar.open
+            && !self.toolbar.pinned
+            && now - self.toolbar.last_active > TOOLBAR_HIDE_AFTER
+        {
+            self.toolbar.open = false;
+        }
+        if self.toolbar.open && !self.toolbar.pinned {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
+        let slide =
+            ctx.animate_bool_with_time(egui::Id::new("toolbar-slide"), self.toolbar.open, 0.15);
+
+        if slide < 1.0 {
+            let tab = egui::Area::new(egui::Id::new("toolbar-tab"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_TOP, vec2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let (rect, response) = ui.allocate_exact_size(vec2(72.0, 10.0), Sense::click());
+                    let radius = egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 6,
+                        se: 6,
+                    };
+                    ui.painter()
+                        .rect_filled(rect, radius, Color32::from(tokens.card));
+                    response
+                });
+            if tab.inner.clicked() {
+                self.toolbar.open = true;
+                self.toolbar.last_active = now;
+            }
+        }
+
+        if slide > 0.0 {
+            let name = match &self.phase {
+                Phase::Connected { name } => name.clone(),
+                _ => String::new(),
+            };
+            let (w, h) = self.remote_size;
+            let pill = egui::Area::new(egui::Id::new("toolbar-pill"))
+                .order(egui::Order::Foreground)
+                .anchor(
+                    egui::Align2::CENTER_TOP,
+                    vec2(0.0, 8.0 - (1.0 - slide) * 64.0),
+                )
+                .show(ctx, |ui| {
+                    Frame::NONE
+                        .fill(tokens.card.into())
+                        .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                        .corner_radius(style::radius(tokens.radius))
+                        .inner_margin(Margin::symmetric(16, 8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{name}  ·  {w}×{h}")).strong());
+                                ui.separator();
+                                if ui.button("Ctrl+Alt+Del").clicked() {
+                                    self.send_ctrl_alt_del();
+                                }
+                                let size = if self.one_to_one {
+                                    "Fit to window"
+                                } else {
+                                    "Actual size"
+                                };
+                                if ui.button(size).clicked() {
+                                    self.one_to_one = !self.one_to_one;
+                                }
+                                ui.checkbox(&mut self.clipboard_sync, "Clipboard");
+                                ui.toggle_value(&mut self.toolbar.pinned, "Pin");
+                                ui.separator();
+                                if ui.button("Exit full screen").clicked() {
+                                    self.set_fullscreen(ctx, false);
+                                }
+                                if ui.button("Disconnect").clicked() {
+                                    self.core.send(Command::Disconnect);
+                                }
+                            });
+                        });
+                });
+            self.toolbar.rect = Some(pill.response.rect);
+        } else {
+            self.toolbar.rect = None;
+        }
+    }
+
+    /// A short-lived message at the bottom of the window.
+    fn toast(&self, ctx: &Context, tokens: &Tokens) {
+        let tokens = &tokens.reduce_transparency();
+        let Some(message) = self.notice() else { return };
+        ctx.request_repaint_after(Duration::from_millis(500));
+        egui::Area::new(egui::Id::new("toast"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -16.0))
+            .interactable(false)
+            .show(ctx, |ui| {
+                Frame::NONE
+                    .fill(tokens.card.into())
+                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                    .corner_radius(style::radius(tokens.radius / 2.0))
+                    .inner_margin(Margin::symmetric(14, 8))
+                    .show(ui, |ui| {
+                        ui.label(RichText::new(message).color(tokens.amber));
+                    });
             });
     }
 
@@ -558,7 +751,7 @@ impl ViewerApp {
     }
 
     fn forward_input(&mut self, ctx: &Context, response: &egui::Response, canvas: &Canvas) {
-        let (events, mods, pos, focused) = ctx.input(|i| {
+        let (mut events, mods, pos, focused) = ctx.input(|i| {
             (
                 i.events.clone(),
                 i.modifiers,
@@ -566,6 +759,7 @@ impl ViewerApp {
                 i.focused,
             )
         });
+        events.retain(|e| !matches!(e, egui::Event::Key { key: Key::F11, .. }));
         // egui-winit reports focus changes both as a flag and as an event; the
         // last event of the frame wins.
         let focused = events
