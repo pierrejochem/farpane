@@ -362,3 +362,201 @@ fn byte_by_byte_client_stream_is_parsed_by_the_server() {
     }
     assert_eq!(events, 2);
 }
+
+mod robustness {
+    //! Whatever the peer sends, the connections return, stay bounded and, once
+    //! failed, stay failed.
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::framing;
+
+    /// Feed `bytes` in pieces cut at `cuts`, polling after each piece.
+    fn drive_client(conn: &mut ClientConn, bytes: &[u8], cuts: &[usize]) {
+        let (mut buf, mut out) = (BytesMut::new(), Vec::new());
+        let mut failed = false;
+        let mut start = 0;
+        for end in cuts
+            .iter()
+            .map(|c| c % (bytes.len() + 1))
+            .chain([bytes.len()])
+            .scan(0, |hi, c| {
+                *hi = c.max(*hi);
+                Some(*hi)
+            })
+        {
+            buf.extend_from_slice(&bytes[start..end]);
+            start = end;
+            loop {
+                match conn.poll(&mut buf, &mut out) {
+                    Ok(Some(_)) => assert!(!failed, "event after failure"),
+                    Ok(None) => break,
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            assert!(buf.len() <= bytes.len());
+            if failed {
+                assert!(conn.poll(&mut buf, &mut out).is_err(), "failure is sticky");
+            }
+        }
+    }
+
+    fn drive_server(conn: &mut ServerConn, bytes: &[u8], cuts: &[usize]) {
+        let (mut buf, mut out) = (BytesMut::new(), Vec::new());
+        let mut failed = false;
+        let mut start = 0;
+        for end in cuts
+            .iter()
+            .map(|c| c % (bytes.len() + 1))
+            .chain([bytes.len()])
+            .scan(0, |hi, c| {
+                *hi = c.max(*hi);
+                Some(*hi)
+            })
+        {
+            buf.extend_from_slice(&bytes[start..end]);
+            start = end;
+            loop {
+                match conn.poll(&mut buf, &mut out) {
+                    Ok(Some(_)) => assert!(!failed, "event after failure"),
+                    Ok(None) => break,
+                    Err(_) => {
+                        failed = true;
+                        break;
+                    }
+                }
+            }
+            if failed {
+                assert!(conn.poll(&mut buf, &mut out).is_err(), "failure is sticky");
+            }
+        }
+    }
+
+    fn bytes() -> impl Strategy<Value = Vec<u8>> {
+        prop::collection::vec(any::<u8>(), 0..400)
+    }
+
+    fn cuts() -> impl Strategy<Value = Vec<usize>> {
+        prop::collection::vec(any::<usize>(), 0..6)
+    }
+
+    fn pixel_format() -> impl Strategy<Value = PixelFormat> {
+        prop_oneof![Just(8u8), Just(16), Just(32)].prop_map(|bpp| PixelFormat {
+            bits_per_pixel: bpp,
+            depth: bpp.min(24),
+            ..PixelFormat::RGB888
+        })
+    }
+
+    proptest! {
+        /// Random bytes straight into a fresh connection: the handshake parsers.
+        #[test]
+        fn fresh_conns_survive_garbage(input in bytes(), cuts in cuts()) {
+            drive_client(&mut ClientConn::new(ClientConfig::default()), &input, &cuts);
+            let mut out = Vec::new();
+            drive_server(&mut ServerConn::new(ServerConfig::default(), &mut out), &input, &cuts);
+        }
+
+        /// Random bytes after a good handshake: the message and rectangle parsers.
+        #[test]
+        fn established_conns_survive_garbage(input in bytes(), cuts in cuts()) {
+            let mut p = Pair::new(V::V3_8, security::NONE);
+            p.handshake();
+            drive_client(&mut p.client, &input, &cuts);
+            let mut p = Pair::new(V::V3_8, security::NONE);
+            p.handshake();
+            drive_server(&mut p.server, &input, &cuts);
+        }
+
+        /// Garbage that starts like an update reaches the framers.
+        #[test]
+        fn updates_with_garbage_rects_survive(
+            encoding in prop_oneof![
+                Just(enc::RAW), Just(enc::COPY_RECT), Just(enc::RRE), Just(enc::CO_RRE),
+                Just(enc::HEXTILE), Just(enc::ZLIB), Just(enc::ZRLE), Just(pseudo::CURSOR),
+                Just(pseudo::DESKTOP_SIZE), Just(pseudo::LAST_RECT), any::<i32>(),
+            ],
+            rect in any::<[u16; 4]>(),
+            body in bytes(),
+            cuts in cuts(),
+        ) {
+            let mut stream = Vec::new();
+            ServerMessage::UpdateBegin { rects: 1 }.write(&mut stream).unwrap();
+            let header = RectHeader {
+                rect: Rect { x: rect[0], y: rect[1], width: rect[2], height: rect[3] },
+                encoding,
+            };
+            stream.extend_from_slice(&header.to_bytes());
+            stream.extend_from_slice(&body);
+            let mut p = Pair::new(V::V3_8, security::NONE);
+            p.handshake();
+            drive_client(&mut p.client, &stream, &cuts);
+        }
+
+        #[test]
+        fn framers_never_overreach(
+            encoding in prop_oneof![
+                Just(enc::RAW), Just(enc::COPY_RECT), Just(enc::RRE), Just(enc::CO_RRE),
+                Just(enc::HEXTILE), Just(enc::ZLIB), Just(enc::ZRLE), Just(pseudo::CURSOR),
+                any::<i32>(),
+            ],
+            rect in any::<[u16; 4]>(),
+            pf in pixel_format(),
+            body in bytes(),
+        ) {
+            let header = RectHeader {
+                rect: Rect { x: rect[0], y: rect[1], width: rect[2], height: rect[3] },
+                encoding,
+            };
+            match framing::frame(&header, &pf, &body) {
+                Ok(n) => prop_assert!(n <= body.len()),
+                Err(ProtoError::NeedMore(n)) => prop_assert!(n > 0),
+                Err(_) => {}
+            }
+        }
+
+        /// Whatever `send_update` accepts, the client reads back unchanged.
+        #[test]
+        fn accepted_updates_round_trip(
+            rects in prop::collection::vec(
+                (0u16..W, 0u16..H, 0u16..8, 0u16..8, any::<u8>()), 0..6),
+        ) {
+            let mut p = Pair::new(V::V3_8, security::NONE);
+            p.handshake();
+            let payloads: Vec<Vec<u8>> = rects
+                .iter()
+                .map(|&(x, y, w, h, fill)| {
+                    let w = w.min(W - x);
+                    let h = h.min(H - y);
+                    vec![fill; usize::from(w) * usize::from(h) * 4]
+                })
+                .collect();
+            let encoded: Vec<EncodedRect<'_>> = rects
+                .iter()
+                .zip(&payloads)
+                .map(|(&(x, y, w, h, _), payload)| EncodedRect {
+                    header: hdr(enc::RAW, x, y, w.min(W - x), h.min(H - y)),
+                    payload,
+                })
+                .collect();
+            let mut out = Vec::new();
+            p.server.send_update(&encoded, &mut out).unwrap();
+            p.to_client.extend_from_slice(&out);
+            let events = p.client_events();
+            prop_assert_eq!(events.len(), encoded.len() + 2);
+            for (ev, want) in events[1..].iter().zip(&encoded) {
+                prop_assert_eq!(
+                    ev,
+                    &ClientConnEvent::Rect {
+                        header: want.header,
+                        payload: Bytes::copy_from_slice(want.payload),
+                    }
+                );
+            }
+        }
+    }
+}
