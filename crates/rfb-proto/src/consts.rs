@@ -133,6 +133,10 @@ pub mod limits {
     pub const MAX_EXT_CLIPBOARD_INFLATED: u32 = 16 * 1024 * 1024;
     pub const MAX_FENCE_PAYLOAD: u8 = 64;
     pub const MAX_SCREENS: u8 = 255;
+    /// Largest single rectangle payload the framers will wait for. Bounds
+    /// buffering when a peer announces a huge Raw or length-prefixed rect.
+    /// Not from the spec; a Raw 5120 x 5120 x 32 bpp rect (100 MB) fits.
+    pub const MAX_RECT_PAYLOAD: u32 = 128 * 1024 * 1024;
 }
 
 #[cfg(test)]
