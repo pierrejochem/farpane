@@ -17,6 +17,7 @@ rfb-proto.workspace = true
 rfb-codec.workspace = true
 rfb-security.workspace = true
 rfb-tokio.workspace = true
+farpane-grab.workspace = true
 farpane-ui.workspace = true
 tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time", "sync"] }
 png = "0.18.1"

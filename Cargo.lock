@@ -802,6 +802,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui-wgpu",
+ "farpane-grab",
  "farpane-ui",
  "png",
  "rcgen",

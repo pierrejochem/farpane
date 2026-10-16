@@ -4,6 +4,7 @@
 
 pub mod app;
 pub mod appearance;
+pub mod capture;
 pub mod clipboard;
 pub mod core;
 pub mod input;

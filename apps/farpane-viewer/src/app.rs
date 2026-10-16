@@ -10,6 +10,7 @@ use egui::{
     Align, Color32, ColorImage, Context, CursorIcon, EventFilter, Frame, Key, Layout, Margin,
     RichText, Sense, TextEdit, TextureHandle, TextureOptions, UserData, ViewportCommand, vec2,
 };
+use farpane_grab::GrabState;
 use farpane_ui::{Accent, ThemePreference, Tokens, style};
 use rfb_codec::Cursor;
 use rfb_proto::types::Rect;
@@ -17,6 +18,7 @@ use rfb_security::tls::{CertProblem, Fingerprint, format_fingerprint};
 
 use crate::{
     appearance,
+    capture::{CapturePref, ChordTracker, Grabber, Situation, should_capture},
     clipboard::{self, ClipboardError},
     core::{Command, Core, UiEvent},
     input::{Canvas, KeyTranslator, PointerTranslator},
@@ -122,6 +124,18 @@ pub struct ViewerApp {
     /// Copy text between the local and the remote clipboard.
     clipboard_sync: bool,
     toolbar: Toolbar,
+    /// The keyboard grabber, created on the first frame of a real window (or
+    /// injected by tests).
+    grab: Option<Box<dyn Grabber>>,
+    grab_tried: bool,
+    /// Why capture cannot work here, if it cannot.
+    grab_unavailable: Option<String>,
+    grab_state: GrabState,
+    capture_pref: CapturePref,
+    /// The user let go of the keyboard with the release chord.
+    released_by_user: bool,
+    chord: ChordTracker,
+    was_capturing: bool,
     stats_visible: bool,
     stats: Option<Snapshot>,
     /// Received bytes per second, one value per reading, oldest first.
@@ -167,6 +181,7 @@ impl ViewerApp {
         let auto = startup.addr.clone();
         let (store, settings_warning) = Store::load(startup.settings_path.clone());
         let look = store.settings.appearance.clone();
+        let input = store.settings.input.clone();
         let mut app = Self {
             core,
             phase: Phase::Home,
@@ -191,6 +206,14 @@ impl ViewerApp {
                 pinned: startup.pin_toolbar,
                 ..Toolbar::default()
             },
+            grab: None,
+            grab_tried: false,
+            grab_unavailable: None,
+            grab_state: GrabState::Released,
+            capture_pref: CapturePref::from_key(&input.capture),
+            released_by_user: false,
+            chord: ChordTracker::default(),
+            was_capturing: false,
             stats_visible: startup.show_stats,
             stats: None,
             rx_history: VecDeque::new(),
@@ -326,6 +349,7 @@ impl ViewerApp {
         if self.stats_visible && self.is_connected() {
             self.stats_overlay(ctx, &tokens);
         }
+        self.sync_grab(ctx);
         self.trust_window(ctx, &tokens);
         self.settings_window(ctx);
         self.toast(ctx, &tokens);
@@ -551,8 +575,12 @@ impl ViewerApp {
             interface_size: self.interface_size,
             reduce_transparency: self.reduce_transparency,
         };
-        if now != self.store.settings.appearance {
+        let input = settings::Input {
+            capture: self.capture_pref.key().to_owned(),
+        };
+        if now != self.store.settings.appearance || input != self.store.settings.input {
             self.store.settings.appearance = now;
+            self.store.settings.input = input;
             self.persist();
         }
     }
@@ -596,7 +624,128 @@ impl ViewerApp {
     }
 
     fn say(&mut self, message: String) {
-        self.notice = Some((message, Instant::now() + Duration::from_secs(5)));
+        self.say_for(message, Duration::from_secs(5));
+    }
+
+    fn say_for(&mut self, message: String, how_long: Duration) {
+        self.notice = Some((message, Instant::now() + how_long));
+    }
+
+    /// Use `grabber` for keyboard capture (the real one is created from the
+    /// window on the first frame; tests inject a fake).
+    pub fn set_grabber(&mut self, grabber: Box<dyn Grabber>) {
+        self.grab = Some(grabber);
+        self.grab_tried = true;
+    }
+
+    /// The user's capture setting.
+    #[must_use]
+    pub fn capture_pref(&self) -> CapturePref {
+        self.capture_pref
+    }
+
+    /// Change the capture setting (saved with the next frame).
+    pub fn set_capture_pref(&mut self, pref: CapturePref) {
+        self.capture_pref = pref;
+        self.released_by_user = false;
+    }
+
+    /// Whether the keyboard is being captured, as far as the windowing system
+    /// has confirmed.
+    #[must_use]
+    pub fn grab_state(&self) -> &GrabState {
+        &self.grab_state
+    }
+
+    /// Whether the user gave the keyboard back with the release chord and has
+    /// not taken it again.
+    #[must_use]
+    pub fn released_by_user(&self) -> bool {
+        self.released_by_user
+    }
+
+    /// Try to create the real grabber from the window (once).
+    fn ensure_grabber(&mut self, frame: &eframe::Frame) {
+        if self.grab.is_some() || self.grab_tried {
+            return;
+        }
+        self.grab_tried = true;
+        match farpane_grab::KeyboardGrab::from_window(frame) {
+            Ok(grab) => self.grab = Some(Box::new(grab)),
+            Err(e) => self.grab_unavailable = Some(e.to_string()),
+        }
+    }
+
+    /// Decide whether the keyboard should be captured now, tell the grabber,
+    /// and handle the release chord and the hints.
+    fn sync_grab(&mut self, ctx: &Context) {
+        let (focused, mods, other_key) = ctx.input(|i| {
+            (
+                i.focused,
+                i.modifiers,
+                i.events
+                    .iter()
+                    .any(|e| matches!(e, egui::Event::Key { pressed: true, .. })),
+            )
+        });
+        if self.chord.update(mods, other_key) && self.was_capturing {
+            self.released_by_user = true;
+            self.say("Keyboard released. Click the picture to capture it again.".to_owned());
+        }
+        let wanted = should_capture(Situation {
+            connected: self.is_connected(),
+            window_focused: focused,
+            fullscreen: self.fullscreen,
+            pref: self.capture_pref,
+            released_by_user: self.released_by_user,
+        });
+        if let Some(grab) = &mut self.grab {
+            grab.set_wanted(wanted);
+            let state = grab.poll();
+            if let (true, GrabState::Failed(why)) = (wanted, &state) {
+                if self.grab_state != state {
+                    let message = format!("Could not capture the keyboard: {why}");
+                    self.say(message);
+                }
+            }
+            self.grab_state = state;
+        } else if wanted && !self.was_capturing {
+            if let Some(why) = self.grab_unavailable.clone() {
+                self.say(format!("Keyboard capture is not available: {why}"));
+            }
+        }
+        if wanted
+            && !self.was_capturing
+            && self.grab.is_some()
+            && matches!(self.grab_state, GrabState::Requested | GrabState::Active)
+        {
+            self.say_for(
+                "Keyboard captured. Press and release Ctrl+Alt+Shift to give it back.".to_owned(),
+                Duration::from_secs(6),
+            );
+        }
+        self.was_capturing = wanted;
+    }
+
+    /// Whether capture is wanted at the moment, for the controls.
+    fn capture_wanted(&self) -> bool {
+        self.was_capturing
+    }
+
+    /// A short status for the controls: what the keyboard is doing.
+    fn capture_status(&self) -> String {
+        match (&self.grab, &self.grab_state) {
+            (None, _) => match &self.grab_unavailable {
+                Some(why) => format!("Not available: {why}"),
+                None => "Not available".to_owned(),
+            },
+            (Some(_), GrabState::Active) => "System keys go to the remote machine".to_owned(),
+            (Some(_), GrabState::Requested) => "Waiting for the system to confirm".to_owned(),
+            (Some(_), GrabState::Failed(why)) => format!("Failed: {why}"),
+            (Some(g), GrabState::Released) => {
+                format!("Off ({} backend); system shortcuts stay local", g.backend())
+            }
+        }
     }
 
     /// Send the local clipboard text to the remote machine (on paste).
@@ -721,6 +870,19 @@ impl ViewerApp {
                             }
                             ui.toggle_value(&mut self.stats_visible, "Stats")
                                 .on_hover_text("Ctrl+Alt+Shift+S");
+                            let mut capturing = self.capture_wanted();
+                            let status = self.capture_status();
+                            if ui
+                                .toggle_value(&mut capturing, "Capture keys")
+                                .on_hover_text(status)
+                                .changed()
+                            {
+                                self.set_capture_pref(if capturing {
+                                    CapturePref::Always
+                                } else {
+                                    CapturePref::Never
+                                });
+                            }
                         }
                     });
                 });
@@ -728,6 +890,7 @@ impl ViewerApp {
     }
 
     /// The slim tab and the pill of controls, drawn over the picture.
+    #[allow(clippy::too_many_lines)] // one layout, easier to read whole
     fn toolbar_overlay(&mut self, ctx: &Context, tokens: &Tokens) {
         // Over the remote picture the panels must be opaque, or the text is
         // unreadable: use the "reduce transparency" variant of the tokens.
@@ -810,6 +973,19 @@ impl ViewerApp {
                                 }
                                 ui.checkbox(&mut self.clipboard_sync, "Clipboard");
                                 ui.toggle_value(&mut self.stats_visible, "Stats");
+                                let mut capturing = self.capture_wanted();
+                                let status = self.capture_status();
+                                if ui
+                                    .toggle_value(&mut capturing, "Capture keys")
+                                    .on_hover_text(status)
+                                    .changed()
+                                {
+                                    self.set_capture_pref(if capturing {
+                                        CapturePref::Always
+                                    } else {
+                                        CapturePref::Never
+                                    });
+                                }
                                 ui.toggle_value(&mut self.toolbar.pinned, "Pin");
                                 ui.separator();
                                 if ui.button("Exit full screen").clicked() {
@@ -1232,6 +1408,14 @@ impl ViewerApp {
                         ui.label("Reduce transparency");
                         ui.checkbox(&mut self.reduce_transparency, "Solid panels");
                         ui.end_row();
+                        ui.label("Capture keyboard");
+                        ui.horizontal(|ui| {
+                            for pref in [CapturePref::Auto, CapturePref::Always, CapturePref::Never]
+                            {
+                                ui.selectable_value(&mut self.capture_pref, pref, pref.label());
+                            }
+                        });
+                        ui.end_row();
                     });
             });
         self.settings_open = open;
@@ -1271,6 +1455,7 @@ impl ViewerApp {
                 }
                 if response.clicked() {
                     response.request_focus();
+                    self.released_by_user = false;
                 }
                 self.draw_cursor(ctx, &response, &canvas);
                 self.forward_input(ctx, &response, &canvas);
@@ -1447,7 +1632,8 @@ fn save_screenshot(
 }
 
 impl eframe::App for ViewerApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &Context, frame: &mut eframe::Frame) {
+        self.ensure_grabber(frame);
         self.ui(ctx);
     }
 }
