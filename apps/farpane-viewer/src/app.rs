@@ -1,6 +1,7 @@
 //! The egui window: home screen, session canvas, top bar.
 
 use std::{
+    collections::VecDeque,
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -19,6 +20,7 @@ use crate::{
     core::{Command, Core, UiEvent},
     input::{Canvas, KeyTranslator, PointerTranslator},
     settings::{self, Store},
+    stats::{self, Snapshot},
 };
 
 /// What the command line asked for.
@@ -33,10 +35,15 @@ pub struct Startup {
     pub fullscreen: bool,
     /// Keep the full-screen toolbar open and pinned (for screenshots).
     pub pin_toolbar: bool,
+    /// Start with the statistics overlay shown.
+    pub show_stats: bool,
     /// Where settings are kept. `None` means nothing is read or written
     /// (tests); the binary passes [`settings::default_path`].
     pub settings_path: Option<PathBuf>,
 }
+
+/// Samples kept for the bandwidth graph: 60 s at four readings a second.
+const HISTORY_LEN: usize = 240;
 
 /// Width of an address book card, in points.
 const CARD_WIDTH: f32 = 220.0;
@@ -102,6 +109,10 @@ pub struct ViewerApp {
     /// Copy text between the local and the remote clipboard.
     clipboard_sync: bool,
     toolbar: Toolbar,
+    stats_visible: bool,
+    stats: Option<Snapshot>,
+    /// Received bytes per second, one value per reading, oldest first.
+    rx_history: VecDeque<f32>,
     /// Whether the window was in full screen at the last frame.
     fullscreen: bool,
     /// A short message for the top bar, with the time it expires.
@@ -165,6 +176,9 @@ impl ViewerApp {
                 pinned: startup.pin_toolbar,
                 ..Toolbar::default()
             },
+            stats_visible: startup.show_stats,
+            stats: None,
+            rx_history: VecDeque::new(),
             fullscreen: startup.fullscreen,
             notice: None,
             texture: None,
@@ -198,6 +212,29 @@ impl ViewerApp {
     #[must_use]
     pub fn remote_size(&self) -> (u16, u16) {
         self.remote_size
+    }
+
+    /// Show or hide the statistics overlay.
+    pub fn set_stats_visible(&mut self, visible: bool) {
+        self.stats_visible = visible;
+    }
+
+    /// Whether the statistics overlay is shown.
+    #[must_use]
+    pub fn stats_visible(&self) -> bool {
+        self.stats_visible
+    }
+
+    /// The latest statistics reading, once the connection has produced one.
+    #[must_use]
+    pub fn stats(&self) -> Option<&Snapshot> {
+        self.stats.as_ref()
+    }
+
+    /// Readings in the bandwidth graph.
+    #[must_use]
+    pub fn history_len(&self) -> usize {
+        self.rx_history.len()
     }
 
     /// Turn clipboard sharing on or off.
@@ -234,6 +271,10 @@ impl ViewerApp {
         if ctx.input(|i| i.key_pressed(Key::F11)) {
             self.set_fullscreen(ctx, !self.fullscreen);
         }
+        // Ctrl+Alt+Shift+S toggles the statistics, locally.
+        if ctx.input(is_stats_hotkey) {
+            self.stats_visible = !self.stats_visible;
+        }
         self.drain_events(ctx);
         let title = match &self.phase {
             Phase::Connected { name } => format!("{name} — Farpane Viewer"),
@@ -250,6 +291,9 @@ impl ViewerApp {
         }
         if immersive {
             self.toolbar_overlay(ctx, &tokens);
+        }
+        if self.stats_visible && self.is_connected() {
+            self.stats_overlay(ctx, &tokens);
         }
         self.settings_window(ctx);
         self.toast(ctx, &tokens);
@@ -361,7 +405,15 @@ impl ViewerApp {
                         }
                     }
                 }
-                UiEvent::Stats(_) | UiEvent::Bell => {}
+                UiEvent::Stats(snapshot) => {
+                    if self.rx_history.len() == HISTORY_LEN {
+                        self.rx_history.pop_front();
+                    }
+                    #[allow(clippy::cast_possible_truncation)] // a graph needs no more precision
+                    self.rx_history.push_back(snapshot.rx_per_sec as f32);
+                    self.stats = Some(snapshot);
+                }
+                UiEvent::Bell => {}
                 UiEvent::Disconnected(reason) => {
                     self.phase = Phase::Home;
                     if self.fullscreen {
@@ -370,6 +422,8 @@ impl ViewerApp {
                     self.error = reason;
                     self.texture = None;
                     self.cursor = None;
+                    self.stats = None;
+                    self.rx_history.clear();
                     self.connected_at = None;
                     self.release_input();
                 }
@@ -589,6 +643,8 @@ impl ViewerApp {
                             if ui.button(label).clicked() {
                                 self.one_to_one = !self.one_to_one;
                             }
+                            ui.toggle_value(&mut self.stats_visible, "Stats")
+                                .on_hover_text("Ctrl+Alt+Shift+S");
                         }
                     });
                 });
@@ -677,6 +733,7 @@ impl ViewerApp {
                                     self.one_to_one = !self.one_to_one;
                                 }
                                 ui.checkbox(&mut self.clipboard_sync, "Clipboard");
+                                ui.toggle_value(&mut self.stats_visible, "Stats");
                                 ui.toggle_value(&mut self.toolbar.pinned, "Pin");
                                 ui.separator();
                                 if ui.button("Exit full screen").clicked() {
@@ -692,6 +749,71 @@ impl ViewerApp {
         } else {
             self.toolbar.rect = None;
         }
+    }
+
+    /// The statistics card in the top-right corner of the picture.
+    fn stats_overlay(&self, ctx: &Context, tokens: &Tokens) {
+        let tokens = &tokens.reduce_transparency();
+        // Below the top bar in a window; clear of the toolbar tab in full screen.
+        let top = if self.fullscreen { 16.0 } else { 52.0 };
+        egui::Area::new(egui::Id::new("stats-overlay"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::RIGHT_TOP, vec2(-12.0, top))
+            .interactable(false)
+            .show(ctx, |ui| {
+                Frame::NONE
+                    .fill(tokens.card.into())
+                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                    .corner_radius(style::radius(tokens.radius / 2.0))
+                    .inner_margin(Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_min_width(200.0);
+                        let Some(s) = &self.stats else {
+                            ui.label(RichText::new("Waiting for data…").color(tokens.muted));
+                            return;
+                        };
+                        let (w, h) = self.remote_size;
+                        ui.label(
+                            RichText::new(format!(
+                                "{:.0} fps   in {}   out {}",
+                                s.updates_per_sec,
+                                stats::format_rate(s.rx_per_sec),
+                                stats::format_rate(s.tx_per_sec)
+                            ))
+                            .strong(),
+                        );
+                        let mix = stats::pixel_mix(s, 3)
+                            .into_iter()
+                            .map(|(e, pct)| format!("{} {pct}%", stats::encoding_name(e)))
+                            .collect::<Vec<_>>()
+                            .join("  ");
+                        let mix = if mix.is_empty() {
+                            "no pixel data yet".to_owned()
+                        } else {
+                            mix
+                        };
+                        ui.label(RichText::new(format!("{w}×{h}   {mix}")).color(tokens.muted));
+                        ui.add_space(4.0);
+                        let history: Vec<f32> = self.rx_history.iter().copied().collect();
+                        farpane_ui::widgets::sparkline(
+                            ui,
+                            &history,
+                            vec2(200.0, 30.0),
+                            HISTORY_LEN,
+                            None,
+                            Color32::from(tokens.accent_text),
+                        );
+                        ui.label(
+                            RichText::new(format!(
+                                "received {}   sent {}",
+                                stats::format_bytes(precise(s.total_rx)),
+                                stats::format_bytes(precise(s.total_tx))
+                            ))
+                            .color(tokens.muted)
+                            .size(11.0),
+                        );
+                    });
+            });
     }
 
     /// A short-lived message at the bottom of the window.
@@ -1021,7 +1143,11 @@ impl ViewerApp {
                 i.focused,
             )
         });
-        events.retain(|e| !matches!(e, egui::Event::Key { key: Key::F11, .. }));
+        events.retain(|e| {
+            !matches!(e, egui::Event::Key { key: Key::F11, .. })
+                && !matches!(e, egui::Event::Key { key: Key::S, modifiers, .. }
+                    if modifiers.ctrl && modifiers.alt && modifiers.shift)
+        });
         // egui-winit reports focus changes both as a flag and as an event; the
         // last event of the frame wins.
         let focused = events
@@ -1098,6 +1224,17 @@ impl ViewerApp {
         }
         ctx.request_repaint_after(Duration::from_millis(100));
     }
+}
+
+/// The Ctrl+Alt+Shift+S chord that toggles the statistics overlay.
+fn is_stats_hotkey(i: &egui::InputState) -> bool {
+    i.modifiers.ctrl && i.modifiers.alt && i.modifiers.shift && i.key_pressed(Key::S)
+}
+
+/// A byte count as `f64` for display (counts stay far below 2^52).
+#[allow(clippy::cast_precision_loss)]
+fn precise(n: u64) -> f64 {
+    n as f64
 }
 
 /// Seconds since the Unix epoch.
