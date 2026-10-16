@@ -405,6 +405,13 @@ impl PointerTranslator {
         out
     }
 
+    /// True while any button is held, so a drag that leaves the window still
+    /// delivers its release.
+    #[must_use]
+    pub fn has_buttons(&self) -> bool {
+        self.buttons != 0
+    }
+
     /// Release held buttons (focus lost, disconnect) at `(x, y)`.
     pub fn release_all(&mut self, (x, y): (u16, u16)) -> Option<PointerAction> {
         let had = std::mem::take(&mut self.buttons);
