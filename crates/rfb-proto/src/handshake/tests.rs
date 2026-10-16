@@ -249,3 +249,141 @@ fn replies_out_of_order_are_errors() {
     let mut c = ClientHandshake::new(ClientConfig::default());
     assert!(c.vnc_auth_reply(&RESPONSE, &mut out).is_err());
 }
+
+/// Server transcripts, byte for byte, one for each version. `sec` is the
+/// single security type offered.
+#[test]
+fn golden_server_transcripts() {
+    let init_tail = {
+        let mut v = vec![0x07, 0x80, 0x04, 0x38]; // 1920 x 1080
+        v.extend_from_slice(&PixelFormat::RGB888.to_bytes());
+        v.extend_from_slice(&[0, 0, 0, 4]);
+        v.extend_from_slice(b"desk");
+        v
+    };
+    let finish = |s: &mut ServerHandshake, input: &[u8], out: &mut Vec<u8>| {
+        let (n, ev) = s.poll(input, out).unwrap();
+        assert_eq!((n, ev), (1, Some(ServerEvent::ClientInit { shared: true })));
+        s.server_init(1920, 1080, &PixelFormat::RGB888, b"desk", out)
+            .unwrap();
+        assert!(s.is_done());
+    };
+
+    // 3.8, None: version, [count, types], SecurityResult OK, ServerInit.
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(
+        ServerConfig {
+            max_version: V::V3_8,
+            security: vec![security::NONE],
+        },
+        &mut out,
+    );
+    assert_eq!(s.poll(b"RFB 003.008\n\x01", &mut out).unwrap(), (13, None));
+    finish(&mut s, &[1], &mut out);
+    let mut want = b"RFB 003.008\n\x01\x01\x00\x00\x00\x00".to_vec();
+    want.extend_from_slice(&init_tail);
+    assert_eq!(out, want);
+
+    // 3.7, None: no SecurityResult.
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(
+        ServerConfig {
+            max_version: V::V3_8,
+            security: vec![security::NONE],
+        },
+        &mut out,
+    );
+    assert_eq!(s.poll(b"RFB 003.007\n\x01", &mut out).unwrap(), (13, None));
+    finish(&mut s, &[1], &mut out);
+    let mut want = b"RFB 003.008\n\x01\x01".to_vec();
+    want.extend_from_slice(&init_tail);
+    assert_eq!(out, want);
+
+    // 3.3, None: server picks, U32 security type 1, no SecurityResult.
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(
+        ServerConfig {
+            max_version: V::V3_8,
+            security: vec![security::NONE],
+        },
+        &mut out,
+    );
+    assert_eq!(s.poll(b"RFB 003.003\n", &mut out).unwrap(), (12, None));
+    finish(&mut s, &[1], &mut out);
+    let mut want = b"RFB 003.008\n\x00\x00\x00\x01".to_vec();
+    want.extend_from_slice(&init_tail);
+    assert_eq!(out, want);
+
+    // 3.8, VNC Auth: challenge out, response in, SecurityResult OK.
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(ServerConfig::default(), &mut out);
+    let (n, ev) = s.poll(b"RFB 003.008\n\x02", &mut out).unwrap();
+    assert_eq!((n, ev), (13, Some(ServerEvent::VncAuthSelected)));
+    s.send_challenge(&CHALLENGE, &mut out).unwrap();
+    let (n, ev) = s.poll(&RESPONSE, &mut out).unwrap();
+    assert_eq!((n, ev), (16, Some(ServerEvent::VncAuthResponse(RESPONSE))));
+    s.security_result(true, b"", &mut out).unwrap();
+    let mut want = b"RFB 003.008\n\x01\x02".to_vec();
+    want.extend_from_slice(&CHALLENGE);
+    want.extend_from_slice(&[0, 0, 0, 0]);
+    assert_eq!(out, want);
+
+    // 3.8 failure carries a reason, 3.7 does not.
+    let mut out = Vec::new();
+    let mut s = ServerHandshake::new(ServerConfig::default(), &mut out);
+    s.poll(b"RFB 003.008\n\x02", &mut out).unwrap();
+    s.send_challenge(&CHALLENGE, &mut out).unwrap();
+    s.poll(&RESPONSE, &mut out).unwrap();
+    out.clear();
+    s.security_result(false, b"no", &mut out).unwrap();
+    assert_eq!(out, [0, 0, 0, 1, 0, 0, 0, 2, b'n', b'o']);
+    let mut s = ServerHandshake::new(ServerConfig::default(), &mut Vec::new());
+    s.poll(b"RFB 003.007\n\x02", &mut out).unwrap();
+    s.send_challenge(&CHALLENGE, &mut out).unwrap();
+    s.poll(&RESPONSE, &mut out).unwrap();
+    out.clear();
+    s.security_result(false, b"no", &mut out).unwrap();
+    assert_eq!(out, [0, 0, 0, 1]);
+}
+
+/// Client transcripts for 3.3 and 3.7, byte for byte.
+#[test]
+fn golden_client_transcripts_3_3_and_3_7() {
+    let server_init = {
+        let mut v = vec![0x07, 0x80, 0x04, 0x38];
+        v.extend_from_slice(&PixelFormat::RGB888.to_bytes());
+        v.extend_from_slice(&[0, 0, 0, 4]);
+        v.extend_from_slice(b"desk");
+        v
+    };
+
+    // 3.7, None: reply version, choose 1, ClientInit at once.
+    let mut c = ClientHandshake::new(ClientConfig::default());
+    let mut out = Vec::new();
+    let mut input = b"RFB 003.007\n\x01\x01".to_vec();
+    input.extend_from_slice(&server_init);
+    let (n, ev) = c.poll(&input, &mut out).unwrap();
+    assert_eq!(n, input.len());
+    assert!(matches!(ev, Some(ClientEvent::ServerInit { .. })));
+    assert_eq!(out, b"RFB 003.007\n\x01\x01");
+
+    // 3.3, VNC Auth: security type is a server-chosen U32; no selection byte.
+    let mut c = ClientHandshake::new(ClientConfig::default());
+    let mut out = Vec::new();
+    let mut input = b"RFB 003.003\n\x00\x00\x00\x02".to_vec();
+    input.extend_from_slice(&CHALLENGE);
+    let (n, ev) = c.poll(&input, &mut out).unwrap();
+    assert_eq!(
+        (n, ev),
+        (input.len(), Some(ClientEvent::VncAuthChallenge(CHALLENGE)))
+    );
+    c.vnc_auth_reply(&RESPONSE, &mut out).unwrap();
+    let mut input = vec![0, 0, 0, 0]; // SecurityResult OK
+    input.extend_from_slice(&server_init);
+    let (_, ev) = c.poll(&input, &mut out).unwrap();
+    assert!(matches!(ev, Some(ClientEvent::ServerInit { .. })));
+    let mut want = b"RFB 003.003\n".to_vec();
+    want.extend_from_slice(&RESPONSE);
+    want.push(1);
+    assert_eq!(out, want);
+}

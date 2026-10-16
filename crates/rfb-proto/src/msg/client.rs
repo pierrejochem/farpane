@@ -180,9 +180,9 @@ mod tests {
 
     use super::*;
 
-    /// Golden vectors: (message, exact wire bytes). Layouts checked against
-    /// rfbproto.rst: SetPixelFormat, SetEncodings, FramebufferUpdateRequest,
-    /// KeyEvent, PointerEvent and ClientCutText sections (2026-10-16).
+    // Golden vectors: (message, exact wire bytes). Layouts checked against
+    // rfbproto.rst: SetPixelFormat, SetEncodings, FramebufferUpdateRequest,
+    // KeyEvent, PointerEvent and ClientCutText sections (2026-10-16).
     fn vectors() -> Vec<(ClientMessage, Vec<u8>)> {
         let mut set_pf = vec![0, 0, 0, 0];
         set_pf.extend_from_slice(&PixelFormat::RGB888.to_bytes());
