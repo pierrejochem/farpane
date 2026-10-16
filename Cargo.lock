@@ -1444,6 +1444,7 @@ dependencies = [
  "rfb-proto",
  "rfb-server",
  "tokio",
+ "x11rb 0.14.0",
 ]
 
 [[package]]
