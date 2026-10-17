@@ -56,6 +56,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
                          unless ADDR is on this computer (loopback)
   --ws-origin ORIGIN     web page allowed to use the WebSocket port (repeatable, `*` for
                          any; default: pages served from the same host)
+  --h264                 offer H.264 to clients that ask for it (needs `farpane-server h264 install`)
   --require-approval     hold each new client until you allow it in the dashboard
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
@@ -65,6 +66,9 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
 
 Settings saved by the dashboard's Security page (server.toml in the config
 folder) apply unless an option here says otherwise.
+
+H.264 (--h264, or the Security page) needs Cisco's OpenH264 library, which is
+not part of Farpane: `farpane-server h264 install` downloads it from Cisco.
 
 Users (farpane-server user add NAME) sign in with name and password inside
 TLS and have a role: admin, control or view. Passwords are never taken from
@@ -79,6 +83,8 @@ struct Args {
     max_connections: Option<usize>,
     theme: Option<farpane_ui::ThemePreference>,
     require_approval: bool,
+    /// Offer H.264 to clients that ask for it.
+    h264: bool,
     /// Also accept WebSocket connections (browsers) here.
     ws: Option<SocketAddr>,
     ws_given: bool,
@@ -127,6 +133,7 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
         max_connections: None,
         theme: None,
         require_approval: false,
+        h264: false,
         ws: None,
         ws_given: false,
         ws_origins: Vec::new(),
@@ -165,6 +172,7 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
                     .map_err(|_| "--ui-delay: seconds")?;
             }
             "--require-approval" => args.require_approval = true,
+            "--h264" => args.h264 = true,
             "--ws" => {
                 args.ws = Some(
                     value(&mut it, "--ws")?
@@ -278,6 +286,7 @@ fn merge_settings(mut args: Args, saved: &ServerSettings) -> Result<Args, String
     args.ra2 |= saved.ra2;
     args.view_only |= saved.view_only;
     args.require_approval |= saved.require_approval;
+    args.h264 |= saved.h264;
     if !args.ws_given {
         args.ws = match &saved.websocket {
             Some(ws) => Some(
@@ -450,6 +459,69 @@ fn note(events: &EventLog, level: Level, text: &str) {
     events.push(level, text);
 }
 
+/// The H.264 codec, when it is switched on: Cisco's `OpenH264` library from the
+/// config folder.
+fn video_codec(
+    args: &Args,
+    config_dir: &std::path::Path,
+) -> Result<Option<Arc<dyn rfb_codec::video::VideoCodec>>, String> {
+    if !args.h264 {
+        return Ok(None);
+    }
+    let dir = farpane_h264::library_dir(config_dir);
+    match farpane_h264::OpenH264::open(&dir).map_err(|e| e.to_string())? {
+        Some(codec) => Ok(Some(Arc::new(codec))),
+        None => Err(format!(
+            "H.264 needs Cisco's OpenH264 library, which is not in {}. Download it with \
+             `farpane-server h264 install`.",
+            dir.display()
+        )),
+    }
+}
+
+/// `farpane-server h264 install | status [--config-dir DIR]`.
+fn h264_command() -> ExitCode {
+    let mut words: Vec<String> = std::env::args().skip(2).collect();
+    let config_dir = match words.iter().position(|w| w == "--config-dir") {
+        Some(i) if i + 1 < words.len() => {
+            words.remove(i);
+            PathBuf::from(words.remove(i))
+        }
+        _ => config::default_config_dir(),
+    };
+    let dir = farpane_h264::library_dir(&config_dir);
+    match words.first().map(String::as_str) {
+        Some("status") => {
+            match farpane_h264::OpenH264::open(&dir) {
+                Ok(Some(_)) => println!("OpenH264 is installed in {}", dir.display()),
+                Ok(None) => println!(
+                    "OpenH264 is not installed (it would go in {}): run `farpane-server h264 install`",
+                    dir.display()
+                ),
+                Err(e) => println!("OpenH264 is in {} but {e}", dir.display()),
+            }
+            ExitCode::SUCCESS
+        }
+        Some("install") => {
+            println!("{}", farpane_h264::NOTICE);
+            match farpane_h264::install(&dir) {
+                Ok(path) => {
+                    println!("Installed {}", path.display());
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("farpane-server: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        _ => {
+            eprintln!("Usage: farpane-server h264 install | status [--config-dir DIR]");
+            ExitCode::from(2)
+        }
+    }
+}
+
 /// How web pages are checked on the WebSocket port.
 fn origin_policy(args: &Args) -> rfb_tokio::ws::OriginPolicy {
     use rfb_tokio::ws::OriginPolicy;
@@ -519,6 +591,11 @@ fn live_info(args: &Args, access: &config::Access, authenticated: bool) -> LiveI
                 "ws on this computer only".to_owned()
             },
             args.ws.is_some(),
+        ),
+        (
+            "H.264 video".to_owned(),
+            "Opt-in, for clients that ask; OpenH264 from Cisco".to_owned(),
+            args.h264,
         ),
         (
             "No authentication".to_owned(),
@@ -632,6 +709,10 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         server.set_max_connections(max);
     }
     server.set_require_approval(args.require_approval);
+    server.set_video(video_codec(args, &config_dir).map_err(|e| {
+        eprintln!("farpane-server: {e}");
+        ExitCode::from(2)
+    })?);
     let sink = events.clone();
     server.set_events(move |e| {
         let level = match e {
@@ -706,8 +787,10 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
 #[allow(clippy::too_many_lines)] // start-up, headless and window paths
 fn main() -> ExitCode {
     let mut raw = std::env::args().skip(1);
-    if raw.next().as_deref() == Some("user") {
-        return user_command();
+    match raw.next().as_deref() {
+        Some("user") => return user_command(),
+        Some("h264") => return h264_command(),
+        _ => {}
     }
     let (cli, args) =
         match parse().and_then(|cli| with_saved_settings(cli.clone()).map(|a| (cli, a))) {
@@ -936,6 +1019,7 @@ fn apply_live(
     server.replace_options(access.template.clone(), policy);
     server.set_view_only_for_all(args.view_only);
     server.set_require_approval(args.require_approval);
+    server.set_video(video_codec(&args, config_dir)?);
     Ok(live_info(&args, &access, authenticated))
 }
 

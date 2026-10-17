@@ -3,6 +3,7 @@
 use std::{
     collections::VecDeque,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -151,6 +152,12 @@ pub struct ViewerApp {
     session_info: Option<(String, String)>,
     /// Whether the bar under the picture is shown.
     show_footer: bool,
+    /// Ask for H.264, when Cisco's `OpenH264` library is installed.
+    h264: bool,
+    video: Option<Arc<farpane_h264::OpenH264>>,
+    /// A download of the library in progress, and the last thing to tell about it.
+    h264_installer: Option<farpane_h264::Installer>,
+    h264_note: Option<String>,
     /// The server refused a request: stop asking for this connection.
     resize_refused: bool,
     /// A size we want to ask for, and when the window first had it.
@@ -203,6 +210,7 @@ impl ViewerApp {
         let (store, settings_warning) = Store::load(startup.settings_path.clone());
         let look = store.settings.appearance.clone();
         let input = store.settings.input.clone();
+        let h264 = store.settings.video.h264;
         let mut app = Self {
             core,
             phase: Phase::Home,
@@ -239,6 +247,10 @@ impl ViewerApp {
             server_can_resize: false,
             session_info: None,
             show_footer: look.show_footer,
+            h264,
+            video: None,
+            h264_installer: None,
+            h264_note: None,
             resize_refused: false,
             resize_wanted: None,
             last_requested: None,
@@ -262,6 +274,7 @@ impl ViewerApp {
         if let Some(warning) = settings_warning {
             app.say(warning);
         }
+        app.refresh_video();
         if auto.is_some() {
             app.connect_with(app.startup_password.clone());
         }
@@ -530,6 +543,11 @@ impl ViewerApp {
         self.last_addr = self.addr.trim().to_owned();
         self.trust_prompt = None;
         let username = (!self.username.is_empty()).then(|| self.username.clone().into_bytes());
+        self.core.send(Command::SetVideo(crate::core::Video(
+            self.video
+                .clone()
+                .map(|v| v as Arc<dyn rfb_codec::video::VideoCodec>),
+        )));
         self.core.send(Command::Connect {
             addr: self.last_addr.clone(),
             password,
@@ -588,6 +606,72 @@ impl ViewerApp {
         }
         style::paint_backdrop(ctx, &tokens);
         tokens
+    }
+
+    /// Load Cisco's `OpenH264` library when H.264 is switched on and it is
+    /// installed, and say what is missing when it is not.
+    fn refresh_video(&mut self) {
+        self.video = None;
+        self.h264_note = None;
+        if !self.h264 {
+            return;
+        }
+        let Some(dir) = self.store.dir().map(|d| farpane_h264::library_dir(&d)) else {
+            self.h264_note = Some("There is no settings folder to keep the library in.".into());
+            return;
+        };
+        match farpane_h264::OpenH264::open(&dir) {
+            Ok(Some(codec)) => self.video = Some(Arc::new(codec)),
+            Ok(None) => {
+                self.h264_note = Some("OpenH264 is not installed yet.".into());
+            }
+            Err(e) => self.h264_note = Some(e.to_string()),
+        }
+    }
+
+    /// The H.264 setting: a switch, the state of the library, and the way to
+    /// download it.
+    fn h264_row(&mut self, ui: &mut egui::Ui) {
+        if let Some(done) = self
+            .h264_installer
+            .as_ref()
+            .and_then(farpane_h264::Installer::finished)
+        {
+            self.h264_installer = None;
+            self.h264_note = Some(match done {
+                Ok(_) => "Installed.".to_owned(),
+                Err(why) => format!("Could not install: {why}"),
+            });
+            self.refresh_video();
+        }
+        ui.vertical(|ui| {
+            if ui
+                .checkbox(&mut self.h264, "Ask servers for H.264")
+                .changed()
+            {
+                self.refresh_video();
+            }
+            if self.h264_installer.is_some() {
+                ui.label("Downloading OpenH264 from Cisco…");
+            } else if self.h264 && self.video.is_some() {
+                ui.label("OpenH264 is installed. It applies to the next connection.");
+            } else if let Some(note) = &self.h264_note {
+                ui.label(note);
+            }
+            if self.h264
+                && self.video.is_none()
+                && self.h264_installer.is_none()
+                && farpane_h264::platform_file().is_some()
+                && ui
+                    .button("Download OpenH264 from Cisco")
+                    .on_hover_text(farpane_h264::NOTICE)
+                    .clicked()
+            {
+                if let Some(dir) = self.store.dir().map(|d| farpane_h264::library_dir(&d)) {
+                    self.h264_installer = Some(farpane_h264::Installer::start(dir));
+                }
+            }
+        });
     }
 
     fn drain_events(&mut self, ctx: &Context) {
@@ -733,9 +817,14 @@ impl ViewerApp {
             capture: self.capture_pref.key().to_owned(),
             resize_remote: self.resize_remote,
         };
-        if now != self.store.settings.appearance || input != self.store.settings.input {
+        let video = settings::Video { h264: self.h264 };
+        if now != self.store.settings.appearance
+            || input != self.store.settings.input
+            || video != self.store.settings.video
+        {
             self.store.settings.appearance = now;
             self.store.settings.input = input;
+            self.store.settings.video = video;
             self.persist();
         }
     }
@@ -1901,6 +1990,9 @@ impl ViewerApp {
                         ui.end_row();
                         ui.label("Session footer");
                         ui.checkbox(&mut self.show_footer, "Show under the picture");
+                        ui.end_row();
+                        ui.label("H.264 video");
+                        self.h264_row(ui);
                         ui.end_row();
                         ui.label("Capture keyboard");
                         ui.horizontal(|ui| {

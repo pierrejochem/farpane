@@ -22,6 +22,7 @@ pub enum TlsMode {
 
 /// What can be saved.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[allow(clippy::struct_excessive_bools)] // independent switches
 pub struct ServerSettings {
     pub version: u32,
     /// Address and port to listen on, such as `0.0.0.0:5900`.
@@ -42,6 +43,9 @@ pub struct ServerSettings {
     /// clients), such as `0.0.0.0:5800`.
     #[serde(default)]
     pub websocket: Option<String>,
+    /// Offer H.264 to clients that ask for it (needs Cisco's `OpenH264` library).
+    #[serde(default)]
+    pub h264: bool,
 }
 
 impl Default for ServerSettings {
@@ -54,6 +58,7 @@ impl Default for ServerSettings {
             view_only: false,
             require_approval: false,
             websocket: None,
+            h264: false,
         }
     }
 }

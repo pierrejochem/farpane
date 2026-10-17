@@ -74,6 +74,14 @@ struct State {
     /// machine, so they can be let go when it leaves or is made view-only.
     held_keys: std::collections::HashSet<u32>,
     pointer: (u16, u16, u8),
+    /// The H.264 encoder of this client, once it has been sent a frame.
+    h264: Option<H264Context>,
+}
+
+/// The H.264 stream of one client: one context over the whole screen.
+struct H264Context {
+    encoder: Box<dyn rfb_codec::video::VideoEncoder>,
+    size: (u16, u16),
 }
 
 impl State {
@@ -172,6 +180,7 @@ where
         next_fence: 0,
         held_keys: std::collections::HashSet::new(),
         pointer: (0, 0, 0),
+        h264: None,
     };
     st.dirty.add(whole(size));
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -440,16 +449,34 @@ where
     let wants_size = wants_ext || encodings.contains(&pseudo::DESKTOP_SIZE);
     // The client lists its encodings by preference: take the first one we
     // can produce. Raw is understood by every client.
+    // H.264 needs a codec, and the whole screen in one request: its context
+    // is the whole picture, and a client that asks for less would get frames
+    // outside what it asked for.
+    let video = shared
+        .video
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let fb_size = {
+        let fb = shared
+            .fb
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (fb.width(), fb.height())
+    };
+    let h264_ok = video.is_some() && request == whole(fb_size) && fb_size == announced;
     let chosen = encodings
         .iter()
         .copied()
-        .find(|e| {
-            matches!(
-                *e,
+        .find(|e| match *e {
+            enc::OPEN_H264 => h264_ok,
+            other => matches!(
+                other,
                 enc::ZRLE | enc::TIGHT | enc::TRLE | enc::HEXTILE | enc::RAW
-            )
+            ),
         })
         .unwrap_or(enc::RAW);
+    let mut h264_frame: Option<(Vec<u8>, (u16, u16))> = None;
 
     // Encode under the read lock, send after releasing it.
     let (headers, payloads) = {
@@ -515,6 +542,10 @@ where
                 payloads.push(payload);
             }
         }
+        if chosen == enc::OPEN_H264 {
+            // Every frame redraws the whole picture, so scrolls need no copy.
+            st.copies.clear();
+        }
         // Scrolls first: they act on the picture as the client has it now.
         for copy in st.copies.drain(..) {
             headers.push(RectHeader {
@@ -525,7 +556,15 @@ where
             payloads.push(vec![sx[0], sx[1], sy[0], sy[1]]);
         }
         st.dirty.clip(size.0, size.1);
-        for piece in st.dirty.take_within(area) {
+        let pieces = st.dirty.take_within(area);
+        if chosen == enc::OPEN_H264 {
+            // Whatever changed, the frame is the whole picture; copy it out
+            // and encode after the lock is let go.
+            if !pieces.is_empty() {
+                h264_frame = Some((fb.pixels().to_vec(), size));
+            }
+        }
+        for piece in pieces.into_iter().filter(|_| chosen != enc::OPEN_H264) {
             // Tight rectangles are at most 2048 wide.
             let width_limit = if chosen == enc::TIGHT {
                 TIGHT_MAX_WIDTH
@@ -550,6 +589,16 @@ where
         }
         (headers, payloads)
     };
+    let (mut headers, mut payloads) = (headers, payloads);
+    if let (Some((pixels, size)), Some(codec)) = (h264_frame, video) {
+        if let Some(payload) = encode_h264(st, &*codec, &pixels, size)? {
+            headers.push(RectHeader {
+                rect: whole(size),
+                encoding: enc::OPEN_H264,
+            });
+            payloads.push(payload);
+        }
+    }
     if headers.is_empty() {
         return Ok(false);
     }
@@ -577,6 +626,44 @@ where
     }
     st.handle.encoding.store(chosen, Ordering::Relaxed);
     Ok(true)
+}
+
+/// One H.264 frame of the whole picture, as an Open H.264 payload: flags
+/// that start the context (first frame, or the picture changed size), then
+/// the data. `None` when the encoder had nothing to send.
+fn encode_h264(
+    st: &mut State,
+    codec: &dyn rfb_codec::video::VideoCodec,
+    pixels: &[u8],
+    size: (u16, u16),
+) -> Result<Option<Vec<u8>>, Error> {
+    use rfb_codec::video::{RESET_ALL_CONTEXTS, RESET_CONTEXT, payload};
+    let io = |e: String| Error::Io(std::io::Error::other(e));
+    let mut flags = 0;
+    let fresh = match &st.h264 {
+        Some(ctx) if ctx.size == size => false,
+        Some(_) => {
+            flags |= RESET_ALL_CONTEXTS;
+            true
+        }
+        None => true,
+    };
+    if fresh {
+        flags |= RESET_CONTEXT;
+        st.h264 = Some(H264Context {
+            encoder: codec.encoder(size.0, size.1).map_err(io)?,
+            size,
+        });
+    }
+    let ctx = st.h264.as_mut().expect("created above");
+    let data = ctx
+        .encoder
+        .encode(pixels, size.0, size.1, usize::from(size.0) * 4, fresh)
+        .map_err(io)?;
+    if data.is_empty() && !fresh {
+        return Ok(None);
+    }
+    Ok(Some(payload(flags, &data)))
 }
 
 /// Tell the client the server's clipboard changed: through Extended Clipboard

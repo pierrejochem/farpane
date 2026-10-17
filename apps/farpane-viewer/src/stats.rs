@@ -159,6 +159,7 @@ pub fn encoding_name(encoding: i32) -> String {
         enc::TIGHT => "Tight".into(),
         enc::TRLE => "TRLE".into(),
         enc::ZRLE => "ZRLE".into(),
+        enc::OPEN_H264 => "H.264".into(),
         pseudo::CURSOR => "Cursor".into(),
         pseudo::DESKTOP_SIZE => "DesktopSize".into(),
         other => format!("#{other}"),

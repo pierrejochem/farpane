@@ -42,6 +42,10 @@ Passwords are never stored and never taken from a command-line argument. For scr
 
 The bar under the picture shows the protocol version, security type, picture size, extensions the server has shown and the pinned server key. Turn it off in **Settings**. In a narrow window the top bar folds the less used controls into a **More** menu.
 
+## H.264
+
+Tick **Ask servers for H.264** in Settings, or run with `--h264`. It needs Cisco's OpenH264 library: **Download OpenH264 from Cisco** in Settings, or `farpane-viewer --install-h264`, fetches it once and checks it against Cisco's published hash. Servers that cannot send H.264 are used as usual.
+
 ## Settings
 
 Settings live in `farpane/viewer.toml` in your configuration folder (`~/.config` or `$XDG_CONFIG_HOME` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). A damaged file is moved aside to `.broken`; a file written by a newer version is read but never overwritten.

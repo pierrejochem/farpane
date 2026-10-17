@@ -173,6 +173,8 @@ struct SecurityPanel {
     listen_text: String,
     /// The WebSocket address being typed (empty: no WebSocket port).
     ws_text: String,
+    /// A download of Cisco's `OpenH264` library in progress.
+    installer: Option<farpane_h264::Installer>,
     /// Waiting for the user to confirm forgetting a key.
     confirm: Option<Forget>,
     /// The result of the last action: (was it fine, what to say).
@@ -491,6 +493,52 @@ impl Dashboard {
             }
             Err(e) => self.security.problem = Some(e.to_string()),
         }
+    }
+
+    /// The state of Cisco's `OpenH264` library, and the way to get it.
+    fn h264_row(&mut self, ui: &mut Ui, tokens: &Tokens) {
+        let dir = farpane_h264::library_dir(&self.export_dir);
+        if let Some(done) = self
+            .security
+            .installer
+            .as_ref()
+            .and_then(farpane_h264::Installer::finished)
+        {
+            self.security.installer = None;
+            self.security.message = Some(match done {
+                Ok(path) => {
+                    self.log.push(
+                        Level::Info,
+                        format!("OpenH264 installed in {}", path.display()),
+                    );
+                    (
+                        true,
+                        "OpenH264 is installed. Save to start using it.".to_owned(),
+                    )
+                }
+                Err(why) => (false, format!("Could not install OpenH264: {why}")),
+            });
+        }
+        ui.horizontal(|ui| {
+            let (text, colour) = if self.security.installer.is_some() {
+                ("Downloading OpenH264 from Cisco…", tokens.amber)
+            } else if farpane_h264::installed(&dir).is_some() {
+                ("OpenH264 is installed", tokens.green)
+            } else {
+                ("OpenH264 is not installed", tokens.muted)
+            };
+            ui.label(RichText::new(text).color(colour).size(12.5));
+            if self.security.installer.is_none()
+                && farpane_h264::installed(&dir).is_none()
+                && farpane_h264::platform_file().is_some()
+                && ui
+                    .button("Download from Cisco")
+                    .on_hover_text(farpane_h264::NOTICE)
+                    .clicked()
+            {
+                self.security.installer = Some(farpane_h264::Installer::start(dir));
+            }
+        });
     }
 
     /// Save the Security page's settings and apply them to the running server.
@@ -1671,6 +1719,11 @@ impl Dashboard {
                 ui.label("Listen on");
                 ui.text_edit_singleline(&mut self.security.listen_text);
             });
+            ui.checkbox(
+                &mut self.security.edit.h264,
+                "Offer H.264 video (needs OpenH264)",
+            );
+            self.h264_row(ui, tokens);
             ui.horizontal(|ui| {
                 ui.label("WebSocket for browsers");
                 ui.add(

@@ -22,9 +22,28 @@ const STATS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250
 /// How often a Fence round trip is measured (17 bytes each way).
 const PING_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// The H.264 codec to use for the next connection, or none. Equal when it is
+/// the same codec.
+#[derive(Debug, Clone, Default)]
+pub struct Video(pub Option<std::sync::Arc<dyn rfb_codec::video::VideoCodec>>);
+
+impl PartialEq for Video {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0, &other.0) {
+            (Some(a), Some(b)) => std::sync::Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Video {}
+
 /// What the UI asks the connection to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
+    /// Use this H.264 codec for the connections that follow (none: no H.264).
+    SetVideo(Video),
     Connect {
         addr: String,
         password: Option<Vec<u8>>,
@@ -186,10 +205,12 @@ impl Notifier {
 }
 
 async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
+    let mut video: Option<std::sync::Arc<dyn rfb_codec::video::VideoCodec>> = None;
     loop {
         // Idle: wait for a Connect; other commands have nothing to act on.
         let (addr, options) = loop {
             match commands.recv().await {
+                Some(Command::SetVideo(v)) => video = v.0,
                 Some(Command::Connect {
                     addr,
                     password,
@@ -200,6 +221,7 @@ async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
                         password,
                         username,
                         pins,
+                        video: video.clone(),
                         ..ConnectOptions::default()
                     };
                     break (addr, options);
@@ -285,8 +307,9 @@ async fn session(
                 command = commands.recv() => {
                     let Some(command) = command else { return Err(String::new()) };
                     match command {
+                        // Read when the next connection starts.
+                        Command::SetVideo(_) | Command::Connect { .. } => {}
                         Command::Disconnect => return Ok(()),
-                        Command::Connect { .. } => {}
                         Command::Resize { width, height } => {
                             screen.request_size(width, height).await.map_err(|e| e.to_string())?;
                         }

@@ -34,6 +34,10 @@ Accounts sign in by name and password inside encryption: TLS (`--tls-self-signed
 
 Only pages from the same host may use the port unless you list others with `--ws-origin https://pages.example` (repeatable; `*` allows any page, which makes the server's own sign-in the only protection). The server does not serve noVNC itself: host its files anywhere and point it at the port.
 
+## H.264 video
+
+H.264 is off by default. It needs Cisco's OpenH264 library, which is not part of Farpane: run `farpane-server h264 install` (or use **Download from Cisco** on the Security page) once; the file is fetched from Cisco, checked against the hash Cisco published and kept in the config folder. Then start with `--h264` or tick **Offer H.264 video**. Clients that ask for it first get the whole screen as one H.264 stream (Constrained Baseline); other clients are served as before.
+
 ## Approving connections
 
 With `--require-approval` (or **Ask before a client gets in** on the Security page) every client that signs in waits until you answer. The dashboard shows an **Approval needed** card on every page with **Allow**, **Allow view only** and **Deny**. The client sees an open connection but no pictures meanwhile; with no answer in 60 seconds it is turned away. Decisions go into the event log.

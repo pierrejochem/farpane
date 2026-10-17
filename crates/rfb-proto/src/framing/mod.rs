@@ -5,7 +5,7 @@
 //! scans just enough of the bytes after a [`RectHeader`] to learn the payload
 //! length. Decoding is `rfb-codec`'s job and sees only complete payloads.
 //!
-//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, TRLE, Tight and the
+//! Handled: Raw, `CopyRect`, RRE, `CoRRE`, Hextile, zlib, ZRLE, TRLE, Tight, Open H.264 and the
 //! `Cursor`, `DesktopSize`, `ExtendedDesktopSize` and `LastRect`
 //! pseudo-encodings. `ZRLE` and zlib are
 //! length-prefixed, so their tiles are walked only after inflating, in the
@@ -58,6 +58,7 @@ pub fn frame(header: &RectHeader, pf: &PixelFormat, input: &[u8]) -> Result<usiz
             pf.tight_pixel_len(),
         ),
         enc::ZLIB | enc::ZRLE => length_prefixed(input),
+        enc::OPEN_H264 => h264(input),
         pseudo::CURSOR => fixed(
             width * height * bpp as u64 + width.div_ceil(8) * height,
             input,
@@ -96,6 +97,20 @@ fn fixed(len: u64, input: &[u8]) -> Result<usize, ProtoError> {
 fn length_prefixed(input: &[u8]) -> Result<usize, ProtoError> {
     let len = u64::from(Reader::new(input).u32()?);
     fixed(4 + len, input)
+}
+
+/// Open H.264: `U32 length`, `U32 flags`, then `length` bytes of H.264 data
+/// (rfbproto, "Open H.264 Encoding"). A zero length is a control message.
+fn h264(input: &[u8]) -> Result<usize, ProtoError> {
+    let len = u64::from(Reader::new(input).u32()?);
+    if len > u64::from(limits::MAX_H264_DATA) {
+        return Err(ProtoError::LimitExceeded {
+            field: "H.264 data",
+            value: len,
+            limit: u64::from(limits::MAX_H264_DATA),
+        });
+    }
+    fixed(8 + len, input)
 }
 
 /// RRE and `CoRRE`: `U32 count`, background pixel, then `count` subrectangles of

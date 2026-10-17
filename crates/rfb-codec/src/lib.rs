@@ -25,6 +25,7 @@ mod rre;
 mod tight;
 mod tiles;
 mod trle;
+pub mod video;
 mod zrle;
 
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};

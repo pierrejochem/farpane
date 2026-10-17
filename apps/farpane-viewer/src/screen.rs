@@ -54,6 +54,9 @@ pub struct ConnectOptions {
     pub pins: Vec<Fingerprint>,
     /// DER certificates of extra CAs to trust.
     pub extra_roots: Vec<Vec<u8>>,
+    /// Ask for H.264 and decode it with this codec. `None` (the default) never
+    /// asks for it.
+    pub video: Option<std::sync::Arc<dyn rfb_codec::video::VideoCodec>>,
 }
 
 /// The host part of `host:port`, `[v6]:port` or a bare host: the name a
@@ -192,13 +195,19 @@ impl RemoteScreen {
             ..
         } = info;
         let fb = Framebuffer::new(width, height)?;
-        let decoder = Decoder::new(&PixelFormat::RGB888)?;
+        let mut decoder = Decoder::new(&PixelFormat::RGB888)?;
+        let mut wanted = encodings.to_vec();
+        if let Some(codec) = &options.video {
+            decoder.set_video(std::sync::Arc::clone(codec));
+            if !wanted.contains(&enc::OPEN_H264) {
+                // H.264 first: a server that has it sends it, others use the rest.
+                wanted.insert(0, enc::OPEN_H264);
+            }
+        }
         session
             .send(&ClientMessage::SetPixelFormat(PixelFormat::RGB888))
             .await?;
-        session
-            .send(&ClientMessage::SetEncodings(encodings.to_vec()))
-            .await?;
+        session.send(&ClientMessage::SetEncodings(wanted)).await?;
         let mut screen = Self {
             session,
             decoder,

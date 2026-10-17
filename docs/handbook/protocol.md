@@ -33,7 +33,7 @@ RFB 3.3, 3.7 and 3.8, in both roles (viewer and server).
 | ZRLE | yes | yes |
 | TRLE | yes | yes |
 | Tight (no JPEG) | yes | yes |
-| H.264 | no | no |
+| Open H.264 (50) | yes, with Cisco's OpenH264 library | yes, with Cisco's OpenH264 library |
 
 Tight JPEG is refused because the viewer never asks for a JPEG quality level, which the specification requires before a server may send it.
 

@@ -149,6 +149,10 @@ pub mod limits {
     /// buffering when a peer announces a huge Raw or length-prefixed rect.
     /// Not from the spec; a Raw 5120 x 5120 x 32 bpp rect (100 MB) fits.
     pub const MAX_RECT_PAYLOAD: u32 = 128 * 1024 * 1024;
+    /// Largest H.264 data block (rfbproto, "Open H.264 Encoding") accepted.
+    /// Not from the spec; a frame is far smaller, even an intra frame of an
+    /// 8K screen.
+    pub const MAX_H264_DATA: u32 = 32 * 1024 * 1024;
 }
 
 #[cfg(test)]

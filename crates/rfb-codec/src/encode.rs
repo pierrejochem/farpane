@@ -60,23 +60,47 @@ const TILE: u16 = 64;
 
 /// A zlib stream that ends every chunk with a sync flush, as RFB servers do,
 /// so each chunk can be decoded as soon as it arrives.
-struct SyncDeflate(flate2::write::ZlibEncoder<Vec<u8>>);
+///
+/// This drives `flate2::Compress` by hand. Its `write::ZlibEncoder::flush`
+/// can return before a large sync flush has been written out completely, and
+/// the lost tail corrupts the stream (seen with 192 x 192 ZRLE rectangles of
+/// gradient content). zlib's rule is to call again with the same flush mode
+/// until a call leaves output space unused; that is what this does.
+struct SyncDeflate(flate2::Compress);
 
 impl SyncDeflate {
     fn new() -> Self {
-        Self(flate2::write::ZlibEncoder::new(
-            Vec::new(),
-            Compression::default(),
-        ))
+        Self(flate2::Compress::new(Compression::default(), true))
     }
 
     /// The compressed form of `input` as the next chunk of the stream.
     fn compress(&mut self, input: &[u8]) -> Vec<u8> {
-        use std::io::Write;
-        // Writing to a `Vec` cannot fail.
-        let _ = self.0.write_all(input);
-        let _ = self.0.flush();
-        std::mem::take(self.0.get_mut())
+        let start = self.0.total_in();
+        let mut out = Vec::with_capacity(input.len() / 2 + 64);
+        loop {
+            let consumed = usize::try_from(self.0.total_in() - start).unwrap_or(usize::MAX);
+            if out.capacity() - out.len() < 64 {
+                out.reserve(out.len().max(4096));
+            }
+            let before = (consumed, out.len());
+            // Compressing into a `Vec` with room cannot fail.
+            let _ = self.0.compress_vec(
+                &input[consumed.min(input.len())..],
+                &mut out,
+                flate2::FlushCompress::Sync,
+            );
+            let consumed = usize::try_from(self.0.total_in() - start).unwrap_or(usize::MAX);
+            // Finished when everything went in and the call left room over:
+            // a call that fills the buffer has more to write.
+            if consumed >= input.len() && out.len() < out.capacity() {
+                break;
+            }
+            if (consumed, out.len()) == before {
+                // No progress at all: cannot happen with room to write.
+                out.reserve(4096);
+            }
+        }
+        out
     }
 }
 

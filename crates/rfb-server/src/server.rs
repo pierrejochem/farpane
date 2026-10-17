@@ -50,6 +50,8 @@ pub(crate) struct Shared {
     pub registry: Mutex<Vec<Arc<ClientHandle>>>,
     next_id: AtomicU64,
     pub input: Arc<dyn Input>,
+    /// H.264 encoders, when a codec was supplied.
+    pub video: RwLock<Option<Arc<dyn rfb_codec::video::VideoCodec>>>,
     stop: AtomicBool,
     /// Sharing is paused: clients keep their last picture and their input
     /// is ignored.
@@ -259,6 +261,7 @@ impl Server {
             registry: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(1),
             input: Arc::new(input),
+            video: RwLock::new(None),
             stop: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             failure: Mutex::new(None),
@@ -402,6 +405,18 @@ impl Server {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (fb.width(), fb.height())
+    }
+
+    /// Offer H.264 (the Open H.264 encoding) to clients that ask for it,
+    /// encoding with `codec`, or stop offering it with `None`. Clients that
+    /// are connected keep what they use; new updates for clients that list
+    /// the encoding switch over. Off by default.
+    pub fn set_video(&self, codec: Option<Arc<dyn rfb_codec::video::VideoCodec>>) {
+        *self
+            .shared
+            .video
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = codec;
     }
 
     /// Pause or resume sharing. While paused clients stay connected but get

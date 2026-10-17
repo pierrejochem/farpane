@@ -1784,3 +1784,99 @@ async fn view_only_for_everyone_and_approval_can_be_switched_while_running() {
     server.set_require_approval(false);
     server.set_view_only_for_all(false);
 }
+
+/// "H.264" for tests: a key byte, `width`, `height` and the pixels as they are.
+#[derive(Debug)]
+struct FakeCodec;
+
+#[derive(Debug)]
+struct FakeEncoder;
+
+#[derive(Debug)]
+struct FakeDecoder;
+
+impl rfb_codec::video::VideoEncoder for FakeEncoder {
+    fn encode(
+        &mut self,
+        bgrx: &[u8],
+        width: u16,
+        height: u16,
+        stride: usize,
+        key: bool,
+    ) -> Result<Vec<u8>, String> {
+        let mut out = vec![u8::from(key)];
+        out.extend_from_slice(&width.to_be_bytes());
+        out.extend_from_slice(&height.to_be_bytes());
+        for row in 0..usize::from(height) {
+            out.extend_from_slice(&bgrx[row * stride..][..usize::from(width) * 4]);
+        }
+        Ok(out)
+    }
+}
+
+impl rfb_codec::video::VideoDecoder for FakeDecoder {
+    fn decode(&mut self, data: &[u8]) -> Result<Option<rfb_codec::video::Picture>, String> {
+        let width = u16::from_be_bytes([data[1], data[2]]);
+        let height = u16::from_be_bytes([data[3], data[4]]);
+        Ok(Some(rfb_codec::video::Picture {
+            width,
+            height,
+            bgrx: data[5..].to_vec(),
+        }))
+    }
+}
+
+impl rfb_codec::video::VideoCodec for FakeCodec {
+    fn decoder(&self) -> Result<Box<dyn rfb_codec::video::VideoDecoder>, String> {
+        Ok(Box::new(FakeDecoder))
+    }
+
+    fn encoder(&self, _: u16, _: u16) -> Result<Box<dyn rfb_codec::video::VideoEncoder>, String> {
+        Ok(Box::new(FakeEncoder))
+    }
+}
+
+#[tokio::test]
+async fn clients_that_ask_for_h264_get_whole_frames_when_a_codec_is_set() {
+    let (server, scroll) = scrolling_server();
+    let h264 = &[enc::OPEN_H264, enc::ZRLE, enc::COPY_RECT];
+    // No codec yet: the client's next choice is used.
+    let (mut plain, _t0) = connect(&server, PixelFormat::RGB888, h264).await;
+    plain.request(false).await;
+    let rects = plain.update().await;
+    assert!(rects.iter().all(|r| r.1 == enc::ZRLE), "{rects:?}");
+
+    server.set_video(Some(Arc::new(FakeCodec)));
+    let codec: Arc<dyn rfb_codec::video::VideoCodec> = Arc::new(FakeCodec);
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, h264).await;
+    v.decoder.set_video(codec);
+    v.request(false).await;
+    let rects = v.update().await;
+    assert_eq!(rects.len(), 1, "{rects:?}");
+    assert_eq!(rects[0], (whole(160, 120), enc::OPEN_H264));
+    shows_top(&v, 0);
+    // A scroll is another whole frame (no copy), and the picture follows.
+    *scroll.0.lock().unwrap() = 20;
+    v.request(true).await;
+    let rects = v.update().await;
+    assert_eq!(rects.len(), 1, "{rects:?}");
+    assert_eq!(rects[0], (whole(160, 120), enc::OPEN_H264));
+    shows_top(&v, 20);
+    // A request for only a part of the screen cannot be answered with H.264.
+    *scroll.0.lock().unwrap() = 40;
+    let part = Rect {
+        x: 0,
+        y: 0,
+        width: 80,
+        height: 60,
+    };
+    v.session
+        .send(&ClientMessage::FramebufferUpdateRequest {
+            incremental: true,
+            rect: part,
+        })
+        .await
+        .unwrap();
+    let rects = v.update().await;
+    assert!(rects.iter().all(|r| r.1 != enc::OPEN_H264), "{rects:?}");
+}

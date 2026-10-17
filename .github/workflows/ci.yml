@@ -35,6 +35,15 @@ jobs:
       - name: Docs build without warnings
         if: runner.os == 'Linux'
         run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+      - name: OpenH264 (so the H.264 tests run; they skip when it is missing)
+        # Cisco's library is downloaded the same way users get it, and checked
+        # against Cisco's published hash. If Cisco's server is down the tests
+        # skip rather than fail.
+        continue-on-error: true
+        shell: bash
+        run: |
+          cargo run -p farpane-server --locked -- h264 install --config-dir "$RUNNER_TEMP/farpane"
+          echo "FARPANE_H264_DIR=$RUNNER_TEMP/farpane/h264" >> "$GITHUB_ENV"
       - name: Test
         run: cargo test --workspace --locked
       - name: rfb-proto builds without std

@@ -69,6 +69,15 @@ impl Default for Input {
     }
 }
 
+/// Video options.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Video {
+    /// Ask servers for H.264 (needs Cisco's `OpenH264` library, which is
+    /// downloaded on request and not part of Farpane).
+    pub h264: bool,
+}
+
 /// One address book entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedConnection {
@@ -94,6 +103,7 @@ pub struct Settings {
     pub version: u32,
     pub appearance: Appearance,
     pub input: Input,
+    pub video: Video,
     #[serde(rename = "connection")]
     pub connections: Vec<SavedConnection>,
     /// Pinned certificates (trust on first use).
@@ -107,6 +117,7 @@ impl Default for Settings {
             version: FORMAT_VERSION,
             appearance: Appearance::default(),
             input: Input::default(),
+            video: Video::default(),
             connections: Vec::new(),
             known_hosts: Vec::new(),
         }
@@ -220,6 +231,15 @@ pub struct Store {
 }
 
 impl Store {
+    /// The folder the settings file is in, if there is one.
+    #[must_use]
+    pub fn dir(&self) -> Option<PathBuf> {
+        self.path
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(PathBuf::from)
+    }
+
     /// Load from `path`. A missing file gives defaults; a damaged one is
     /// renamed to `<name>.broken` and replaced by defaults. The second value
     /// is a message for the user when something went wrong.

@@ -67,6 +67,8 @@ pub struct Decoder {
     zlib: Inflater,
     zrle: Inflater,
     tight: [Inflater; 4],
+    /// The H.264 contexts, once an H.264 codec was supplied.
+    video: Option<crate::video::Contexts>,
 }
 
 impl Decoder {
@@ -78,7 +80,14 @@ impl Decoder {
             zlib: Inflater::default(),
             zrle: Inflater::default(),
             tight: Default::default(),
+            video: None,
         })
+    }
+
+    /// Let the decoder read the Open H.264 encoding with `codec`. Without it
+    /// such rectangles are [`DecodeError::UnsupportedEncoding`].
+    pub fn set_video(&mut self, codec: std::sync::Arc<dyn crate::video::VideoCodec>) {
+        self.video = Some(crate::video::Contexts::new(codec));
     }
 
     /// Switch the wire pixel format.
@@ -138,6 +147,19 @@ impl Decoder {
             enc::HEXTILE => {
                 crate::hextile::decode(fb, &self.converter, rect, payload)?;
                 Ok(Damage::Rect(rect))
+            }
+            enc::OPEN_H264 => {
+                let Some(video) = &mut self.video else {
+                    return Err(DecodeError::UnsupportedEncoding(enc::OPEN_H264));
+                };
+                fb.check(rect)?;
+                match video.apply(rect, payload)? {
+                    Some(bgrx) => {
+                        fb.write_bgrx(rect, &bgrx)?;
+                        Ok(Damage::Rect(rect))
+                    }
+                    None => Ok(Damage::None),
+                }
             }
             pseudo::DESKTOP_SIZE => {
                 fb.resize(rect.width, rect.height)?;

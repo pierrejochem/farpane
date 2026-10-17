@@ -28,7 +28,7 @@ Farpane is in early development and has **not been released**. The viewer and se
 | Viewer on Linux, Windows, macOS | Builds and passes tests on all three. Keyboard capture works on X11 and Wayland only. |
 | Server on Linux (X11, Wayland) | Works. |
 | Server on Windows and macOS | Capture and input backends are not written yet. |
-| Encodings | Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, TRLE and Tight (no JPEG). H.264 is not built. |
+| Encodings | Raw, CopyRect, RRE, CoRRE, Hextile, zlib, ZRLE, TRLE and Tight (no JPEG), and Open H.264 through Cisco's OpenH264 library (opt-in, downloaded on request). |
 | Browser access (noVNC) | A WebSocket port (`--ws`), checked against noVNC 1.5.0 in Chrome. |
 
 The [protocol support](protocol.html) page lists exactly what is verified, and the [security model](security.html) explains how connections are protected.

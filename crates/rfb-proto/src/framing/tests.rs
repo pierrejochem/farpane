@@ -548,3 +548,26 @@ fn trle_invalid_data_is_fatal() {
         Err(ProtoError::Malformed { .. })
     ));
 }
+
+#[test]
+fn open_h264_is_length_flags_and_data() {
+    // Length 5, flags ResetContext, five bytes of data.
+    let mut payload = vec![0, 0, 0, 5, 0, 0, 0, 1];
+    payload.extend_from_slice(&[0, 0, 0, 1, 0x67]);
+    check(&header(enc::OPEN_H264, 64, 48), &PF32, &payload);
+    // A control message: no data at all.
+    check(
+        &header(enc::OPEN_H264, 64, 48),
+        &PF32,
+        &[0, 0, 0, 0, 0, 0, 0, 2],
+    );
+    // An absurd length is refused before anything is buffered.
+    let huge = [0x7F, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0];
+    assert!(matches!(
+        frame(&header(enc::OPEN_H264, 64, 48), &PF32, &huge),
+        Err(ProtoError::LimitExceeded {
+            field: "H.264 data",
+            ..
+        })
+    ));
+}

@@ -147,7 +147,7 @@ fn rig(clients: Vec<ClientInfo>) -> (Rig, Harness<'static, Dashboard>) {
         dir.path().to_owned(),
     );
     let harness = Harness::builder()
-        .with_size(Vec2::new(1100.0, 760.0))
+        .with_size(Vec2::new(1100.0, 1000.0))
         .build_state(|ctx, d: &mut Dashboard| d.show(ctx), dashboard);
     (Rig { fake, log, dir }, harness)
 }

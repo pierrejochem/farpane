@@ -16,6 +16,7 @@ use farpane_viewer::{
     parse_encodings, write_image,
 };
 
+#[allow(clippy::struct_excessive_bools)] // independent command-line switches
 struct Args {
     addr: String,
     screenshot: Option<PathBuf>,
@@ -27,6 +28,10 @@ struct Args {
     username: Option<String>,
     pins: Vec<rfb_security::tls::Fingerprint>,
     encodings: Vec<i32>,
+    /// Ask for H.264 (headless run; needs the `OpenH264` library).
+    h264: bool,
+    /// Download Cisco's `OpenH264` library and exit.
+    install_h264: bool,
     /// Keep applying updates for this long before saving, so a slowly drawn
     /// screen is complete.
     settle: Duration,
@@ -39,6 +44,7 @@ fn parse_args() -> Result<Args, String> {
     let (mut username, mut pins) = (None, Vec::new());
     let mut settle = Duration::from_millis(1500);
     let mut encodings = DEFAULT_ENCODINGS.to_vec();
+    let (mut h264, mut install_h264) = (false, false);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--screenshot" => {
@@ -54,6 +60,8 @@ fn parse_args() -> Result<Args, String> {
                 );
             }
             "--fullscreen" => fullscreen = true,
+            "--h264" => h264 = true,
+            "--install-h264" => install_h264 = true,
             "--stats" => show_stats = true,
             "--ui-pin-toolbar" => pin_toolbar = true,
             "--ui-screenshot" => {
@@ -89,15 +97,41 @@ fn parse_args() -> Result<Args, String> {
         username,
         pins,
         encodings,
+        h264,
+        install_h264,
         settle,
     })
 }
 
 fn usage() {
     eprintln!(
-        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--username NAME] [--pin SHA256] [--password-file FILE] HOST:PORT\n\
+        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--h264] [--username NAME] [--pin SHA256] [--password-file FILE] HOST:PORT\n\
          The password comes from $FARPANE_PASSWORD or --password-file, never from an argument."
     );
+}
+
+/// The folder Cisco's `OpenH264` library is kept in: beside the settings.
+fn h264_dir() -> Option<PathBuf> {
+    farpane_viewer::settings::default_path().and_then(|p| p.parent().map(farpane_h264::library_dir))
+}
+
+/// `--install-h264`: download the library from Cisco.
+fn install_h264() -> ExitCode {
+    let Some(dir) = h264_dir() else {
+        eprintln!("farpane-viewer: there is no settings folder to keep the library in");
+        return ExitCode::FAILURE;
+    };
+    println!("{}", farpane_h264::NOTICE);
+    match farpane_h264::install(&dir) {
+        Ok(path) => {
+            println!("Installed {}", path.display());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("farpane-viewer: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn password(file: Option<&PathBuf>) -> Result<Option<Vec<u8>>, String> {
@@ -119,6 +153,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    if args.install_h264 {
+        return install_h264();
+    }
     let result = if args.screenshot.is_some() {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -171,6 +208,15 @@ async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         username: args.username.clone().map(String::into_bytes),
         pins: args.pins.clone(),
         extra_roots: Vec::new(),
+        video: if args.h264 {
+            let dir = h264_dir().ok_or("no settings folder")?;
+            let codec = farpane_h264::OpenH264::open(&dir)?.ok_or(
+                "H.264 needs Cisco's OpenH264 library: run `farpane-viewer --install-h264`",
+            )?;
+            Some(std::sync::Arc::new(codec))
+        } else {
+            None
+        },
     };
     let mut screen = RemoteScreen::connect_opts(&args.addr, &options, &args.encodings).await?;
     let fb = screen.framebuffer();

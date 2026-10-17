@@ -1,0 +1,25 @@
+[package]
+name = "farpane-h264"
+description = "H.264 for Farpane through Cisco's OpenH264 library, downloaded and loaded at run time"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rfb-codec.workspace = true
+openh264 = { version = "0.9.9", default-features = false, features = ["libloading"] }
+ureq = { version = "3.4.2", default-features = false }
+bzip2 = "0.6.1"
+sha2 = "0.11.0"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+rfb-proto.workspace = true
+rfb-server.workspace = true
+rfb-tokio.workspace = true
+tokio = { version = "1.53.3", features = ["rt", "macros", "io-util", "time"] }
