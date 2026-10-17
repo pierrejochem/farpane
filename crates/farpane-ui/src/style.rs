@@ -21,6 +21,9 @@ pub fn radius(px: f32) -> CornerRadius {
     CornerRadius::same(px.round().clamp(0.0, 255.0) as u8)
 }
 
+/// Height of every control: buttons, text fields and drop-down lists.
+pub const CONTROL_HEIGHT: f32 = 32.0;
+
 /// egui visuals for `tokens`.
 #[must_use]
 pub fn visuals(tokens: &Tokens) -> Visuals {
@@ -42,7 +45,8 @@ pub fn visuals(tokens: &Tokens) -> Visuals {
     v.window_stroke = line;
     v.window_corner_radius = radius(tokens.radius);
     v.menu_corner_radius = widget_radius;
-    v.extreme_bg_color = tokens.bg.into();
+    // Text fields: the same translucent inset as the search box of the mockups.
+    v.extreme_bg_color = crate::widgets::inset(tokens);
     v.faint_bg_color = card;
     v.hyperlink_color = tokens.accent_text.into();
     v.warn_fg_color = tokens.amber.into();
@@ -139,6 +143,7 @@ fn install_fonts(ctx: &egui::Context, plex: bool) {
 /// Apply `tokens` to `ctx`: visuals and, when the theme changed, its font.
 pub fn apply(ctx: &egui::Context, tokens: &Tokens) {
     ctx.set_visuals(visuals(tokens));
+    ctx.style_mut(|style| style.spacing.interact_size.y = CONTROL_HEIGHT);
     let id = egui::Id::new("farpane-font-is-plex");
     if ctx.data(|d| d.get_temp::<bool>(id)) != Some(tokens.plex) {
         install_fonts(ctx, tokens.plex);

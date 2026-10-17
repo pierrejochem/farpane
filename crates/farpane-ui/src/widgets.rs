@@ -192,6 +192,15 @@ pub fn brand_mark(ui: &mut Ui, tokens: &crate::theme::Tokens, size: f32) {
     );
 }
 
+/// A single-line text field as tall as every other control
+/// ([`crate::style::CONTROL_HEIGHT`]), its text centred.
+pub fn text_field(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text)
+        .margin(egui::Margin::symmetric(10, 0))
+        .vertical_align(egui::Align::Center)
+        .min_size(egui::vec2(0.0, crate::style::CONTROL_HEIGHT))
+}
+
 /// A row of the side bar. Returns whether it was clicked.
 pub fn nav_item(
     ui: &mut Ui,

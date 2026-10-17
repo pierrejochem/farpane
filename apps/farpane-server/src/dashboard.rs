@@ -814,19 +814,11 @@ impl Dashboard {
                 // Window width, not what is left: the controls only fit in a wide window.
                 let width = ui.ctx().screen_rect().width();
                 if width >= 1100.0 {
-                    egui::Frame::NONE
-                        .fill(inset(tokens))
-                        .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
-                        .corner_radius(style::radius(10.0))
-                        .inner_margin(Margin::symmetric(10, 4))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.search)
-                                    .hint_text("Search clients and events")
-                                    .frame(false)
-                                    .desired_width(220.0),
-                            );
-                        });
+                    ui.add(
+                        widgets::text_field(&mut self.search)
+                            .hint_text("Search clients and events")
+                            .desired_width(220.0),
+                    );
                 }
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     self.theme_switch(ui, tokens);
@@ -839,7 +831,7 @@ impl Dashboard {
                         let button =
                             egui::Button::new(RichText::new(label).color(Color32::WHITE).strong())
                                 .fill(Color32::from(tokens.accent))
-                                .min_size(vec2(0.0, 32.0));
+                                .min_size(vec2(0.0, style::CONTROL_HEIGHT));
                         if ui.add(button).clicked() {
                             self.backend.set_paused(!paused);
                             self.log.push(
@@ -1246,7 +1238,7 @@ impl Dashboard {
                             RichText::new("Allow").color(Color32::WHITE).strong(),
                         )
                         .fill(Color32::from(tokens.accent))
-                        .min_size(vec2(90.0, 32.0));
+                        .min_size(vec2(90.0, style::CONTROL_HEIGHT));
                         if ui.add(allow).clicked() {
                             answer = Some((request.clone(), rfb_server::Decision::Allow));
                         }
@@ -1617,10 +1609,10 @@ impl Dashboard {
                 .spacing([12.0, 6.0])
                 .show(ui, |ui| {
                     ui.label("User name");
-                    ui.text_edit_singleline(&mut self.users.name);
+                    ui.add(widgets::text_field(&mut self.users.name));
                     ui.end_row();
                     ui.label("Display name");
-                    ui.text_edit_singleline(&mut self.users.display_name);
+                    ui.add(widgets::text_field(&mut self.users.display_name));
                     ui.end_row();
                     ui.label("Role");
                     egui::ComboBox::from_id_salt("new-role")
@@ -1632,7 +1624,7 @@ impl Dashboard {
                         });
                     ui.end_row();
                     ui.label("Password");
-                    ui.add(egui::TextEdit::singleline(&mut self.users.password).password(true));
+                    ui.add(widgets::text_field(&mut self.users.password).password(true));
                     ui.end_row();
                 });
             if ui.button("Add user").clicked() {
@@ -1717,7 +1709,7 @@ impl Dashboard {
             );
             ui.horizontal(|ui| {
                 ui.label("Listen on");
-                ui.text_edit_singleline(&mut self.security.listen_text);
+                ui.add(widgets::text_field(&mut self.security.listen_text));
             });
             ui.checkbox(
                 &mut self.security.edit.h264,
@@ -1727,7 +1719,7 @@ impl Dashboard {
             ui.horizontal(|ui| {
                 ui.label("WebSocket for browsers");
                 ui.add(
-                    egui::TextEdit::singleline(&mut self.security.ws_text)
+                    widgets::text_field(&mut self.security.ws_text)
                         .hint_text("empty: off, or 0.0.0.0:5800"),
                 );
             });

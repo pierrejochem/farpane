@@ -9,7 +9,7 @@ use std::{
 
 use egui::{
     Align, Color32, ColorImage, Context, CursorIcon, EventFilter, Frame, Key, Layout, Margin,
-    RichText, Sense, TextEdit, TextureHandle, TextureOptions, UserData, ViewportCommand, vec2,
+    RichText, Sense, TextureHandle, TextureOptions, UserData, ViewportCommand, vec2,
 };
 use farpane_grab::GrabState;
 use farpane_ui::{Accent, ThemePreference, Tokens, style, widgets};
@@ -1681,7 +1681,7 @@ impl ViewerApp {
                                 ui.label(RichText::new("Address").color(tokens.muted));
                                 let addr = ui.add_enabled(
                                     !connecting,
-                                    TextEdit::singleline(&mut self.addr)
+                                    widgets::text_field(&mut self.addr)
                                         .hint_text("host:5900")
                                         .desired_width(f32::INFINITY),
                                 );
@@ -1692,7 +1692,7 @@ impl ViewerApp {
                                 );
                                 ui.add_enabled(
                                     !connecting,
-                                    TextEdit::singleline(&mut self.username)
+                                    widgets::text_field(&mut self.username)
                                         .desired_width(f32::INFINITY),
                                 );
                                 ui.add_space(8.0);
@@ -1702,7 +1702,7 @@ impl ViewerApp {
                                 );
                                 let password = ui.add_enabled(
                                     !connecting,
-                                    TextEdit::singleline(&mut self.password)
+                                    widgets::text_field(&mut self.password)
                                         .password(true)
                                         .desired_width(f32::INFINITY),
                                 );
@@ -1719,7 +1719,7 @@ impl ViewerApp {
                                         RichText::new(label).color(Color32::WHITE).strong(),
                                     )
                                     .fill(Color32::from(tokens.accent))
-                                    .min_size(vec2(120.0, 32.0));
+                                    .min_size(vec2(120.0, style::CONTROL_HEIGHT));
                                     let can = !connecting && !self.addr.trim().is_empty();
                                     let clicked = ui.add_enabled(can, button).clicked();
                                     if can && (clicked || submit) {
