@@ -1481,7 +1481,6 @@ name = "farpane-ui"
 version = "0.1.0"
 dependencies = [
  "egui",
- "png",
 ]
 
 [[package]]

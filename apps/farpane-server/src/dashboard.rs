@@ -705,7 +705,6 @@ impl Dashboard {
         self.refresh(ctx, now);
         let tokens = self.tokens(ctx);
         style::apply(ctx, &tokens);
-        style::paint_backdrop(ctx, &tokens);
 
         egui::SidePanel::left("nav")
             .exact_width(268.0)

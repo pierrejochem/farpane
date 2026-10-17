@@ -604,7 +604,6 @@ impl ViewerApp {
             style::apply(ctx, &tokens);
             self.applied = Some(tokens);
         }
-        style::paint_backdrop(ctx, &tokens);
         tokens
     }
 

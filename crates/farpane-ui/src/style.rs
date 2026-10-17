@@ -89,7 +89,6 @@ const INTER: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
 const INTER_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/Inter-SemiBold.ttf");
 const PLEX: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-Regular.ttf");
 const PLEX_SEMIBOLD: &[u8] = include_bytes!("../assets/fonts/IBMPlexSans-SemiBold.ttf");
-const BACKDROP: &[u8] = include_bytes!("../assets/glass-backdrop.png");
 
 fn semibold_name() -> egui::FontFamily {
     egui::FontFamily::Name(SEMIBOLD.into())
@@ -160,67 +159,10 @@ pub fn apply(ctx: &egui::Context, tokens: &Tokens) {
     }
 }
 
-/// What panels should fill themselves with: nothing on the Glass theme, so
-/// the backdrop shows through, else the background colour.
+/// What panels should fill themselves with: the background colour.
 #[must_use]
 pub fn page_fill(tokens: &Tokens) -> Color32 {
-    if tokens.glass {
-        Color32::TRANSPARENT
-    } else {
-        tokens.bg.into()
-    }
-}
-
-/// Paint the Glass theme's backdrop over the whole window, below every
-/// panel. Call it first in the frame; other themes paint nothing.
-pub fn paint_backdrop(ctx: &egui::Context, tokens: &Tokens) {
-    if !tokens.glass {
-        return;
-    }
-    let id = egui::Id::new("farpane-backdrop");
-    let texture = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id));
-    let texture = texture.or_else(|| {
-        let image = decode_backdrop()?;
-        let handle = ctx.load_texture("farpane-backdrop", image, egui::TextureOptions::LINEAR);
-        ctx.data_mut(|d| d.insert_temp(id, handle.clone()));
-        Some(handle)
-    });
-    let Some(texture) = texture else {
-        return;
-    };
-    let screen = ctx.screen_rect();
-    // Cover the window, keeping the picture's proportions (SVG "slice").
-    let size = texture.size_vec2();
-    let scale = (screen.width() / size.x).max(screen.height() / size.y);
-    let shown = egui::vec2(
-        screen.width() / scale / size.x,
-        screen.height() / scale / size.y,
-    );
-    let uv = egui::Rect::from_center_size(egui::pos2(0.5, 0.5), shown);
-    ctx.layer_painter(egui::LayerId::background())
-        .image(texture.id(), screen, uv, Color32::WHITE);
-}
-
-fn decode_backdrop() -> Option<egui::ColorImage> {
-    let mut reader = png::Decoder::new(std::io::Cursor::new(BACKDROP))
-        .read_info()
-        .ok()?;
-    let mut buf = vec![0; reader.output_buffer_size()?];
-    let info = reader.next_frame(&mut buf).ok()?;
-    let rgba: Vec<u8> = match info.color_type {
-        png::ColorType::Rgba => buf[..info.buffer_size()].to_vec(),
-        png::ColorType::Rgb => buf[..info.buffer_size()]
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .flat_map(|p| [p[0], p[1], p[2], 255])
-            .collect(),
-        _ => return None,
-    };
-    Some(egui::ColorImage::from_rgba_unmultiplied(
-        [info.width as usize, info.height as usize],
-        &rgba,
-    ))
+    tokens.bg.into()
 }
 
 #[cfg(test)]

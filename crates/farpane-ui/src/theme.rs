@@ -81,7 +81,7 @@ pub struct Tokens {
     pub radius: f32,
     /// Dark surfaces (Glass, Slate) rather than light ones.
     pub dark: bool,
-    /// Frosted-glass panels (needs the blurred-backdrop pass).
+    /// Frosted-glass panels (translucent cards on the plain background).
     pub glass: bool,
     /// IBM Plex Sans instead of Inter (the Slate theme's typeface).
     pub plex: bool,
