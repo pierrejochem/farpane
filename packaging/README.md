@@ -28,13 +28,24 @@ Linux binaries are built in an AlmaLinux 9 container, so the glibc floor is 2.34
 2. Icons are final (concept 03, "Receding panes"): `icons/svg/` holds the masters (full and
    small versions, plus a tile-less, one-colour and light-tile mark), `icons/png/` has 16–1024 px,
    and `.ico` / `.icns` files are ready. Sizes of 48 px and below use the simplified small version.
-   Still to do in code: embed `icons/farpane-*.ico` into the Windows `.exe` files with a `build.rs`
-   (e.g. the `winresource` crate), so Explorer and the taskbar show the icon.
+   The Windows `.exe` files carry their icon and version information: `apps/*/build.rs` embeds
+   `icons/farpane-*.ico` with the `winresource` crate (needs `rc.exe`, which the Windows runner
+   has; a failure is a build warning, not an error).
 3. Keep the `UpgradeCode` GUID in `farpane.wxs` forever once v1 ships.
 4. `farpane-server.service` runs `--headless --desktop` (no window; share the session's desktop).
    Without a user account or password the server listens on loopback only: add users with
    `farpane-server user add NAME` and enable `--tls-self-signed` / `--ra2` (edit `ExecStart`)
    before exposing it. On Wayland the desktop asks for approval the first time.
+
+## Windows service
+
+`farpane.wxs` registers a `FarpaneServer` service (LocalSystem, start on demand, removed on
+uninstall). `farpane-server service install [--auto] [OPTIONS]` does the same without the MSI,
+`service uninstall` removes it, and Windows starts it with `farpane-server service run`. Its files
+live in `%ProgramData%\Farpane` (locked to administrators and SYSTEM at install time) and it logs
+to `service.log` there. A service runs in session 0 and cannot capture the screen, so until the
+session worker of section 19 and a Windows capture backend exist, it serves the test pattern only.
+The service code (`crates/farpane-winsvc`) has been type-checked for Windows, not run on it.
 
 ## Signing (optional — steps are skipped when secrets are missing)
 

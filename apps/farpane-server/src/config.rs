@@ -37,15 +37,33 @@ pub struct Access {
     pub description: String,
 }
 
-/// The default config folder: `/etc/farpane` if it exists, else the user's.
+/// The system-wide config folder: `/etc/farpane`, or `%ProgramData%\Farpane`
+/// on Windows (where the service keeps its files).
+#[must_use]
+pub fn system_config_dir() -> PathBuf {
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("ProgramData")
+            .map_or_else(|| PathBuf::from(r"C:\ProgramData"), PathBuf::from);
+        base.join("Farpane")
+    }
+    #[cfg(not(windows))]
+    PathBuf::from("/etc/farpane")
+}
+
+/// The default config folder: the system one if it exists, else the user's.
 #[must_use]
 pub fn default_config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("FARPANE_CONFIG_DIR") {
         return PathBuf::from(dir);
     }
-    let system = PathBuf::from("/etc/farpane");
+    let system = system_config_dir();
     if system.is_dir() {
         return system;
+    }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        return PathBuf::from(appdata).join("farpane");
     }
     if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
         return PathBuf::from(xdg).join("farpane");

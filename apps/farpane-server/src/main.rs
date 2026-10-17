@@ -12,6 +12,9 @@ use std::{
     sync::Arc,
 };
 
+#[cfg(windows)]
+mod service;
+
 use farpane_server::{
     backend::{self, EventLog, Level, LiveBackend, LiveInfo},
     config::{self, TlsChoice},
@@ -330,6 +333,8 @@ fn user_password(file: Option<&str>) -> std::io::Result<String> {
 
 fn log(line: &str) {
     eprintln!("farpane-server: {line}");
+    #[cfg(windows)]
+    service::write_log(line);
 }
 
 fn describe(event: &Event) -> String {
@@ -426,6 +431,12 @@ fn open_source(args: &Args, config_dir: &std::path::Path) -> Result<SourceAndInp
             args.wayland = true;
         } else if std::env::var_os("DISPLAY").is_some() {
             args.x11 = true;
+        } else if cfg!(windows) {
+            return Err(
+                "--desktop: sharing the Windows screen is not built yet (only the test \
+                 pattern is available)"
+                    .to_owned(),
+            );
         } else {
             return Err("--desktop: neither $WAYLAND_DISPLAY nor $DISPLAY is set".to_owned());
         }
@@ -632,7 +643,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         .clone()
         .unwrap_or_else(config::default_config_dir);
     let tls = tls_choice(args).map_err(|e| {
-        eprintln!("farpane-server: {e}");
+        log(&e);
         ExitCode::from(2)
     })?;
     let events = EventLog::new();
@@ -647,17 +658,17 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         },
     )
     .map_err(|e| {
-        eprintln!("farpane-server: {e}");
+        log(&e);
         ExitCode::from(2)
     })?;
     let authenticated = access.authenticator.is_some() || args.password.is_some();
     if !authenticated && !args.listen.ip().is_loopback() && !args.allow_no_auth {
-        eprintln!(
-            "farpane-server: refusing to listen on {} without credentials. Add a user \
+        log(&format!(
+            "refusing to listen on {} without credentials. Add a user \
              (`farpane-server user add NAME`), set a password with --password-file or \
              $FARPANE_PASSWORD, or pass --allow-no-auth.",
             args.listen
-        );
+        ));
         return Err(ExitCode::from(2));
     }
     if access.identity.is_none() && authenticated && !args.listen.ip().is_loopback() {
@@ -678,7 +689,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
         );
     }
     check_websocket(args, &access).map_err(|e| {
-        eprintln!("farpane-server: {e}");
+        log(&e);
         ExitCode::from(2)
     })?;
     // Opening a screen may wait for the user (the Wayland approval dialog), so
@@ -687,11 +698,11 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     let (source, input, what) = tokio::task::spawn_blocking(move || open_source(&a, &dir))
         .await
         .map_err(|e| {
-            eprintln!("farpane-server: {e}");
+            log(&e.to_string());
             ExitCode::FAILURE
         })?
         .map_err(|e| {
-            eprintln!("farpane-server: {e}");
+            log(&e);
             ExitCode::FAILURE
         })?;
     let settings = Settings {
@@ -700,7 +711,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     };
     let mut server =
         Server::new(source, input, access.template.clone(), settings).map_err(|e| {
-            eprintln!("farpane-server: cannot start: {e}");
+            log(&format!("cannot start: {e}"));
             ExitCode::FAILURE
         })?;
     if let Some(auth) = access.authenticator.clone() {
@@ -711,7 +722,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     }
     server.set_require_approval(args.require_approval);
     server.set_video(video_codec(args, &config_dir).map_err(|e| {
-        eprintln!("farpane-server: {e}");
+        log(&e);
         ExitCode::from(2)
     })?);
     let sink = events.clone();
@@ -726,7 +737,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     });
     let server = Arc::new(server);
     let listener = TcpListener::bind(args.listen).await.map_err(|e| {
-        eprintln!("farpane-server: cannot listen on {}: {e}", args.listen);
+        log(&format!("cannot listen on {}: {e}", args.listen));
         ExitCode::FAILURE
     })?;
     let ws_listener = match args.ws {
@@ -736,7 +747,7 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
                 origin_policy(args),
             );
             let l = TcpListener::bind(ws).await.map_err(|e| {
-                eprintln!("farpane-server: cannot listen on {ws}: {e}");
+                log(&format!("cannot listen on {ws}: {e}"));
                 ExitCode::FAILURE
             })?;
             note(
@@ -785,12 +796,41 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
     })
 }
 
+/// Accept clients on the listeners until `shutdown` completes or a listener
+/// fails.
+async fn serve_headless(running: Running, shutdown: impl Future<Output = ()>) -> ExitCode {
+    let ws = async {
+        match running.ws_listener {
+            Some(l) => Arc::clone(&running.server).listen_ws(l).await,
+            None => std::future::pending().await,
+        }
+    };
+    tokio::select! {
+        result = Arc::clone(&running.server).listen(running.listener) => {
+            if let Err(e) = result {
+                log(&e.to_string());
+                return ExitCode::FAILURE;
+            }
+        }
+        result = ws => {
+            if let Err(e) = result {
+                log(&format!("WebSocket listener: {e}"));
+                return ExitCode::FAILURE;
+            }
+        }
+        () = shutdown => {}
+    }
+    ExitCode::SUCCESS
+}
+
 #[allow(clippy::too_many_lines)] // start-up, headless and window paths
 fn main() -> ExitCode {
     let mut raw = std::env::args().skip(1);
     match raw.next().as_deref() {
         Some("user") => return user_command(),
         Some("h264") => return h264_command(),
+        #[cfg(windows)]
+        Some("service") => return service::command(raw),
         _ => {}
     }
     let (cli, args) =
@@ -820,30 +860,9 @@ fn main() -> ExitCode {
         Err(code) => return code,
     };
     if args.headless {
-        return rt.block_on(async {
-            let ws = async {
-                match running.ws_listener {
-                    Some(l) => Arc::clone(&running.server).listen_ws(l).await,
-                    None => std::future::pending().await,
-                }
-            };
-            tokio::select! {
-                result = Arc::clone(&running.server).listen(running.listener) => {
-                    if let Err(e) = result {
-                        eprintln!("farpane-server: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-                result = ws => {
-                    if let Err(e) = result {
-                        eprintln!("farpane-server: WebSocket listener: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-                _ = tokio::signal::ctrl_c() => {}
-            }
-            ExitCode::SUCCESS
-        });
+        return rt.block_on(serve_headless(running, async {
+            let _ = tokio::signal::ctrl_c().await;
+        }));
     }
     // The window on this thread, the server on the runtime's.
     let Running {

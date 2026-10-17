@@ -1457,6 +1457,7 @@ dependencies = [
  "farpane-h264",
  "farpane-ui",
  "farpane-wayland",
+ "farpane-winsvc",
  "farpane-x11",
  "pkcs8",
  "png",
@@ -1472,6 +1473,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "winresource",
 ]
 
 [[package]]
@@ -1504,6 +1506,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "winresource",
 ]
 
 [[package]]
@@ -1517,6 +1520,13 @@ dependencies = [
  "rfb-server",
  "tokio",
  "x11rb 0.14.0",
+]
+
+[[package]]
+name = "farpane-winsvc"
+version = "0.1.0"
+dependencies = [
+ "windows-service",
 ]
 
 [[package]]
@@ -4805,6 +4815,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "widestring"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72069c3113ab32ab29e5584db3c6ec55d416895e60715417b5b883a357c3e471"
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4986,6 +5002,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
 dependencies = [
  "windows-link 0.1.3",
+]
+
+[[package]]
+name = "windows-service"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "857224b3b211c6f3616921f081ee54721ee3ad2ace2fac6a6337e032f7b4dcf2"
+dependencies = [
+ "bitflags 2.13.2",
+ "widestring",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5174,6 +5201,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "winresource"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2bc6d36480b829272a5bdabf08e6dca8004761c1da7e35efef800540c66221b"
+dependencies = [
+ "toml",
+ "version_check",
 ]
 
 [[package]]

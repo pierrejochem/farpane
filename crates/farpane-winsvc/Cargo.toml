@@ -1,0 +1,25 @@
+[package]
+name = "farpane-winsvc"
+description = "Windows service host for Farpane Server: SCM entry point, install and uninstall"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-service = "0.8.1"
+
+# The service control manager calls back into a C-ABI function, so the
+# `define_windows_service!` macro of `windows-service` expands to `unsafe`
+# code. That is the only reason this crate relaxes the workspace's
+# `unsafe_code = "deny"`; it has no `unsafe` of its own (see the crate docs).
+[lints.rust]
+unsafe_code = "allow"
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"

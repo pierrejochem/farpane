@@ -71,6 +71,8 @@ The config folder is `/etc/farpane` if it exists, else `~/.config/farpane` (set 
 
 `packaging/linux/farpane-server.service` runs `farpane-server --headless --desktop` for the logged-in user. Without a user account or password it listens on loopback only.
 
+On Windows, `farpane-server service install [--auto] [OPTIONS]` registers a `FarpaneServer` service (the MSI does too, start on demand), `service uninstall` removes it and `sc start FarpaneServer` starts it. It keeps its files in `%ProgramData%\Farpane`, readable by administrators and SYSTEM only, and writes `service.log` there. It cannot share the screen yet: a service has no desktop of its own, and the session worker that would capture the user's screen is not built, so it serves the test pattern only. This part has not been run on Windows yet.
+
 ## Limits
 
-One display, no Windows or macOS capture yet, and no WebSocket listener for browsers.
+One display, and no Windows or macOS capture yet.

@@ -33,6 +33,14 @@
           <!-- Allows the server program through Windows Firewall (private + domain profiles). -->
           <fw:FirewallException Id="ServerFirewall" Name="Farpane Server" Program="[#ServerExeFile]"
                                 Profile="domain,private" Scope="any" />
+          <!-- The service runs as LocalSystem and starts when asked (`sc start FarpaneServer`);
+               `farpane-server service install --auto` switches it to boot time. It cannot
+               share the screen yet (the session worker is not built), see the handbook. -->
+          <ServiceInstall Id="FarpaneServerService" Name="FarpaneServer" DisplayName="Farpane Server"
+                          Description="Farpane Server: VNC-compatible remote desktop server"
+                          Type="ownProcess" Start="demand" ErrorControl="normal"
+                          Arguments="service run" Vital="no" />
+          <ServiceControl Id="FarpaneServerControl" Name="FarpaneServer" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>
       </Directory>
     </StandardDirectory>
