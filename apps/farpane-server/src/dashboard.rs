@@ -1336,7 +1336,11 @@ impl Dashboard {
             ui.add_space(8.0);
             for (name, note, on) in &self.status.offered {
                 ui.horizontal(|ui| {
+                    // Leave room for the badge, so a long name wraps instead
+                    // of pushing the card wider than its column.
+                    let text_width = ui.available_width() - 46.0;
                     ui.vertical(|ui| {
+                        ui.set_max_width(text_width);
                         ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(RichText::new(name).strong().size(13.5));
                         ui.label(RichText::new(note).color(tokens.muted).size(11.5));

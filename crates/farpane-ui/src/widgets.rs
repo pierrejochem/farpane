@@ -171,7 +171,8 @@ pub fn brand_mark(ui: &mut Ui, tokens: &crate::theme::Tokens, size: f32) {
     // x 248..796, y 240..792 of the 1024 view box, drawn into `rect`.
     let scale = size / 556.0;
     let at = |x: f32, y: f32| rect.min + egui::vec2((x - 240.0) * scale, (y - 240.0) * scale);
-    let accent = egui::Color32::from(tokens.accent);
+    // The brand's own orange, whatever accent the theme has.
+    let accent = egui::Color32::from_rgb(0xF4, 0x62, 0x3A);
     // (x, y, side, corner radius, stroke width, opacity)
     for (x, y, side, r, w, a) in [
         (248.0_f32, 272.0_f32, 520.0_f32, 114.0_f32, 44.0_f32, 97_u8),
@@ -188,7 +189,11 @@ pub fn brand_mark(ui: &mut Ui, tokens: &crate::theme::Tokens, size: f32) {
     painter.rect_filled(
         egui::Rect::from_min_max(at(636.0, 240.0), at(796.0, 400.0)),
         crate::style::radius(36.0 * scale),
-        egui::Color32::from_rgb(0xFF, 0xB5, 0x9C),
+        if tokens.dark {
+            egui::Color32::from_rgb(0xFF, 0xB5, 0x9C)
+        } else {
+            accent
+        },
     );
 }
 
