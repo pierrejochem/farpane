@@ -298,7 +298,7 @@ def build():
 <figure><img src="screenshots/viewer-home-light.png" width="1100" height="720" loading="lazy" alt="Farpane Viewer home screen in the Light theme with saved connections"><figcaption>Viewer home (Light theme)</figcaption></figure>
 </div></section>
 <section class="section" aria-labelledby="try"><h2 id="try">Try it</h2>
-<p>There is no release yet, so build from source (Rust 1.85 or newer):</p>
+<p>There is no release yet, so build from source (Rust 1.88 or newer):</p>
 <pre><code>git clone {REPO}.git
 cd farpane
 cargo build --release --workspace

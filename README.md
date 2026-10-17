@@ -14,7 +14,7 @@ Documentation: the [handbook](https://pierrejochem.github.io/farpane/handbook/) 
 
 ## Build
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.88 or newer.
 
 ```sh
 cargo build --workspace

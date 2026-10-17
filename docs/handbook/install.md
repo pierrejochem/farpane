@@ -10,7 +10,7 @@ There is no release yet, so for now you build from source. Packages for Windows,
 
 ## Requirements
 
-- Rust 1.85 or newer (`rustup` is the easiest way).
+- Rust 1.88 or newer (`rustup` is the easiest way).
 - On Linux, building the Wayland backend needs `libpipewire-0.3-dev`, `pkg-config` and `clang`. On Debian and Ubuntu:
 
 ```sh
