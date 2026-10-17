@@ -1,6 +1,9 @@
-<p align="center"><img src="docs/brand/farpane-viewer-1024.png" width="128" alt="Farpane icon"></p>
-
-# Farpane
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/farpane-logo-dark.svg">
+    <img src="docs/brand/farpane-logo-light.svg" height="96" alt="Farpane">
+  </picture>
+</p>
 
 A VNC-compatible remote desktop viewer and server, written in Rust.
 
