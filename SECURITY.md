@@ -1,6 +1,6 @@
 # Security policy
 
-Farpane is early software and has not been released. It has had one independent security review (see "Review fixes" in `CLAUDE.md`), but it has not been audited by a third party.
+Farpane is early software and has not been released. It has had one independent security review, but it has not been audited by a third party.
 
 ## Reporting a vulnerability
 

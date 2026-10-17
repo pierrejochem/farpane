@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping. The full conventions are in [`CLAUDE.md`](CLAUDE.md) (it doubles as the developer guide); the short version:
+Thanks for helping. The short version of the conventions:
 
 ```sh
 cargo fmt --all
