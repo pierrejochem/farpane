@@ -1080,13 +1080,16 @@ impl ViewerApp {
         {
             {
                 ui.horizontal(|ui| {
-                    widgets::brand_mark(ui, tokens, 26.0);
-                    ui.label(
-                        RichText::new("Farpane")
-                            .family(style::semibold(ui.ctx()))
-                            .size(16.0),
-                    );
-                    ui.add_space(8.0);
+                    // The home side bar already carries the brand.
+                    if matches!(self.phase, Phase::Connected { .. }) {
+                        widgets::brand_mark(ui, tokens, 26.0);
+                        ui.label(
+                            RichText::new("Farpane")
+                                .family(style::semibold(ui.ctx()))
+                                .size(16.0),
+                        );
+                        ui.add_space(8.0);
+                    }
                     let (text, colour) = match &self.phase {
                         Phase::Home => ("Not connected", tokens.muted),
                         Phase::Connecting => ("Connecting…", tokens.amber),

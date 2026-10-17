@@ -167,19 +167,29 @@ pub fn badge(ui: &mut Ui, text: &str, tone: egui::Color32) {
 pub fn brand_mark(ui: &mut Ui, tokens: &crate::theme::Tokens, size: f32) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
     let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        crate::style::radius(size * 0.29),
-        egui::Color32::from(tokens.accent),
-    );
-    for (inset, alpha) in [(0.2_f32, 255_u8), (0.32, 170), (0.44, 100)] {
+    // The receding panes of docs/brand/farpane-mark.svg, on its own grid:
+    // x 248..796, y 240..792 of the 1024 view box, drawn into `rect`.
+    let scale = size / 556.0;
+    let at = |x: f32, y: f32| rect.min + egui::vec2((x - 240.0) * scale, (y - 240.0) * scale);
+    let accent = egui::Color32::from(tokens.accent);
+    // (x, y, side, corner radius, stroke width, opacity)
+    for (x, y, side, r, w, a) in [
+        (248.0_f32, 272.0_f32, 520.0_f32, 114.0_f32, 44.0_f32, 97_u8),
+        (381.0, 265.0, 390.0, 86.0, 36.0, 158),
+        (511.0, 255.0, 270.0, 60.0, 30.0, 219),
+    ] {
         painter.rect_stroke(
-            rect.shrink(size * inset),
-            crate::style::radius(size * 0.06),
-            egui::Stroke::new(1.8_f32, egui::Color32::from_white_alpha(alpha)),
-            egui::StrokeKind::Inside,
+            egui::Rect::from_min_max(at(x, y), at(x + side, y + side)),
+            crate::style::radius(r * scale),
+            egui::Stroke::new(w * scale, accent.gamma_multiply(f32::from(a) / 255.0)),
+            egui::StrokeKind::Middle,
         );
     }
+    painter.rect_filled(
+        egui::Rect::from_min_max(at(636.0, 240.0), at(796.0, 400.0)),
+        crate::style::radius(36.0 * scale),
+        egui::Color32::from_rgb(0xFF, 0xB5, 0x9C),
+    );
 }
 
 /// A row of the side bar. Returns whether it was clicked.
