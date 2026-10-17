@@ -214,7 +214,7 @@ impl Decoder {
                 .enumerate()
             {
                 self.converter.convert_row(src, &mut bgrx);
-                for (x, px) in bgrx.chunks_exact(4).enumerate() {
+                for (x, px) in bgrx.as_chunks::<4>().0.iter().enumerate() {
                     let opaque = mask[row * mask_row + x / 8] >> (7 - x % 8) & 1 == 1;
                     rgba.extend_from_slice(&[px[2], px[1], px[0], if opaque { 255 } else { 0 }]);
                 }

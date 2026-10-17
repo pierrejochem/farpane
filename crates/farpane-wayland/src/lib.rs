@@ -470,8 +470,10 @@ fn changed_tiles(fb: &Framebuffer, new: &[u8], w: usize, h: usize) -> Vec<Rect> 
                 let b = ((ty + row) * w + tx) * 4;
                 // The framebuffer's alpha byte is always opaque: compare colour only.
                 old[a..a + tw * 4]
-                    .chunks_exact(4)
-                    .zip(new[b..b + tw * 4].chunks_exact(4))
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .zip(new[b..b + tw * 4].as_chunks::<4>().0)
                     .any(|(o, n)| o[..3] != n[..3])
             });
             if differs {

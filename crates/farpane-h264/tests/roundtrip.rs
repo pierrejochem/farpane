@@ -72,7 +72,7 @@ fn a_stream_of_frames_comes_back_as_nearly_the_same_pictures() {
         assert_eq!((usize::from(out.width), usize::from(out.height)), (w, h));
         let diff = mean_difference(&source, &out.bgrx);
         assert!(diff < 12.0, "frame {i}: mean difference {diff}");
-        assert!(out.bgrx.chunks_exact(4).all(|p| p[3] == 255));
+        assert!(out.bgrx.as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     }
     // Later frames carry only what changed.
     assert!(sizes[1] < sizes[0], "{sizes:?}");

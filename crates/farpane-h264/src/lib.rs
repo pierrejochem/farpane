@@ -277,7 +277,7 @@ impl VideoDecoder for Dec {
                 let mut rgba = vec![0u8; width * height * 4];
                 yuv.write_rgba8(&mut rgba);
                 // The framebuffer wants B, G, R, X.
-                for px in rgba.chunks_exact_mut(4) {
+                for px in rgba.as_chunks_mut::<4>().0 {
                     px.swap(0, 2);
                     px[3] = 255;
                 }

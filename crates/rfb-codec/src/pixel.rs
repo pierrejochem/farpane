@@ -171,13 +171,18 @@ impl PixelConverter {
             dst.len()
         );
         if self.identity {
-            for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(4)) {
+            for (s, d) in src
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst.as_chunks_mut::<4>().0.iter_mut())
+            {
                 d.copy_from_slice(&[s[0], s[1], s[2], 0xFF]);
             }
         } else {
             for (s, d) in src
                 .chunks_exact(self.bytes_per_pixel)
-                .zip(dst.chunks_exact_mut(BYTES_PER_PIXEL))
+                .zip(dst.as_chunks_mut::<BYTES_PER_PIXEL>().0.iter_mut())
             {
                 d.copy_from_slice(&self.pixel(s));
             }

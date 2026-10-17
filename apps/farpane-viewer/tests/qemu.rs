@@ -146,15 +146,19 @@ async fn capture(addr: &str, password: Option<&str>, encodings: &str) -> Framebu
 
 fn lit_pixels(fb: &Framebuffer) -> usize {
     fb.pixels()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| p[..3] != [0, 0, 0])
         .count()
 }
 
 fn differing_pixels(a: &Framebuffer, b: &Framebuffer) -> usize {
     a.pixels()
-        .chunks_exact(4)
-        .zip(b.pixels().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.pixels().as_chunks::<4>().0)
         .filter(|(x, y)| x != y)
         .count()
 }
@@ -183,12 +187,12 @@ async fn every_encoding_shows_the_same_bios_screen() {
         let fb = capture(&addr, None, encodings).await;
         // Only the blinking text cursor (a few pixels) may differ.
         let diff = differing_pixels(&raw, &fb);
-        if diff > 64 {
-            if let Some(dir) = std::env::var_os("FARPANE_DUMP_DIR") {
-                let dir = std::path::PathBuf::from(dir);
-                farpane_viewer::write_image(&raw, &dir.join("raw.ppm")).unwrap();
-                farpane_viewer::write_image(&fb, &dir.join("other.ppm")).unwrap();
-            }
+        if diff > 64
+            && let Some(dir) = std::env::var_os("FARPANE_DUMP_DIR")
+        {
+            let dir = std::path::PathBuf::from(dir);
+            farpane_viewer::write_image(&raw, &dir.join("raw.ppm")).unwrap();
+            farpane_viewer::write_image(&fb, &dir.join("other.ppm")).unwrap();
         }
         assert!(diff <= 64, "{encodings}: {diff} pixels differ from Raw");
     }
@@ -486,10 +490,9 @@ async fn qemu_answers_a_resize_request_even_though_a_bios_guest_cannot_comply() 
     while answer.is_none() && tokio::time::Instant::now() < deadline {
         if let Ok(Ok(ScreenEvent::Layout(l))) =
             tokio::time::timeout(Duration::from_millis(500), screen.next_event()).await
+            && l.reason == 1
         {
-            if l.reason == 1 {
-                answer = Some(l);
-            }
+            answer = Some(l);
         }
     }
     let l = answer.expect("no answer to SetDesktopSize");

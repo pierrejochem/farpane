@@ -15,7 +15,9 @@ use rfb_proto::consts::pseudo;
 pub fn write_image(fb: &Framebuffer, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let rgb: Vec<u8> = fb
         .pixels()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|bgrx| [bgrx[2], bgrx[1], bgrx[0]])
         .collect();
     let mut out = BufWriter::new(File::create(path)?);

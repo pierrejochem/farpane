@@ -87,7 +87,9 @@ pub fn parse(msg_flags: u32, payload: &[u8]) -> Result<Action, ClipboardError> {
             return Err(ClipboardError::Malformed("capability sizes"));
         }
         let sizes = payload
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         return Ok(Action::Caps {
@@ -318,10 +320,10 @@ impl ExtClipboard {
                 }
             }
             Action::Request { formats } => {
-                if formats & flags::TEXT != 0 {
-                    if let Some(text) = &self.local {
-                        out.send.push(provide_text(text)?);
-                    }
+                if formats & flags::TEXT != 0
+                    && let Some(text) = &self.local
+                {
+                    out.send.push(provide_text(text)?);
                 }
             }
             Action::Peek => out.send.push(notify(self.local.is_some())),
@@ -339,10 +341,8 @@ impl ExtClipboard {
         };
         self.local = Some(text.to_owned());
         let fits = u32::try_from(wire_size(text)).is_ok_and(|n| n <= peer.text_max);
-        if fits {
-            if let Ok(provide) = provide_text(text) {
-                return vec![provide];
-            }
+        if fits && let Ok(provide) = provide_text(text) {
+            return vec![provide];
         }
         vec![notify(true)]
     }

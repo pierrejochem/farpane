@@ -224,7 +224,7 @@ fn capture_sees_a_window_and_reports_its_changes() {
         usize::from(cursor.width) * usize::from(cursor.height) * 4
     );
     assert!(
-        cursor.rgba.chunks_exact(4).any(|p| p[3] > 0),
+        cursor.rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0),
         "some opaque pixels"
     );
 

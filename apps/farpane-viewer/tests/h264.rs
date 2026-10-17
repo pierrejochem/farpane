@@ -110,7 +110,9 @@ async fn a_viewer_with_a_codec_gets_h264_from_a_server_that_has_one() {
         screen
             .framebuffer()
             .pixels()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[..3] != [0, 0, 0]),
         "the picture was drawn"
     );
@@ -130,7 +132,9 @@ async fn a_server_without_a_codec_is_still_usable_by_a_viewer_that_asks() {
         screen
             .framebuffer()
             .pixels()
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .any(|p| p[..3] != [0, 0, 0])
     );
 }

@@ -666,10 +666,9 @@ impl ViewerApp {
                     .button("Download OpenH264 from Cisco")
                     .on_hover_text(farpane_h264::NOTICE)
                     .clicked()
+                && let Some(dir) = self.store.dir().map(|d| farpane_h264::library_dir(&d))
             {
-                if let Some(dir) = self.store.dir().map(|d| farpane_h264::library_dir(&d)) {
-                    self.h264_installer = Some(farpane_h264::Installer::start(dir));
-                }
+                self.h264_installer = Some(farpane_h264::Installer::start(dir));
             }
         });
     }
@@ -946,17 +945,18 @@ impl ViewerApp {
         if let Some(grab) = &mut self.grab {
             grab.set_wanted(wanted);
             let state = grab.poll();
-            if let (true, GrabState::Failed(why)) = (wanted, &state) {
-                if self.grab_state != state {
-                    let message = format!("Could not capture the keyboard: {why}");
-                    self.say(message);
-                }
+            if let (true, GrabState::Failed(why)) = (wanted, &state)
+                && self.grab_state != state
+            {
+                let message = format!("Could not capture the keyboard: {why}");
+                self.say(message);
             }
             self.grab_state = state;
-        } else if wanted && !self.was_capturing {
-            if let Some(why) = self.grab_unavailable.clone() {
-                self.say(format!("Keyboard capture is not available: {why}"));
-            }
+        } else if wanted
+            && !self.was_capturing
+            && let Some(why) = self.grab_unavailable.clone()
+        {
+            self.say(format!("Keyboard capture is not available: {why}"));
         }
         if wanted
             && !self.was_capturing

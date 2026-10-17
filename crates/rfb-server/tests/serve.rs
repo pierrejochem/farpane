@@ -1034,8 +1034,14 @@ async fn the_test_pattern_shows_an_arrow_in_every_pixel_format() {
         assert_eq!(v.cursors.len(), 1);
         let got = &v.cursors[0];
         assert_eq!((got.width, got.height, got.hotspot), (12, 12, (0, 0)));
-        let alphas =
-            |c: &rfb_codec::Cursor| c.rgba.chunks_exact(4).map(|p| p[3]).collect::<Vec<_>>();
+        let alphas = |c: &rfb_codec::Cursor| {
+            c.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[3])
+                .collect::<Vec<_>>()
+        };
         assert_eq!(alphas(got), alphas(&arrow));
     }
 }

@@ -385,8 +385,10 @@ fn cursor_round_trips_through_the_decoder_in_every_format() {
         );
         for (i, (want, have)) in cursor
             .rgba
-            .chunks_exact(4)
-            .zip(got.rgba.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(got.rgba.as_chunks::<4>().0)
             .enumerate()
         {
             assert_eq!(have[3], want[3], "{name}: opacity of pixel {i}");

@@ -625,13 +625,13 @@ impl Server {
         let session = match ServerSession::accept(stream, opts).await {
             Ok(s) => s,
             Err(e) => {
-                if let Some(p) = peer {
-                    if matches!(e, Error::AuthFailed) {
-                        self.throttle
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .record_failure(p.ip(), Instant::now());
-                    }
+                if let Some(p) = peer
+                    && matches!(e, Error::AuthFailed)
+                {
+                    self.throttle
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .record_failure(p.ip(), Instant::now());
                 }
                 if matches!(e, Error::AuthFailed) {
                     self.emit(&Event::AuthFailed { peer });
@@ -876,10 +876,10 @@ impl Drop for Server {
 /// scroll as several rectangles).
 fn find_scroll(old: &[u8], new: &[u8], stride: usize, damage: &[Rect]) -> Vec<crate::scroll::Copy> {
     let mut candidates: Vec<Rect> = damage.to_vec();
-    if damage.len() > 1 {
-        if let Some(all) = damage.iter().copied().reduce(crate::region::union) {
-            candidates.push(all);
-        }
+    if damage.len() > 1
+        && let Some(all) = damage.iter().copied().reduce(crate::region::union)
+    {
+        candidates.push(all);
     }
     candidates
         .into_iter()

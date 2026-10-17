@@ -48,17 +48,17 @@ impl Layout {
         match self {
             Self::Bgrx => out.extend_from_slice(src),
             Self::Rgbx => {
-                for p in src.chunks_exact(4) {
+                for p in src.as_chunks::<4>().0 {
                     out.extend_from_slice(&[p[2], p[1], p[0], 0xFF]);
                 }
             }
             Self::Rgb => {
-                for p in src.chunks_exact(3) {
+                for p in src.as_chunks::<3>().0 {
                     out.extend_from_slice(&[p[2], p[1], p[0], 0xFF]);
                 }
             }
             Self::Bgr => {
-                for p in src.chunks_exact(3) {
+                for p in src.as_chunks::<3>().0 {
                     out.extend_from_slice(&[p[0], p[1], p[2], 0xFF]);
                 }
             }

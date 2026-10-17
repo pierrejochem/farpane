@@ -25,7 +25,7 @@ impl Framebuffer {
         }
         let len = usize::from(width) * usize::from(height) * BYTES_PER_PIXEL;
         let mut pixels = vec![0; len];
-        for px in pixels.chunks_exact_mut(BYTES_PER_PIXEL) {
+        for px in pixels.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
             px[3] = 0xFF;
         }
         Ok(Self {
@@ -88,7 +88,10 @@ impl Framebuffer {
         let mut out = Vec::with_capacity(row_bytes * usize::from(rect.height));
         for row in 0..rect.height {
             let at = self.offset(rect.x, rect.y + row);
-            for px in self.pixels[at..at + row_bytes].chunks_exact(BYTES_PER_PIXEL) {
+            for px in self.pixels[at..at + row_bytes]
+                .as_chunks::<BYTES_PER_PIXEL>()
+                .0
+            {
                 out.extend_from_slice(&[px[2], px[1], px[0], px[3]]);
             }
         }
@@ -123,8 +126,10 @@ impl Framebuffer {
         for (row, src) in (0..rect.height).zip(bgrx.chunks_exact(row_bytes.max(1))) {
             for (dst, px) in self
                 .row_mut(rect, row)
-                .chunks_exact_mut(BYTES_PER_PIXEL)
-                .zip(src.chunks_exact(BYTES_PER_PIXEL))
+                .as_chunks_mut::<BYTES_PER_PIXEL>()
+                .0
+                .iter_mut()
+                .zip(src.as_chunks::<BYTES_PER_PIXEL>().0)
             {
                 dst.copy_from_slice(&[px[0], px[1], px[2], 0xFF]);
             }
@@ -148,7 +153,7 @@ impl Framebuffer {
     /// Fill `rect` with one pixel. `rect` must have been checked.
     pub(crate) fn fill_rect(&mut self, rect: Rect, pixel: [u8; 4]) {
         for row in 0..rect.height {
-            for dst in self.row_mut(rect, row).chunks_exact_mut(BYTES_PER_PIXEL) {
+            for dst in self.row_mut(rect, row).as_chunks_mut::<BYTES_PER_PIXEL>().0 {
                 dst.copy_from_slice(&pixel);
             }
         }

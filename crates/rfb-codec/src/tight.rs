@@ -112,7 +112,9 @@ fn paint(
                 let src = &data[usize::from(row) * w * tp..][..w * tp];
                 for (dst, px) in fb
                     .row_mut(rect, row)
-                    .chunks_exact_mut(4)
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
                     .zip(src.chunks_exact(tp))
                 {
                     dst.copy_from_slice(&conv.tpixel(px));
@@ -124,7 +126,13 @@ fn paint(
             let stride = if packed { w.div_ceil(8) } else { w };
             for row in 0..rect.height {
                 let src = &data[usize::from(row) * stride..][..stride];
-                for (x, dst) in fb.row_mut(rect, row).chunks_exact_mut(4).enumerate() {
+                for (x, dst) in fb
+                    .row_mut(rect, row)
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .enumerate()
+                {
                     let index = if packed {
                         usize::from(src[x / 8] >> (7 - x % 8) & 1)
                     } else {
@@ -179,7 +187,7 @@ fn gradient(fb: &mut Framebuffer, conv: &PixelConverter, rect: Rect, data: &[u8]
         let dst_row = fb.row_mut(rect, u16::try_from(row).unwrap_or(u16::MAX));
         for (x, (px, dst)) in src
             .chunks_exact(tp)
-            .zip(dst_row.chunks_exact_mut(4))
+            .zip(dst_row.as_chunks_mut::<4>().0.iter_mut())
             .enumerate()
         {
             let diff = conv.tpixel_channels(px);

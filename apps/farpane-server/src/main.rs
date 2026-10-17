@@ -273,12 +273,12 @@ fn with_saved_settings(args: Args) -> Result<Args, String> {
 /// gives wins, the saved settings fill in the rest.
 fn merge_settings(mut args: Args, saved: &ServerSettings) -> Result<Args, String> {
     let saved = saved.clone();
-    if !args.listen_given {
-        if let Some(listen) = saved.listen {
-            args.listen = listen
-                .parse()
-                .map_err(|e| format!("server.toml: listen: {e}"))?;
-        }
+    if !args.listen_given
+        && let Some(listen) = saved.listen
+    {
+        args.listen = listen
+            .parse()
+            .map_err(|e| format!("server.toml: listen: {e}"))?;
     }
     if saved.tls == TlsMode::SelfSigned && args.tls_cert.is_none() && args.tls_key.is_none() {
         args.self_signed = true;
@@ -314,10 +314,10 @@ fn user_password(file: Option<&str>) -> std::io::Result<String> {
             .map(|p| String::from_utf8_lossy(&p).into_owned())
             .ok_or_else(|| std::io::Error::other("the password file is empty"));
     }
-    if let Ok(p) = std::env::var("FARPANE_PASSWORD") {
-        if !p.is_empty() {
-            return Ok(p);
-        }
+    if let Ok(p) = std::env::var("FARPANE_PASSWORD")
+        && !p.is_empty()
+    {
+        return Ok(p);
     }
     let stdin = std::io::stdin();
     if stdin.is_terminal() {
@@ -667,14 +667,15 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             "warning: no TLS; the connection is not encrypted (use --tls-self-signed)",
         );
     }
-    if let Some(p) = &args.password {
-        if access.authenticator.is_none() && p.len() > 8 {
-            note(
-                &events,
-                Level::Warning,
-                "warning: VNC password authentication checks only the first 8 characters",
-            );
-        }
+    if let Some(p) = &args.password
+        && access.authenticator.is_none()
+        && p.len() > 8
+    {
+        note(
+            &events,
+            Level::Warning,
+            "warning: VNC password authentication checks only the first 8 characters",
+        );
     }
     check_websocket(args, &access).map_err(|e| {
         eprintln!("farpane-server: {e}");

@@ -22,7 +22,7 @@ pub fn encode_raw(
         usize::from(rect.width) * usize::from(rect.height) * packer.bytes_per_pixel(),
     );
     for row in 0..rect.height {
-        for px in fb.row(rect, row).chunks_exact(BYTES_PER_PIXEL) {
+        for px in fb.row(rect, row).as_chunks::<BYTES_PER_PIXEL>().0 {
             packer.pack([px[0], px[1], px[2], px[3]], &mut out);
         }
     }
@@ -43,11 +43,11 @@ pub fn encode_cursor(cursor: &Cursor, packer: &PixelPacker) -> Result<Vec<u8>, D
     }
     let mask_row = w.div_ceil(8);
     let mut out = Vec::with_capacity(w * h * packer.bytes_per_pixel() + mask_row * h);
-    for px in cursor.rgba.chunks_exact(4) {
+    for px in cursor.rgba.as_chunks::<4>().0 {
         packer.pack([px[2], px[1], px[0], 0xFF], &mut out);
     }
     let mut mask = vec![0u8; mask_row * h];
-    for (i, px) in cursor.rgba.chunks_exact(4).enumerate() {
+    for (i, px) in cursor.rgba.as_chunks::<4>().0.iter().enumerate() {
         if px[3] >= 128 {
             mask[(i / w) * mask_row + (i % w) / 8] |= 0x80 >> (i % w % 8);
         }
@@ -213,7 +213,7 @@ impl TightEncoder {
         let tp = packer.tpixel_len();
         let mut pixels: Vec<[u8; 4]> = Vec::with_capacity(w * h);
         for row in 0..rect.height {
-            for px in fb.row(rect, row).chunks_exact(BYTES_PER_PIXEL) {
+            for px in fb.row(rect, row).as_chunks::<BYTES_PER_PIXEL>().0 {
                 pixels.push([px[0], px[1], px[2], 0xFF]);
             }
         }
@@ -330,7 +330,7 @@ pub fn encode_hextile(
             };
             pixels.clear();
             for row in 0..th {
-                for px in fb.row(tile, row).chunks_exact(BYTES_PER_PIXEL) {
+                for px in fb.row(tile, row).as_chunks::<BYTES_PER_PIXEL>().0 {
                     pixels.push([px[0], px[1], px[2], 0xFF]);
                 }
             }
@@ -511,7 +511,7 @@ fn tiles_of(
             };
             pixels.clear();
             for row in 0..th {
-                for px in fb.row(tile, row).chunks_exact(BYTES_PER_PIXEL) {
+                for px in fb.row(tile, row).as_chunks::<BYTES_PER_PIXEL>().0 {
                     // The alpha byte is not part of the colour.
                     pixels.push([px[0], px[1], px[2], 0xFF]);
                 }
@@ -691,10 +691,10 @@ fn encode_tile(
         }
     }
     // A tile with a palette of its own becomes the one to reuse.
-    if matches!(best, Kind::Packed | Kind::PaletteRle) {
-        if let Some(last) = reuse {
-            last.clone_from(&palette);
-        }
+    if matches!(best, Kind::Packed | Kind::PaletteRle)
+        && let Some(last) = reuse
+    {
+        last.clone_from(&palette);
     }
 }
 

@@ -107,7 +107,10 @@ async fn the_test_pattern_arrives_through_h264_and_follows_changes() {
     #[allow(clippy::cast_precision_loss)]
     let mean = total as f64 / a.len() as f64;
     assert!(mean < 25.0, "the pictures differ by {mean} per byte");
-    assert!(a.chunks_exact(4).any(|p| p[..3] != [0, 0, 0]), "not blank");
+    assert!(
+        a.as_chunks::<4>().0.iter().any(|p| p[..3] != [0, 0, 0]),
+        "not blank"
+    );
 }
 
 /// A copy of the server's current picture.
@@ -116,7 +119,9 @@ fn server_pixels(server: &Server) -> Vec<u8> {
     // `preview` is R, G, B, 0xFF rows; the client has B, G, R, X.
     preview
         .rgba
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|p| [p[2], p[1], p[0], 255])
         .collect()
 }

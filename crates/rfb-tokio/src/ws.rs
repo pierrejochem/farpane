@@ -417,10 +417,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for WsStream<S> {
             }
             // A pong or close reply may be waiting; sending it is best effort
             // here and finished by the next write or flush.
-            if !this.outbuf.is_empty() {
-                if let Poll::Ready(Err(e)) = this.drain(cx) {
-                    return Poll::Ready(Err(e));
-                }
+            if !this.outbuf.is_empty()
+                && let Poll::Ready(Err(e)) = this.drain(cx)
+            {
+                return Poll::Ready(Err(e));
             }
             if this.closed {
                 return Poll::Ready(Ok(()));

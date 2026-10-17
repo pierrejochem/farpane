@@ -271,11 +271,10 @@ where
                         let _ = st.dirty.take_within(c.dst);
                         st.copies.push(c);
                     }
-                    if st.wants_cursor {
-                        if let Some(c) = &u.cursor {
+                    if st.wants_cursor
+                        && let Some(c) = &u.cursor {
                             st.cursor = Some(Arc::clone(c));
                         }
-                    }
                 }
                 Err(RecvError::Lagged(_)) => {
                     let fb = shared.fb.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -389,11 +388,11 @@ where
                     .send(&ServerMessage::ExtendedClipboard { flags, payload })
                     .await?;
             }
-            if let Some(text) = reaction.received {
-                if !input_blocked(st, shared) {
-                    // The wire has CR LF; backends get plain LF.
-                    shared.input.clipboard(&text.replace("\r\n", "\n"));
-                }
+            if let Some(text) = reaction.received
+                && !input_blocked(st, shared)
+            {
+                // The wire has CR LF; backends get plain LF.
+                shared.input.clipboard(&text.replace("\r\n", "\n"));
             }
         }
         ClientMessage::Fence { flags, payload } => {
@@ -526,21 +525,21 @@ where
             payloads.push(payload);
             st.layout_told = true;
         }
-        if let Some(cursor) = st.cursor.take() {
-            if st.wants_cursor {
-                let payload = encode_cursor(&cursor, &packer)
-                    .map_err(|e| Error::Io(std::io::Error::other(e)))?;
-                headers.push(RectHeader {
-                    rect: Rect {
-                        x: cursor.hotspot.0,
-                        y: cursor.hotspot.1,
-                        width: cursor.width,
-                        height: cursor.height,
-                    },
-                    encoding: pseudo::CURSOR,
-                });
-                payloads.push(payload);
-            }
+        if let Some(cursor) = st.cursor.take()
+            && st.wants_cursor
+        {
+            let payload =
+                encode_cursor(&cursor, &packer).map_err(|e| Error::Io(std::io::Error::other(e)))?;
+            headers.push(RectHeader {
+                rect: Rect {
+                    x: cursor.hotspot.0,
+                    y: cursor.hotspot.1,
+                    width: cursor.width,
+                    height: cursor.height,
+                },
+                encoding: pseudo::CURSOR,
+            });
+            payloads.push(payload);
         }
         if chosen == enc::OPEN_H264 {
             // Every frame redraws the whole picture, so scrolls need no copy.
@@ -590,14 +589,14 @@ where
         (headers, payloads)
     };
     let (mut headers, mut payloads) = (headers, payloads);
-    if let (Some((pixels, size)), Some(codec)) = (h264_frame, video) {
-        if let Some(payload) = encode_h264(st, &*codec, &pixels, size)? {
-            headers.push(RectHeader {
-                rect: whole(size),
-                encoding: enc::OPEN_H264,
-            });
-            payloads.push(payload);
-        }
+    if let (Some((pixels, size)), Some(codec)) = (h264_frame, video)
+        && let Some(payload) = encode_h264(st, &*codec, &pixels, size)?
+    {
+        headers.push(RectHeader {
+            rect: whole(size),
+            encoding: enc::OPEN_H264,
+        });
+        payloads.push(payload);
     }
     if headers.is_empty() {
         return Ok(false);

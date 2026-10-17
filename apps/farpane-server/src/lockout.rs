@@ -62,10 +62,10 @@ impl Lockout {
                 self.names
                     .retain(|_, r| r.locked_until.is_some_and(|u| u > now));
             }
-            if self.names.len() >= MAX_TRACKED {
-                if let Some(any) = self.names.keys().next().cloned() {
-                    self.names.remove(&any);
-                }
+            if self.names.len() >= MAX_TRACKED
+                && let Some(any) = self.names.keys().next().cloned()
+            {
+                self.names.remove(&any);
             }
         }
         let record = self.names.entry(key(name)).or_default();

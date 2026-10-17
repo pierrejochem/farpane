@@ -56,7 +56,13 @@ pub(crate) fn decode_tiles(
                 height: th,
             };
             for (row, src) in (0..th).zip(tile_pixels.chunks_exact(usize::from(tw))) {
-                for (dst, px) in fb.row_mut(tile, row).chunks_exact_mut(4).zip(src) {
+                for (dst, px) in fb
+                    .row_mut(tile, row)
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(src)
+                {
                     dst.copy_from_slice(px);
                 }
             }
