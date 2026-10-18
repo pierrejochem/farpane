@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use farpane_win::{remote::Hub, worker};
+use farpane_session::{remote::Hub, worker};
 use rfb_codec::Framebuffer;
 use rfb_server::{Input, Source, TestPattern};
 
@@ -147,7 +147,7 @@ fn ctrl_alt_delete_goes_to_the_handler_not_the_worker() {
     hub.detach();
     // The worker saw every key except the swallowed Delete.
     let mut seen = 0;
-    while farpane_win::ipc::read_command(&mut r2)
+    while farpane_session::ipc::read_command(&mut r2)
         .ok()
         .flatten()
         .is_some()

@@ -12,6 +12,7 @@ mod scroll;
 mod server;
 mod source;
 mod throttle;
+mod tiles;
 
 pub use region::Region;
 pub use registry::{ClientInfo, Preview};
@@ -22,3 +23,4 @@ pub use server::{
 };
 pub use source::{Capture, Input, NoInput, Source, TestPattern};
 pub use throttle::Throttle;
+pub use tiles::changed_tiles;

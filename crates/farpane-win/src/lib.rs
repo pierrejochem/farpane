@@ -9,15 +9,16 @@
 //! It works for a process that runs on the user's interactive desktop. A
 //! Windows service runs in session 0, which has no desktop, so the service
 //! starts a session worker in the console session (`session`, over the
-//! pipes of `ipc`); the worker runs this backend through `worker::run`, and
-//! the service sees it as `remote::RemoteSource` and `remote::RemoteInput`.
+//! pipes of `farpane_session::ipc`); the worker runs this backend through
+//! `farpane_session::worker::run`, and the service sees it as
+//! `farpane_session::remote::RemoteSource` and `RemoteInput`.
 //! A worker with SYSTEM rights follows the input desktop (`desktop`), which
 //! is how the lock screen and UAC prompts come into view.
 //!
 //! Limits: an ordinary user's process cannot capture the secure desktop (UAC
 //! prompt, lock screen), and a user process cannot send Windows' own "secure
 //! attention" key combination (Ctrl+Alt+Delete); the service sends it itself
-//! (`sas`, `remote::RemoteInput::on_secure_attention`).
+//! (`sas`, `farpane_session::remote::RemoteInput::on_secure_attention`).
 //!
 //! # Unsafe code
 //!
@@ -31,10 +32,7 @@
 //! that closes it, hands pipe ends to `File` exactly once, and gives the child
 //! only its own two pipe ends.
 
-pub mod ipc;
 pub mod keys;
-pub mod remote;
-pub mod worker;
 
 #[cfg(windows)]
 mod desktop;

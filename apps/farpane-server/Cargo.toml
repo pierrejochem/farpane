@@ -44,6 +44,7 @@ farpane-wayland.workspace = true
 
 [target."cfg(windows)".dependencies]
 farpane-win.workspace = true
+farpane-session.workspace = true
 farpane-winsvc.workspace = true
 
 [lints]

@@ -51,6 +51,13 @@ The service code (`crates/farpane-winsvc`) has been type-checked for Windows, no
 
 Unsigned builds work, but users see Gatekeeper / SmartScreen warnings.
 
+### macOS service and agent (draft)
+
+`packaging/macos/io.github.pierrejochem.farpane.server.plist` (LaunchDaemon) and
+`io.github.pierrejochem.farpane.worker.plist` (LaunchAgent, Aqua sessions only) sketch the
+service and session worker split of design section 19. They are drafts: the
+`farpane-server service run | worker` commands do not exist on macOS yet, and nothing installs them.
+
 ### macOS (Developer ID, Apple Developer Program)
 
 | Secret | Content |

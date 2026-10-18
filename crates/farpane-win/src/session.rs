@@ -50,7 +50,7 @@ use windows::{
     core::{PCWSTR, PWSTR},
 };
 
-use crate::remote::Hub;
+use farpane_session::remote::Hub;
 
 /// `WTSGetActiveConsoleSessionId` when nobody is on the console.
 const NO_SESSION: u32 = 0xFFFF_FFFF;

@@ -9,6 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+farpane-session.workspace = true
 rfb-codec.workspace = true
 rfb-proto.workspace = true
 rfb-server.workspace = true

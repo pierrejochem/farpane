@@ -40,7 +40,7 @@ use ashpd::desktop::{
 use capture::{Frame, Shared};
 use rfb_codec::Framebuffer;
 use rfb_proto::types::Rect;
-use rfb_server::{Capture, Input, Source};
+use rfb_server::{Capture, Input, Source, changed_tiles};
 use tokio::{runtime::Runtime, sync::mpsc};
 
 /// Linux input event codes for the pointer buttons (`linux/input-event-codes.h`).
@@ -52,9 +52,6 @@ const BTN_MIDDLE: i32 = 0x112;
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(180);
 /// How long to wait for the first frame once approved.
 const FIRST_FRAME_TIMEOUT: Duration = Duration::from_secs(15);
-/// Tiles of this many pixels are compared to find what changed.
-const TILE: usize = 64;
-
 /// Settings for [`open`].
 #[derive(Debug, Clone, Default)]
 pub struct Config {
@@ -453,42 +450,6 @@ impl Source for WaylandSource {
             ..Capture::default()
         })
     }
-}
-
-/// The 64 x 64 tiles of `new` (`B, G, R, X`, `w` x `h`) that differ from the
-/// picture in `fb`.
-fn changed_tiles(fb: &Framebuffer, new: &[u8], w: usize, h: usize) -> Vec<Rect> {
-    let old = fb.pixels();
-    let stride = fb.stride();
-    let mut out = Vec::new();
-    for ty in (0..h).step_by(TILE) {
-        let th = (h - ty).min(TILE);
-        for tx in (0..w).step_by(TILE) {
-            let tw = (w - tx).min(TILE);
-            let differs = (0..th).any(|row| {
-                let a = (ty + row) * stride + tx * 4;
-                let b = ((ty + row) * w + tx) * 4;
-                // The framebuffer's alpha byte is always opaque: compare colour only.
-                old[a..a + tw * 4]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(new[b..b + tw * 4].as_chunks::<4>().0)
-                    .any(|(o, n)| o[..3] != n[..3])
-            });
-            if differs {
-                // Tile sizes are at most 64.
-                #[allow(clippy::cast_possible_truncation)]
-                out.push(Rect {
-                    x: tx as u16,
-                    y: ty as u16,
-                    width: tw as u16,
-                    height: th as u16,
-                });
-            }
-        }
-    }
-    out
 }
 
 /// Keyboard and pointer input through the portal.

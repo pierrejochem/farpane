@@ -1446,6 +1446,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "farpane-mac"
+version = "0.1.0"
+dependencies = [
+ "rfb-codec",
+ "rfb-proto",
+]
+
+[[package]]
 name = "farpane-server"
 version = "0.1.0"
 dependencies = [
@@ -1455,6 +1463,7 @@ dependencies = [
  "egui-wgpu",
  "egui_kittest",
  "farpane-h264",
+ "farpane-session",
  "farpane-ui",
  "farpane-wayland",
  "farpane-win",
@@ -1475,6 +1484,15 @@ dependencies = [
  "tokio",
  "toml",
  "winresource",
+]
+
+[[package]]
+name = "farpane-session"
+version = "0.1.0"
+dependencies = [
+ "rfb-codec",
+ "rfb-proto",
+ "rfb-server",
 ]
 
 [[package]]
@@ -1526,6 +1544,7 @@ dependencies = [
 name = "farpane-win"
 version = "0.1.0"
 dependencies = [
+ "farpane-session",
  "rfb-codec",
  "rfb-proto",
  "rfb-server",

@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use farpane_win::remote::{RemoteInput, RemoteSource};
+use farpane_session::remote::{RemoteInput, RemoteSource};
 
 use farpane_winsvc::Stop;
 
@@ -219,7 +219,7 @@ fn body(stop: Stop) -> u32 {
         }
     };
     // The screen lives in the user's session: a worker started there feeds it.
-    let (hub, source, input) = farpane_win::remote::Hub::new();
+    let (hub, source, input) = farpane_session::remote::Hub::new();
     input.on_secure_attention(|| {
         if let Err(e) = farpane_win::sas::send() {
             super::log(&format!("cannot send Ctrl+Alt+Delete: {e}"));
@@ -296,7 +296,7 @@ fn worker(options: Vec<String>) -> ExitCode {
         }
     };
     note(&format!("capturing with {}", source.method()));
-    match farpane_win::worker::run(source, input, std::io::stdin(), std::io::stdout(), 30) {
+    match farpane_session::worker::run(source, input, std::io::stdin(), std::io::stdout(), 30) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             note(&format!("worker stopped: {e}"));

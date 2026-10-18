@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- DRAFT, not usable yet: `farpane-server service worker` does not exist on macOS,
+       and how the daemon and this agent find each other (a socket under /var/run, owned
+       by the daemon, with the agent's user allowed) is not decided.
+       Install as /Library/LaunchAgents/io.github.pierrejochem.farpane.worker.plist, owned by
+       root:wheel, mode 644. launchd starts one agent per logged-in user session (Aqua):
+       ScreenCaptureKit and CGEventPost only work there, and Screen Recording and
+       Accessibility approval belong to this binary. The pre-login case (a second agent in the
+       LoginWindow session, Apple's PreLoginAgents pattern) is not drawn yet. -->
+  <key>Label</key><string>io.github.pierrejochem.farpane.worker</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Applications/Farpane Server.app/Contents/MacOS/farpane-server</string>
+    <string>service</string>
+    <string>worker</string>
+  </array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>LimitLoadToSessionType</key><string>Aqua</string>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>
