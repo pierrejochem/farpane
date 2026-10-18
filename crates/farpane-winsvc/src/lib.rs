@@ -20,12 +20,10 @@
 //!
 //! # What it does not do
 //!
-//! A service runs in session 0, which has no desktop to capture. Section 19 of
-//! the design reference therefore splits the server into a service and a
-//! worker started in the user's session. That worker is not built, so a
-//! service started today serves what the process itself can open (the test
-//! pattern), not the screen. See the handbook for the state of Windows
-//! support.
+//! A service runs in session 0, which has no desktop to capture. Section 19
+//! of the design reference therefore splits the server into a service and a
+//! worker started in the user's session; `farpane-win::session` does that
+//! from the body this crate runs.
 
 #![cfg(windows)]
 

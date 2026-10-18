@@ -95,6 +95,8 @@ impl WindowsSource {
         // SAFETY: no preconditions.
         let _ =
             unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        // Be on the input desktop before taking device contexts from it.
+        crate::desktop::follow();
         let (x, y, w, h) = virtual_screen();
         if w <= 0 || h <= 0 || w > MAX_SIDE || h > MAX_SIDE {
             return Err(io::Error::other(format!(
@@ -146,6 +148,30 @@ impl WindowsSource {
         self.width = u16::try_from(w).map_err(io::Error::other)?;
         self.height = u16::try_from(h).map_err(io::Error::other)?;
         self.frame = vec![0; usize::from(self.width) * usize::from(self.height) * 4];
+        Ok(())
+    }
+
+    /// Get new device contexts after the thread moved to another desktop;
+    /// the old ones belong to the desktop it left.
+    fn rebind(&mut self) -> io::Result<()> {
+        // SAFETY: the memory DC goes first so the bitmap is no longer selected
+        // when it is deleted; each handle is released once and replaced below.
+        unsafe {
+            let _ = DeleteDC(self.mem);
+            if !self.bitmap.is_invalid() {
+                let _ = DeleteObject(HGDIOBJ(self.bitmap.0));
+                self.bitmap = HBITMAP::default();
+            }
+            ReleaseDC(Some(HWND::default()), self.screen);
+            self.screen = GetDC(None);
+            if self.screen.is_invalid() {
+                return Err(io::Error::other("cannot get the screen device context"));
+            }
+            self.mem = CreateCompatibleDC(Some(self.screen));
+        }
+        self.set_size(i32::from(self.width), i32::from(self.height))?;
+        self.first = true;
+        self.cursor = None;
         Ok(())
     }
 
@@ -263,6 +289,9 @@ impl Source for WindowsSource {
 
     fn capture(&mut self, fb: &mut Framebuffer) -> io::Result<Capture> {
         let mut capture = Capture::default();
+        if crate::desktop::follow() {
+            self.rebind()?;
+        }
         let (x, y, w, h) = virtual_screen();
         let mut whole = std::mem::take(&mut self.first);
         if (w, h) != (i32::from(self.width), i32::from(self.height)) || (x, y) != self.origin {

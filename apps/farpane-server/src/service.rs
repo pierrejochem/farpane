@@ -10,8 +10,13 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
     process::{Command, ExitCode},
-    sync::{Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
 };
+
+use farpane_win::remote::{RemoteInput, RemoteSource};
 
 use farpane_winsvc::Stop;
 
@@ -21,6 +26,7 @@ const USAGE: &str = "\
 Usage: farpane-server service install [--auto] [SERVER OPTIONS]...
        farpane-server service uninstall
        farpane-server service run [SERVER OPTIONS]...   (started by Windows, not by hand)
+       farpane-server service worker [--log FILE]       (started by the service, not by hand)
 
   install     register the \"Farpane Server\" service (run as administrator). It
               starts when asked (`sc start FarpaneServer`), or at boot with
@@ -34,6 +40,13 @@ service.log); only administrators and SYSTEM may read it.
 
 static ARGS: OnceLock<Args> = OnceLock::new();
 static LOG_FILE: OnceLock<Mutex<File>> = OnceLock::new();
+/// The screen and input of the session worker, until `open_source` takes them.
+static REMOTE: Mutex<Option<(RemoteSource, RemoteInput)>> = Mutex::new(None);
+
+/// The service's screen and input (the session worker's), if this process is the service.
+pub fn take_remote() -> Option<(RemoteSource, RemoteInput)> {
+    REMOTE.lock().ok()?.take()
+}
 
 /// Add a line to `service.log`, if this process is the service.
 pub fn write_log(line: &str) {
@@ -47,6 +60,7 @@ pub fn command(mut words: impl Iterator<Item = String> + 'static) -> ExitCode {
         Some("install") => report(install(words.collect())),
         Some("uninstall") => report(farpane_winsvc::uninstall().map_err(|e| e.to_string())),
         Some("run") => run(words.collect()),
+        Some("worker") => worker(words.collect()),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -166,7 +180,37 @@ fn body(stop: Stop) -> u32 {
             return 1;
         }
     };
+    // The screen lives in the user's session: a worker started there feeds it.
+    let (hub, source, input) = farpane_win::remote::Hub::new();
+    if let Ok(mut slot) = REMOTE.lock() {
+        *slot = Some((source, input));
+    }
+    let stopping = Arc::new(AtomicBool::new(false));
+    let supervisor = std::env::current_exe().ok().and_then(|exe| {
+        let mut arguments: Vec<OsString> = vec!["service".into(), "worker".into()];
+        arguments.push("--log".into());
+        arguments.push(
+            args.config_dir
+                .clone()
+                .unwrap_or_else(config::default_config_dir)
+                .join("service.log")
+                .into_os_string(),
+        );
+        let stopping = Arc::clone(&stopping);
+        std::thread::Builder::new()
+            .name("farpane-supervisor".into())
+            .spawn(move || {
+                farpane_win::session::supervise(&hub, &exe, &arguments, &stopping, &|l| {
+                    super::log(l);
+                });
+            })
+            .ok()
+    });
+    if supervisor.is_none() {
+        super::log("cannot start the session worker supervisor; the service has no screen");
+    }
     let Ok(running) = rt.block_on(start(args)) else {
+        stopping.store(true, Ordering::Relaxed);
         super::log("the server did not start; see the lines above in service.log");
         return 1;
     };
@@ -174,6 +218,45 @@ fn body(stop: Stop) -> u32 {
     let code = rt.block_on(serve_headless(running, async {
         let _ = tokio::task::spawn_blocking(move || stop.wait()).await;
     }));
+    stopping.store(true, Ordering::Relaxed);
+    if let Some(thread) = supervisor {
+        let _ = thread.join();
+    }
     super::log("service stopped");
     u32::from(code != ExitCode::SUCCESS)
+}
+
+/// `service worker`: the process the service starts in the user's session. It
+/// reads input commands on standard input and writes screen frames to
+/// standard output (anonymous pipes made by the service); it ends when the
+/// service closes its end.
+fn worker(options: Vec<String>) -> ExitCode {
+    let mut log = None;
+    let mut words = options.into_iter();
+    while let Some(word) = words.next() {
+        if word == "--log" {
+            log = words.next();
+        }
+    }
+    let note = |line: &str| {
+        if let Some(path) = &log
+            && let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path)
+        {
+            let _ = writeln!(file, "[worker] {line}");
+        }
+    };
+    let (source, input) = match farpane_win::open() {
+        Ok(pair) => pair,
+        Err(e) => {
+            note(&format!("cannot open the screen: {e}"));
+            return ExitCode::FAILURE;
+        }
+    };
+    match farpane_win::worker::run(source, input, std::io::stdin(), std::io::stdout(), 30) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            note(&format!("worker stopped: {e}"));
+            ExitCode::FAILURE
+        }
+    }
 }

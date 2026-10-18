@@ -5,14 +5,16 @@
 //! through `SendInput`.
 //!
 //! It works for a process that runs on the user's interactive desktop. A
-//! Windows service runs in session 0, which has no desktop; sharing a user's
-//! screen from the service needs the session worker (design doc, section 19),
-//! which is not built.
+//! Windows service runs in session 0, which has no desktop, so the service
+//! starts a session worker in the console session (`session`, over the
+//! pipes of `ipc`); the worker runs this backend through `worker::run`, and
+//! the service sees it as `remote::RemoteSource` and `remote::RemoteInput`.
+//! A worker with SYSTEM rights follows the input desktop (`desktop`), which
+//! is how the lock screen and UAC prompts come into view.
 //!
-//! Limits: the secure desktop (UAC prompt, lock screen, Ctrl+Alt+Del screen)
-//! is not captured and `SendInput` cannot type into it, so Windows' own
-//! "secure attention" key combination cannot be sent either; while the secure
-//! desktop is up the picture simply stops changing. GDI is slower than
+//! Limits: an ordinary user's process cannot capture the secure desktop (UAC
+//! prompt, lock screen), and nothing here can send Windows' own "secure
+//! attention" key combination (Ctrl+Alt+Del). GDI is slower than
 //! DXGI Desktop Duplication, which would also give the changed rectangles
 //! for free; it is the planned replacement for large screens.
 //!
@@ -23,12 +25,22 @@
 //! that releases it in `Drop`; buffers handed to the API are sized from the
 //! same dimensions the API is told; and the handle-owning structs are moved
 //! to the capture thread once and used from there only (a GDI device context
-//! may be used from any one thread at a time).
+//! may be used from any one thread at a time). `session` also owns every
+//! kernel handle it opens (tokens, pipe ends, the process) in a `Handle`
+//! that closes it, hands pipe ends to `File` exactly once, and gives the child
+//! only its own two pipe ends.
 
+pub mod ipc;
 pub mod keys;
+pub mod remote;
+pub mod worker;
 
 #[cfg(windows)]
+mod desktop;
+#[cfg(windows)]
 mod input;
+#[cfg(windows)]
+pub mod session;
 #[cfg(windows)]
 mod source;
 

@@ -36,8 +36,8 @@
           <fw:FirewallException Id="ServerFirewallDomain" Name="Farpane Server (domain networks)" Program="[#ServerExeFile]"
                                 Profile="domain" Scope="any" />
           <!-- The service runs as LocalSystem and starts when asked (`sc start FarpaneServer`);
-               `farpane-server service install` with the auto option switches it to boot time. It cannot
-               share the screen yet (the session worker is not built), see the handbook. -->
+               `farpane-server service install` with the auto option switches it to boot time. It shares
+               the console session's screen through a session worker it starts, see the handbook. -->
           <ServiceInstall Id="FarpaneServerService" Name="FarpaneServer" DisplayName="Farpane Server"
                           Description="Farpane Server: VNC-compatible remote desktop server"
                           Type="ownProcess" Start="demand" ErrorControl="normal"

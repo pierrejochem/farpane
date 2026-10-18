@@ -443,6 +443,14 @@ fn open_windows() -> Result<SourceAndInput, String> {
 }
 
 fn open_source(args: &Args, config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
+    #[cfg(windows)]
+    if let Some((source, input)) = service::take_remote() {
+        return Ok((
+            Box::new(source),
+            Box::new(input),
+            "Windows session (session worker)".to_owned(),
+        ));
+    }
     let mut args = args.clone();
     if args.desktop && cfg!(windows) {
         return open_windows();

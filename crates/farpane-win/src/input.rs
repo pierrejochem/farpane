@@ -69,6 +69,7 @@ impl WindowsInput {
 }
 
 fn send(inputs: &[INPUT]) {
+    crate::desktop::follow();
     if inputs.is_empty() {
         return;
     }

@@ -17,7 +17,7 @@ Farpane is a Rust workspace of small crates with one direction of dependency: ap
 | `rfb-server` | Server engine: one capture thread broadcasting damage, one task per client owning its encoder state, plus Fence pacing, scroll copies, the client registry and throttling. |
 | `farpane-x11`, `farpane-wayland` | Linux capture and input backends behind the `Source` and `Input` traits. |
 | `farpane-grab` | Viewer keyboard capture; allowed `unsafe`, each block justified. |
-| `farpane-win` | Windows capture (GDI) and input (`SendInput`, clipboard) behind the `Source` and `Input` traits; empty on other systems. |
+| `farpane-win` | Windows capture (GDI) and input (`SendInput`, clipboard) behind the `Source` and `Input` traits, plus the session worker: the service starts the worker in the console session and `remote` forwards screen and input over pipes. The wire format and the forwarding are plain Rust and tested on any system. |
 | `farpane-winsvc` | Windows service host (service control manager entry point, install, uninstall); empty on other systems. |
 | `farpane-ui` | Design tokens, themes, widgets, icons and charts shared by both apps. |
 | `farpane-viewer`, `farpane-server` | The applications. |
