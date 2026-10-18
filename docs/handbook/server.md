@@ -15,7 +15,9 @@ order: 4
 | (none) | An animated test pattern, for trying things out. |
 | `--x11 [DISPLAY]` | An X11 display. |
 | `--wayland` | A Wayland desktop through the desktop portal. The desktop asks for approval once; the approval is remembered in the config folder. |
-| `--desktop` | The desktop of the session the server runs in: Wayland if `WAYLAND_DISPLAY` is set, else X11. |
+| `--desktop` | The desktop of the session the server runs in: on Windows the whole desktop (all monitors as one picture); elsewhere Wayland if `WAYLAND_DISPLAY` is set, else X11. |
+
+On Windows, `--desktop` captures with GDI and sends input with `SendInput`; text clipboard works both ways. It cannot capture or control the secure desktop (UAC prompts, lock screen), and Ctrl+Alt+Del cannot be sent. GDI is slower than the planned DXGI capture.
 
 Under the rootless XWayland of a Wayland desktop, capturing the X11 root fails, so use `--wayland` there.
 
@@ -71,8 +73,8 @@ The config folder is `/etc/farpane` if it exists, else `~/.config/farpane` (set 
 
 `packaging/linux/farpane-server.service` runs `farpane-server --headless --desktop` for the logged-in user. Without a user account or password it listens on loopback only.
 
-On Windows, `farpane-server service install [--auto] [OPTIONS]` registers a `FarpaneServer` service (the MSI does too, start on demand), `service uninstall` removes it and `sc start FarpaneServer` starts it. It keeps its files in `%ProgramData%\Farpane`, readable by administrators and SYSTEM only, and writes `service.log` there. It cannot share the screen yet: a service has no desktop of its own, and the session worker that would capture the user's screen is not built, so it serves the test pattern only. This part has not been run on Windows yet.
+On Windows, `farpane-server service install [--auto] [OPTIONS]` registers a `FarpaneServer` service (the MSI does too, start on demand), `service uninstall` removes it and `sc start FarpaneServer` starts it. It keeps its files in `%ProgramData%\Farpane`, readable by administrators and SYSTEM only, and writes `service.log` there. It cannot share the screen yet: a service has no desktop of its own, and the session worker that would capture the user's screen is not built, so it serves the test pattern only. The installer and the service were installed, started, connected to and removed on Windows 11.
 
 ## Limits
 
-One display, and no Windows or macOS capture yet.
+One display (on Windows all monitors form one picture), and no macOS capture yet.

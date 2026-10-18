@@ -37,8 +37,9 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --x11 [DISPLAY]        share an X11 display (default $DISPLAY) instead of the
                          test pattern; under XWayland only X11 windows are
                          visible, not the Wayland desktop
-  --desktop              share the desktop of the session this runs in: the Wayland one
-                         if $WAYLAND_DISPLAY is set, else the X11 one ($DISPLAY)
+  --desktop              share the desktop of the session this runs in: on Windows the
+                         whole desktop; elsewhere the Wayland one if $WAYLAND_DISPLAY
+                         is set, else the X11 one ($DISPLAY)
   --wayland              share the Wayland desktop through the portal (the desktop
                          asks for approval; remembered in the config folder)
   --size WxH             test pattern size (default 1024x768)
@@ -424,19 +425,33 @@ fn open_wayland(_config_dir: &std::path::Path) -> Result<SourceAndInput, String>
     Err("--wayland is only available on Linux".to_owned())
 }
 
+#[cfg(windows)]
+fn open_windows() -> Result<SourceAndInput, String> {
+    let (source, input) =
+        farpane_win::open().map_err(|e| format!("cannot share the Windows screen: {e}"))?;
+    let (w, h) = source.size();
+    Ok((
+        Box::new(source),
+        Box::new(input),
+        format!("Windows desktop, {w}x{h}"),
+    ))
+}
+
+#[cfg(not(windows))]
+fn open_windows() -> Result<SourceAndInput, String> {
+    Err("--desktop is not available here".to_owned())
+}
+
 fn open_source(args: &Args, config_dir: &std::path::Path) -> Result<SourceAndInput, String> {
     let mut args = args.clone();
+    if args.desktop && cfg!(windows) {
+        return open_windows();
+    }
     if args.desktop && !args.wayland && !args.x11 {
         if std::env::var_os("WAYLAND_DISPLAY").is_some() {
             args.wayland = true;
         } else if std::env::var_os("DISPLAY").is_some() {
             args.x11 = true;
-        } else if cfg!(windows) {
-            return Err(
-                "--desktop: sharing the Windows screen is not built yet (only the test \
-                 pattern is available)"
-                    .to_owned(),
-            );
         } else {
             return Err("--desktop: neither $WAYLAND_DISPLAY nor $DISPLAY is set".to_owned());
         }

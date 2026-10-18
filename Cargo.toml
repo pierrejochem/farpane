@@ -11,6 +11,7 @@ members = [
     "crates/farpane-ui",
     "crates/farpane-grab",
     "crates/farpane-winsvc",
+    "crates/farpane-win",
     "crates/farpane-h264",
     "apps/farpane-viewer",
     "apps/farpane-server",
@@ -37,6 +38,7 @@ farpane-wayland = { path = "crates/farpane-wayland" }
 farpane-ui = { path = "crates/farpane-ui" }
 farpane-grab = { path = "crates/farpane-grab" }
 farpane-winsvc = { path = "crates/farpane-winsvc" }
+farpane-win = { path = "crates/farpane-win" }
 farpane-h264 = { path = "crates/farpane-h264" }
 
 [workspace.lints.rust]
