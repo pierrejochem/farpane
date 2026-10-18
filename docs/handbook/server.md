@@ -21,6 +21,16 @@ On Windows, `--desktop` captures with DXGI Desktop Duplication (all monitors as 
 
 Under the rootless XWayland of a Wayland desktop, capturing the X11 root fails, so use `--wayland` there.
 
+## First run
+
+The first time the dashboard opens on a server nobody has set up (no `users.toml` and no `server.toml` in the config folder), it shows a short wizard instead of the pages:
+
+1. **Who may connect**: only this computer (`127.0.0.1:5900`), or other computers on the network (`0.0.0.0:5900`). Choosing the network turns "ask me before someone connects" on.
+2. **The administrator account**: user name, optional display name, password twice. There are no default accounts or passwords; this is the first account and an admin.
+3. **Protection**: whether to ask before each new connection, and whether to offer RSA-AES as well. Encryption is not a question: connections always use TLS with a certificate the server makes for itself, because accounts must not send passwords in the clear.
+
+Finish writes `users.toml` and `server.toml` and applies the settings to the running server at once. "Skip for now" writes nothing and the wizard is offered again at the next start. A damaged `users.toml` or `server.toml` counts as already set up and is never overwritten. A headless server has no wizard: use `farpane-server user add` and the options below.
+
 ## Who may connect
 
 By default the server listens on `127.0.0.1:5900` and refuses a non-loopback address unless there are credentials (or you pass `--allow-no-auth`, which is a bad idea without a tunnel).

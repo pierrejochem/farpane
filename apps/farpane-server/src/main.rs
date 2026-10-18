@@ -64,6 +64,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
   --require-approval     hold each new client until you allow it in the dashboard
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
+  --ui-wizard            with --ui-screenshot: show the first-run wizard (first run only)
   --ui-delay SECONDS     wait this long before that picture (default 1.5)
   --theme NAME           start with glass, slate, light or system (default glass)
   --page NAME            start on overview, clients, users, security, displays or log
@@ -109,6 +110,8 @@ struct Args {
     listen_given: bool,
     headless: bool,
     ui_screenshot: Option<PathBuf>,
+    /// With `--ui-screenshot`: show the first-run wizard (only on a server nobody has set up).
+    ui_wizard: bool,
     page: Page,
     ui_delay: f64,
     tls_names: Vec<String>,
@@ -157,6 +160,7 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
         listen_given: false,
         headless: false,
         ui_screenshot: None,
+        ui_wizard: false,
         page: Page::Overview,
         ui_delay: 1.5,
         tls_names: Vec::new(),
@@ -167,6 +171,7 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--headless" => args.headless = true,
+            "--ui-wizard" => args.ui_wizard = true,
             "--ui-screenshot" => {
                 args.ui_screenshot = Some(value(&mut it, "--ui-screenshot")?.into());
             }
@@ -928,7 +933,14 @@ fn main() -> ExitCode {
         info: std::sync::Mutex::new(info),
         applier: Some(applier),
     });
+    let first_run = farpane_server::wizard::is_first_run(
+        &config_dir.join("users.toml"),
+        &config_dir.join("server.toml"),
+    );
     let mut dashboard = Dashboard::new(backend, events, config_dir.join("users.toml"), config_dir);
+    if first_run && (args.ui_screenshot.is_none() || args.ui_wizard) {
+        dashboard.start_first_run_wizard();
+    }
     dashboard.set_screenshot(args.ui_screenshot.clone(), args.page, args.ui_delay);
     if let Some(theme) = args.theme {
         dashboard.set_theme(theme);

@@ -19,6 +19,8 @@ use farpane_ui::{
     Accent, ThemePreference, Tokens, style,
     widgets::{self, badge, brand_mark, inset, nav_item, selected},
 };
+mod wizard;
+
 use rfb_proto::consts::enc;
 use rfb_server::ClientInfo;
 
@@ -218,6 +220,8 @@ pub struct Dashboard {
     last_preview: f64,
     users: UsersPanel,
     security: SecurityPanel,
+    /// The first-run wizard, while it is open.
+    wizard: Option<wizard::Wizard>,
     /// A line at the bottom of the window (exports, errors).
     notice: Option<String>,
     /// `--ui-screenshot`: where to save a picture of the window, and the
@@ -336,6 +340,7 @@ impl Dashboard {
             last_preview: f64::NEG_INFINITY,
             users: UsersPanel::new(),
             security: SecurityPanel::default(),
+            wizard: None,
             notice: None,
             screenshot: None,
             screenshot_requested: false,
@@ -705,6 +710,13 @@ impl Dashboard {
         self.refresh(ctx, now);
         let tokens = self.tokens(ctx);
         style::apply(ctx, &tokens);
+
+        if self.wizard.is_some() {
+            self.show_wizard(ctx, &tokens);
+            self.screenshot_driver(ctx, now);
+            ctx.request_repaint_after(Duration::from_millis(250));
+            return;
+        }
 
         egui::SidePanel::left("nav")
             .exact_width(268.0)

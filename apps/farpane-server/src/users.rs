@@ -133,6 +133,17 @@ pub struct UserStore {
     modified: Option<(SystemTime, u64)>,
 }
 
+/// Check a new account's name and password against the rules `add` applies,
+/// without hashing or saving anything (for forms that want to say what is
+/// wrong before asking for more).
+///
+/// # Errors
+/// [`UserError::BadName`] or [`UserError::BadPassword`].
+pub fn validate_new(name: &str, password: &[u8]) -> Result<(), UserError> {
+    valid_name(name)?;
+    check_password(password)
+}
+
 fn valid_name(name: &str) -> Result<(), UserError> {
     if name.is_empty() || name.len() > 64 {
         return Err(UserError::BadName("must be 1 to 64 characters"));
@@ -148,13 +159,18 @@ fn valid_name(name: &str) -> Result<(), UserError> {
     Ok(())
 }
 
-fn hash(password: &[u8]) -> Result<String, UserError> {
+fn check_password(password: &[u8]) -> Result<(), UserError> {
     if password.len() < MIN_PASSWORD {
         return Err(UserError::BadPassword("must be at least 8 characters"));
     }
     if password.len() > MAX_PASSWORD {
         return Err(UserError::BadPassword("must be at most 255 bytes"));
     }
+    Ok(())
+}
+
+fn hash(password: &[u8]) -> Result<String, UserError> {
+    check_password(password)?;
     Argon2::default()
         .hash_password(password)
         .map(|h| h.to_string())

@@ -610,3 +610,131 @@ fn saving_security_settings_says_whether_they_were_applied_live() {
     );
     assert!(lines.iter().any(|l| l.contains("not applied")), "{lines:?}");
 }
+
+/// A dashboard in the state of a server nobody has set up.
+fn first_run_rig() -> (Rig, Harness<'static, Dashboard>) {
+    let (rig, mut h) = rig(vec![]);
+    h.state_mut().start_first_run_wizard();
+    h.run_steps(3);
+    (rig, h)
+}
+
+/// Fill the account step: user name, display name, password, repeated password.
+fn type_account(h: &mut Harness<'static, Dashboard>, password: &str, repeat: &str) {
+    let boxes: Vec<_> = h.get_all_by_role(NodeRole::TextInput).collect();
+    assert_eq!(boxes.len(), 2, "user name and display name");
+    boxes[0].focus();
+    boxes[0].type_text("boss");
+    boxes[1].focus();
+    boxes[1].type_text("The Boss");
+    let secrets: Vec<_> = h.get_all_by_role(NodeRole::PasswordInput).collect();
+    assert_eq!(secrets.len(), 2, "password and repeat");
+    secrets[0].focus();
+    secrets[0].type_text(password);
+    secrets[1].focus();
+    secrets[1].type_text(repeat);
+    h.run_steps(2);
+}
+
+#[test]
+fn the_wizard_creates_the_first_admin_and_the_settings_and_applies_them() {
+    use farpane_server::settings::{ServerSettings, TlsMode};
+    let (rig, mut h) = first_run_rig();
+    *rig.fake.apply.lock().unwrap() = Some(Ok(farpane_server::backend::Applied::Live));
+    assert!(h.state().wizard_open());
+    h.get_by_label("Welcome to Farpane Server");
+    h.get_by_label("Other computers on my network").click();
+    h.run_steps(2);
+    h.get_by_label("Next").click();
+    settle(&mut h);
+
+    h.get_by_label("Create the administrator account");
+    type_account(&mut h, "a long password", "a long password");
+    h.get_by_label("Next").click();
+    settle(&mut h);
+
+    // Opening to the network turned approval on; RSA-AES is an extra.
+    h.get_by_label("Protection");
+    h.get_by_label("Also offer RSA-AES").click();
+    h.run_steps(2);
+    h.get_by_label("Finish setup").click();
+    settle(&mut h);
+
+    h.get_by_label("Farpane Server is set up");
+    h.get_by_label_contains("running with these settings");
+    h.get_by_label_contains("0.0.0.0:5900");
+    // Nothing was written before Finish, and what was written is right.
+    let saved = ServerSettings::load(&rig.dir.path().join("server.toml")).unwrap();
+    assert_eq!(saved.listen.as_deref(), Some("0.0.0.0:5900"));
+    assert_eq!(saved.tls, TlsMode::SelfSigned);
+    assert!(saved.ra2 && saved.require_approval);
+    let store = UserStore::load(&rig.dir.path().join("users.toml")).unwrap();
+    let boss = store.get("boss").expect("the administrator was saved");
+    assert_eq!(
+        (boss.display_name.as_str(), boss.role),
+        ("The Boss", Role::Admin)
+    );
+    assert!(store.verify("boss", b"a long password").is_some());
+    assert!(
+        rig.log
+            .lines()
+            .iter()
+            .any(|l| l.text.contains("first-run setup finished"))
+    );
+
+    h.get_by_label("Open the dashboard").click();
+    settle(&mut h);
+    assert!(!h.state().wizard_open());
+    assert_eq!(h.state().page(), Page::Overview);
+}
+
+#[test]
+fn the_wizard_refuses_bad_account_details_and_writes_nothing() {
+    let (rig, mut h) = first_run_rig();
+    h.get_by_label("Next").click();
+    settle(&mut h);
+    type_account(&mut h, "a long password", "a different one");
+    h.get_by_label("Next").click();
+    settle(&mut h);
+    h.get_by_label_contains("not the same");
+    h.get_by_label("Create the administrator account");
+    assert!(!rig.dir.path().join("users.toml").exists());
+    assert!(!rig.dir.path().join("server.toml").exists());
+}
+
+#[test]
+fn skipping_closes_the_wizard_and_writes_nothing() {
+    let (rig, mut h) = first_run_rig();
+    h.get_by_label("Skip for now").click();
+    settle(&mut h);
+    assert!(!h.state().wizard_open());
+    assert!(!rig.dir.path().join("users.toml").exists());
+    assert!(!rig.dir.path().join("server.toml").exists());
+    assert!(
+        rig.log
+            .lines()
+            .iter()
+            .any(|l| l.text.contains("first-run setup skipped"))
+    );
+    // The normal pages are back (the side bar and the title both say Overview).
+    assert!(h.get_all_by_label("Overview").count() >= 1);
+}
+
+#[test]
+fn a_damaged_users_file_is_reported_and_never_overwritten_by_the_wizard() {
+    let (rig, mut h) = first_run_rig();
+    std::fs::write(rig.dir.path().join("users.toml"), "not toml [[[").unwrap();
+    h.get_by_label("Next").click();
+    settle(&mut h);
+    type_account(&mut h, "a long password", "a long password");
+    h.get_by_label("Next").click();
+    settle(&mut h);
+    h.get_by_label("Finish setup").click();
+    settle(&mut h);
+    h.get_by_label("Protection");
+    assert_eq!(
+        std::fs::read_to_string(rig.dir.path().join("users.toml")).unwrap(),
+        "not toml [[["
+    );
+    assert!(!rig.dir.path().join("server.toml").exists());
+}

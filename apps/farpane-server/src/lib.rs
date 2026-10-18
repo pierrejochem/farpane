@@ -10,3 +10,4 @@ pub mod settings;
 pub mod tlsconf;
 pub mod usercmd;
 pub mod users;
+pub mod wizard;
