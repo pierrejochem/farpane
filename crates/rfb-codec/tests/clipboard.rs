@@ -341,3 +341,29 @@ fn a_notify_without_text_asks_for_nothing() {
         0
     );
 }
+
+/// `TigerVNC` ends a provide with a sync flush and never finishes the zlib
+/// stream (found against a real Xvnc: the first version of the decoder called
+/// that "zlib data" damage). The text must still come out, and a message cut
+/// short must still fail.
+#[test]
+fn a_provide_whose_zlib_stream_is_not_finished_is_accepted() {
+    use flate2::{Compress, FlushCompress};
+    let text = "zurück ☺ from X";
+    let mut body = text.as_bytes().to_vec();
+    body.push(0);
+    let mut inflated = u32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
+    inflated.extend_from_slice(&body);
+
+    let mut z = Compress::new(Compression::default(), true);
+    let mut sync = Vec::with_capacity(inflated.len() + 64);
+    z.compress_vec(&inflated, &mut sync, FlushCompress::Sync)
+        .unwrap();
+    assert_ne!(sync.len(), 0);
+    match parse(flags::PROVIDE | flags::TEXT, &sync).unwrap() {
+        Action::Provide { text: got, .. } => assert_eq!(got.as_deref(), Some(text)),
+        other => panic!("{other:?}"),
+    }
+    // Cut inside the data (not just the empty sync marker): the size check catches it.
+    assert!(parse(flags::PROVIDE | flags::TEXT, &sync[..sync.len() / 2]).is_err());
+}

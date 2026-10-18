@@ -21,7 +21,7 @@ Both share a protocol core written without any I/O (`rfb-proto`) and an egui use
 
 ## Status
 
-Farpane is in early development and has **not been released**. The viewer and server work against each other and against real servers (QEMU and a kiosk VNC server). It has not yet been tested against TigerVNC, RealVNC or macOS Screen Sharing, so compatibility with those is expected but unverified.
+Farpane is in early development and has **not been released**. The viewer and server work against each other and against real servers (QEMU, TigerVNC and a kiosk VNC server). It has not yet been tested against RealVNC or macOS Screen Sharing, so compatibility with those is expected but unverified.
 
 | Area | State |
 |---|---|

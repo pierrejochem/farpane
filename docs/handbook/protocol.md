@@ -45,6 +45,7 @@ Cursor, DesktopSize, ExtendedDesktopSize (the viewer can ask a server to resize)
 
 - **QEMU's VNC server**: Raw, Hextile, zlib, ZRLE and Tight; VNC Auth; VeNCrypt with X509None and X509Vnc; a mid-session resize.
 - **A real kiosk VNC server** (VeNCrypt X509Vnc with a self-signed certificate): Raw, ZRLE, Tight, Hextile, zlib, CoRRE and RRE.
+- **TigerVNC 1.15 (`Xvnc`)**, with our viewer: VNC Auth, Raw, ZRLE, Tight and Hextile give byte-identical pictures, a wrong password is refused, a resize request is granted (ExtendedDesktopSize), the pointer shape is decoded, and UTF-8 text travels both ways through Extended Clipboard. This found one bug: TigerVNC ends an Extended Clipboard `provide` with a sync flush and never finishes the zlib stream, which we rejected as damaged; fixed. With TigerVNC's own `vncviewer` against our server: RFB 3.8, VNC Auth and VeNCrypt X509Vnc over TLS drew the shared screen (once its trust prompt for our self-signed certificate was accepted).
 - **Farpane against itself**, end to end, including TRLE and RSA-AES.
 
-Not yet tested against TigerVNC, RealVNC or macOS Screen Sharing.
+Not yet tested against RealVNC or macOS Screen Sharing.

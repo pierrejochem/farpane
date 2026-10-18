@@ -26,7 +26,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: X server and PipeWire headers (X11 and Wayland backends)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libpipewire-0.3-dev pkg-config clang
+        run: sudo apt-get update && sudo apt-get install -y xvfb tigervnc-standalone-server tigervnc-tools x11-utils x11-apps x11-xserver-utils xclip libpipewire-0.3-dev pkg-config clang
       - name: Format
         if: runner.os == 'Linux'
         run: cargo fmt --all -- --check

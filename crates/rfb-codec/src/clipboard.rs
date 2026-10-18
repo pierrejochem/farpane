@@ -119,10 +119,17 @@ pub fn parse(msg_flags: u32, payload: &[u8]) -> Result<Action, ClipboardError> {
 /// Inflate a `provide` payload and pick the text out of it.
 fn provided_text(formats: u32, payload: &[u8]) -> Result<Option<String>, ClipboardError> {
     let mut data = Vec::new();
-    ZlibDecoder::new(payload)
+    match ZlibDecoder::new(payload)
         .take(u64::from(MAX_EXT_CLIPBOARD_INFLATED) + 1)
         .read_to_end(&mut data)
-        .map_err(|_| ClipboardError::Malformed("zlib data"))?;
+    {
+        Ok(_) => {}
+        // TigerVNC ends the stream with a sync flush instead of finishing it,
+        // so a missing end marker is normal. Everything it holds has been
+        // inflated by then, and a cut-off message still fails the size checks below.
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {}
+        Err(_) => return Err(ClipboardError::Malformed("zlib data")),
+    }
     if data.len() > MAX_EXT_CLIPBOARD_INFLATED as usize {
         return Err(ClipboardError::TooLarge);
     }
