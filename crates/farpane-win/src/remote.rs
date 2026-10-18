@@ -77,7 +77,12 @@ impl Hub {
             size: WAITING_SIZE,
             resized: true,
         };
-        (hub, source, RemoteInput { link })
+        let input = RemoteInput {
+            link,
+            keys: Arc::new(Mutex::new(Keys::default())),
+            attention: Arc::new(Mutex::new(None)),
+        };
+        (hub, source, input)
     }
 
     /// Start using a new worker: frames are read from `from` on a thread of
@@ -192,13 +197,47 @@ impl Source for RemoteSource {
     }
 }
 
+/// Modifiers a client holds, to spot Ctrl+Alt+Delete.
+#[derive(Debug, Default)]
+struct Keys {
+    ctrl: u8,
+    alt: u8,
+}
+
+type Attention = Box<dyn Fn() + Send>;
+
+const CONTROL_L: u32 = 0xFFE3;
+const CONTROL_R: u32 = 0xFFE4;
+const ALT_L: u32 = 0xFFE9;
+const ALT_R: u32 = 0xFFEA;
+const DELETE: u32 = 0xFFFF;
+
 /// Input for the attached worker.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RemoteInput {
     link: Arc<Mutex<Link>>,
+    keys: Arc<Mutex<Keys>>,
+    attention: Arc<Mutex<Option<Attention>>>,
+}
+
+impl std::fmt::Debug for RemoteInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteInput").finish_non_exhaustive()
+    }
 }
 
 impl RemoteInput {
+    /// Run `handler` instead of forwarding Delete when a client presses
+    /// Ctrl+Alt+Delete. No process in a user's session can send that
+    /// combination (Windows reserves it), so the service answers it itself
+    /// (`SendSAS`); without a handler the keys are forwarded like any other.
+    pub fn on_secure_attention(&self, handler: impl Fn() + Send + 'static) {
+        *self
+            .attention
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Box::new(handler));
+    }
+
     fn send(&self, command: &Command) {
         let Ok(bytes) = command.encode() else { return };
         let mut link = self.link.lock().unwrap_or_else(PoisonError::into_inner);
@@ -208,10 +247,44 @@ impl RemoteInput {
             link.writer = None;
         }
     }
+
+    /// True when this key press is Ctrl+Alt+Delete and the handler took it.
+    fn attention(&self, keysym: u32, down: bool) -> bool {
+        let mut keys = self.keys.lock().unwrap_or_else(PoisonError::into_inner);
+        let bit = |held: &mut u8, mask: u8| {
+            if down {
+                *held |= mask;
+            } else {
+                *held &= !mask;
+            }
+        };
+        match keysym {
+            CONTROL_L => bit(&mut keys.ctrl, 1),
+            CONTROL_R => bit(&mut keys.ctrl, 2),
+            ALT_L => bit(&mut keys.alt, 1),
+            ALT_R => bit(&mut keys.alt, 2),
+            _ => {}
+        }
+        if keysym != DELETE || !down || keys.ctrl == 0 || keys.alt == 0 {
+            return false;
+        }
+        drop(keys);
+        let guard = self
+            .attention
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.as_ref().is_some_and(|handler| {
+            handler();
+            true
+        })
+    }
 }
 
 impl Input for RemoteInput {
     fn key(&self, keysym: u32, down: bool) {
+        if self.attention(keysym, down) {
+            return;
+        }
         self.send(&Command::Key { keysym, down });
     }
     fn pointer(&self, x: u16, y: u16, buttons: u8) {

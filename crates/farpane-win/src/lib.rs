@@ -15,8 +15,9 @@
 //! is how the lock screen and UAC prompts come into view.
 //!
 //! Limits: an ordinary user's process cannot capture the secure desktop (UAC
-//! prompt, lock screen), and nothing here can send Windows' own "secure
-//! attention" key combination (Ctrl+Alt+Del).
+//! prompt, lock screen), and a user process cannot send Windows' own "secure
+//! attention" key combination (Ctrl+Alt+Delete); the service sends it itself
+//! (`sas`, `remote::RemoteInput::on_secure_attention`).
 //!
 //! # Unsafe code
 //!
@@ -41,6 +42,8 @@ mod desktop;
 mod dxgi;
 #[cfg(windows)]
 mod input;
+#[cfg(windows)]
+pub mod sas;
 #[cfg(windows)]
 pub mod session;
 #[cfg(windows)]

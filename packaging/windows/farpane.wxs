@@ -42,6 +42,9 @@
                           Description="Farpane Server: VNC-compatible remote desktop server"
                           Type="ownProcess" Start="demand" ErrorControl="normal"
                           Arguments="service run" Vital="no" />
+          <!-- Lets the service send Ctrl+Alt+Delete for a viewer (1 = services may). -->
+          <RegistryValue Root="HKLM" Key="SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+                         Name="SoftwareSASGeneration" Type="integer" Value="1" />
           <ServiceControl Id="FarpaneServerControl" Name="FarpaneServer" Stop="both" Remove="uninstall" Wait="yes" />
         </Component>
       </Directory>

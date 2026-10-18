@@ -117,3 +117,43 @@ fn a_new_worker_replaces_the_old_one() {
         handle.join().unwrap().unwrap();
     }
 }
+
+#[test]
+fn ctrl_alt_delete_goes_to_the_handler_not_the_worker() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (hub, _source, input) = Hub::new();
+    let (r1, _w1) = pipe().unwrap();
+    let (mut r2, w2) = pipe().unwrap();
+    hub.attach(r1, w2);
+    let hits = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&hits);
+    input.on_secure_attention(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    });
+    // Delete alone, and with only one modifier, is an ordinary key.
+    input.key(0xFFFF, true);
+    input.key(0xFFE3, true);
+    input.key(0xFFFF, true);
+    assert_eq!(hits.load(Ordering::Relaxed), 0);
+    // With both held it is the secure attention sequence, not forwarded.
+    input.key(0xFFE9, true);
+    input.key(0xFFFF, true);
+    assert_eq!(hits.load(Ordering::Relaxed), 1);
+    // Releasing a modifier ends it.
+    input.key(0xFFE3, false);
+    input.key(0xFFFF, true);
+    assert_eq!(hits.load(Ordering::Relaxed), 1);
+    drop(input);
+    hub.detach();
+    // The worker saw every key except the swallowed Delete.
+    let mut seen = 0;
+    while farpane_win::ipc::read_command(&mut r2)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        seen += 1;
+    }
+    // Delete, Ctrl, Delete, Alt, Ctrl up, Delete
+    assert_eq!(seen, 6);
+}

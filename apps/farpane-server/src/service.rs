@@ -58,7 +58,7 @@ pub fn write_log(line: &str) {
 pub fn command(mut words: impl Iterator<Item = String> + 'static) -> ExitCode {
     match words.next().as_deref() {
         Some("install") => report(install(words.collect())),
-        Some("uninstall") => report(farpane_winsvc::uninstall().map_err(|e| e.to_string())),
+        Some("uninstall") => report(uninstall()),
         Some("run") => run(words.collect()),
         Some("worker") => worker(words.collect()),
         _ => {
@@ -96,11 +96,49 @@ fn install(mut options: Vec<String>) -> Result<(), String> {
     farpane_winsvc::install(exe, arguments, auto).map_err(|e| {
         format!("cannot register the service (run as administrator; it may exist already): {e}")
     })?;
+    sas_policy(true)?;
     println!(
         "Service \"Farpane Server\" registered. Start it with: sc start {}",
         farpane_winsvc::SERVICE_NAME
     );
     Ok(())
+}
+
+fn uninstall() -> Result<(), String> {
+    farpane_winsvc::uninstall().map_err(|e| e.to_string())?;
+    sas_policy(false)
+}
+
+const POLICY_KEY: &str = r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+
+/// Let services send Ctrl+Alt+Delete (`SoftwareSASGeneration` = 1, "services"),
+/// which the service needs to answer that key combination from a viewer; take
+/// the value away again on uninstall. The MSI sets the same value.
+fn sas_policy(allow: bool) -> Result<(), String> {
+    let mut reg = Command::new("reg");
+    if allow {
+        reg.args([
+            "add",
+            POLICY_KEY,
+            "/v",
+            "SoftwareSASGeneration",
+            "/t",
+            "REG_DWORD",
+            "/d",
+            "1",
+            "/f",
+        ]);
+    } else {
+        reg.args(["delete", POLICY_KEY, "/v", "SoftwareSASGeneration", "/f"]);
+    }
+    match reg.output() {
+        Ok(out) if out.status.success() || !allow => Ok(()),
+        Ok(out) => Err(format!(
+            "cannot set the software SAS policy: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(e) => Err(format!("cannot run reg: {e}")),
+    }
 }
 
 /// The config folder holds password hashes and private keys: leave access to
@@ -182,6 +220,11 @@ fn body(stop: Stop) -> u32 {
     };
     // The screen lives in the user's session: a worker started there feeds it.
     let (hub, source, input) = farpane_win::remote::Hub::new();
+    input.on_secure_attention(|| {
+        if let Err(e) = farpane_win::sas::send() {
+            super::log(&format!("cannot send Ctrl+Alt+Delete: {e}"));
+        }
+    });
     if let Ok(mut slot) = REMOTE.lock() {
         *slot = Some((source, input));
     }
