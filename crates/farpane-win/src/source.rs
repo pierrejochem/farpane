@@ -4,11 +4,14 @@ use std::{
         Arc,
         atomic::{AtomicU32, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use rfb_codec::{Cursor, Framebuffer};
 use rfb_proto::types::Rect;
 use rfb_server::{Capture, Source};
+
+use crate::dxgi::Duplicator;
 use windows::Win32::{
     Foundation::HWND,
     Graphics::Gdi::{
@@ -33,6 +36,8 @@ use windows::Win32::{
 };
 
 const TILE: usize = 64;
+/// How long to wait before trying Desktop Duplication again after it failed.
+const RETRY_DXGI: Duration = Duration::from_secs(5);
 /// RFB sizes are 16 bits.
 const MAX_SIDE: i32 = 0xFFFF;
 
@@ -47,6 +52,11 @@ pub struct WindowsSource {
     /// The latest frame, `B, G, R, X`, `width` x `height`, no padding.
     frame: Vec<u8>,
     first: bool,
+    /// Desktop Duplication, while it works; GDI is used when it is `None`.
+    dxgi: Option<Duplicator>,
+    /// Whether to try Desktop Duplication at all, and not before this time.
+    dxgi_allowed: bool,
+    dxgi_retry: Instant,
     cursor: Option<CursorKey>,
     /// Clipboard sequence number already seen, and the one our own input
     /// set (not reported back).
@@ -119,12 +129,17 @@ impl WindowsSource {
             bitmap: HBITMAP::default(),
             frame: Vec::new(),
             first: true,
+            dxgi: None,
+            dxgi_allowed: std::env::var("FARPANE_CAPTURE")
+                .map_or(true, |v| !v.eq_ignore_ascii_case("gdi")),
+            dxgi_retry: Instant::now(),
             cursor: None,
             // SAFETY: no preconditions.
             clip_seen: unsafe { GetClipboardSequenceNumber() },
             clip_own,
         };
         source.set_size(w, h)?;
+        source.start_dxgi();
         Ok(source)
     }
 
@@ -172,7 +187,34 @@ impl WindowsSource {
         self.set_size(i32::from(self.width), i32::from(self.height))?;
         self.first = true;
         self.cursor = None;
+        self.dxgi = None;
+        self.dxgi_retry = Instant::now();
         Ok(())
+    }
+
+    /// Which capture method is in use: `"DXGI"` or `"GDI"`.
+    #[must_use]
+    pub fn method(&self) -> &'static str {
+        if self.dxgi.is_some() { "DXGI" } else { "GDI" }
+    }
+
+    /// Start Desktop Duplication if it is wanted, absent and due. Returns
+    /// true when it was just started, in which case the picture was also
+    /// read with GDI so `frame` is complete.
+    fn start_dxgi(&mut self) -> bool {
+        if !self.dxgi_allowed || self.dxgi.is_some() || Instant::now() < self.dxgi_retry {
+            return false;
+        }
+        match Duplicator::new(self.origin, self.width, self.height) {
+            Ok(d) if self.grab() => {
+                self.dxgi = Some(d);
+                true
+            }
+            _ => {
+                self.dxgi_retry = Instant::now() + RETRY_DXGI;
+                false
+            }
+        }
     }
 
     /// Copy the screen into `self.frame`.
@@ -300,6 +342,7 @@ impl Source for WindowsSource {
             }
             self.origin = (x, y);
             self.set_size(w, h)?;
+            self.dxgi = None; // sized for the old picture
             whole = true;
         }
         if (fb.width(), fb.height()) != (self.width, self.height) {
@@ -307,9 +350,23 @@ impl Source for WindowsSource {
                 .map_err(io::Error::other)?;
             whole = true;
         }
+        if self.start_dxgi() {
+            whole = true; // `frame` was just read with GDI
+        }
+        let mut dxgi_rects = None;
+        if let Some(d) = &mut self.dxgi {
+            if let Ok(rects) = d.grab(&mut self.frame) {
+                dxgi_rects = Some(rects);
+            } else {
+                // Mode change, desktop switch, lost access: use GDI and try again.
+                self.dxgi = None;
+                self.dxgi_retry = Instant::now() + RETRY_DXGI;
+                whole = true;
+            }
+        }
         // The secure desktop and a locked session refuse BitBlt: keep the
         // last picture rather than ending the server.
-        if self.grab() {
+        if dxgi_rects.is_some() || self.grab() {
             let (w, h) = (usize::from(self.width), usize::from(self.height));
             let tiles = if whole {
                 vec![Rect {
@@ -318,6 +375,8 @@ impl Source for WindowsSource {
                     width: self.width,
                     height: self.height,
                 }]
+            } else if let Some(rects) = dxgi_rects {
+                rects
             } else {
                 changed_tiles(fb, &self.frame, w, h)
             };

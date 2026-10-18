@@ -17,7 +17,7 @@ order: 4
 | `--wayland` | A Wayland desktop through the desktop portal. The desktop asks for approval once; the approval is remembered in the config folder. |
 | `--desktop` | The desktop of the session the server runs in: on Windows the whole desktop (all monitors as one picture); elsewhere Wayland if `WAYLAND_DISPLAY` is set, else X11. |
 
-On Windows, `--desktop` captures with GDI and sends input with `SendInput`; text clipboard works both ways. It cannot capture or control the secure desktop (UAC prompts, lock screen), and Ctrl+Alt+Del cannot be sent. GDI is slower than the planned DXGI capture.
+On Windows, `--desktop` captures with DXGI Desktop Duplication (all monitors as one picture; the changed areas come from Windows) and falls back to GDI when duplication is refused (a driver without support, a rotated or HDR monitor, a desktop switch); it tries again every 5 seconds. Set `FARPANE_CAPTURE=gdi` to force GDI. Input uses `SendInput`; text clipboard works both ways. Run by hand as an ordinary user it cannot capture or control the secure desktop (UAC prompts, lock screen), while the service's worker can follow it (see below). Ctrl+Alt+Del cannot be sent.
 
 Under the rootless XWayland of a Wayland desktop, capturing the X11 root fails, so use `--wayland` there.
 

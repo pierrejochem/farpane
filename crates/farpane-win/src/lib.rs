@@ -1,6 +1,8 @@
-//! Windows backend for `rfb-server`: the screen through GDI (`BitBlt` of the
-//! whole virtual desktop, so several monitors are one wide picture), change
-//! tracking by comparing 64 x 64 tiles with the previous picture, the
+//! Windows backend for `rfb-server`: the screen through DXGI Desktop
+//! Duplication (`dxgi`, which reports the changed rectangles) or, when that
+//! is refused, GDI (`BitBlt` of the whole virtual desktop, change tracking by
+//! comparing 64 x 64 tiles with the previous picture); several monitors are
+//! one wide picture either way. Also the
 //! pointer's shape, the text clipboard, and keyboard and pointer input
 //! through `SendInput`.
 //!
@@ -14,14 +16,12 @@
 //!
 //! Limits: an ordinary user's process cannot capture the secure desktop (UAC
 //! prompt, lock screen), and nothing here can send Windows' own "secure
-//! attention" key combination (Ctrl+Alt+Del). GDI is slower than
-//! DXGI Desktop Duplication, which would also give the changed rectangles
-//! for free; it is the planned replacement for large screens.
+//! attention" key combination (Ctrl+Alt+Del).
 //!
 //! # Unsafe code
 //!
 //! The Win32 API is `unsafe` to call. The invariants this crate relies on:
-//! every handle it creates (device contexts, bitmaps) is owned by one struct
+//! every handle it creates (device contexts, bitmaps, COM interfaces) is owned by one struct
 //! that releases it in `Drop`; buffers handed to the API are sized from the
 //! same dimensions the API is told; and the handle-owning structs are moved
 //! to the capture thread once and used from there only (a GDI device context
@@ -37,6 +37,8 @@ pub mod worker;
 
 #[cfg(windows)]
 mod desktop;
+#[cfg(windows)]
+mod dxgi;
 #[cfg(windows)]
 mod input;
 #[cfg(windows)]

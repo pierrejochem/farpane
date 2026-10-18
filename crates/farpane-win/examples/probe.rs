@@ -48,6 +48,11 @@ fn main() {
     // 1. first frame: everything is damaged, a cursor shape comes along.
     let first = source.capture(&mut fb).unwrap();
     println!("first: damage {:?}", first.damage);
+    for _ in 0..5 {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        source.capture(&mut fb).unwrap();
+    }
+    println!("capture method: {}", source.method());
     match &first.cursor {
         Some(c) => println!(
             "cursor {}x{} hotspot {:?} bytes {}",

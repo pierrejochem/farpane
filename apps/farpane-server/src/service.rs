@@ -252,6 +252,7 @@ fn worker(options: Vec<String>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    note(&format!("capturing with {}", source.method()));
     match farpane_win::worker::run(source, input, std::io::stdin(), std::io::stdout(), 30) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
