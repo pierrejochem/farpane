@@ -8,7 +8,7 @@ Review the draft, then publish it.
 
 | Platform | Architectures | Files |
 |---|---|---|
-| Windows 10/11 | x64, ARM64 | `farpane-<ver>-windows-<arch>.msi` (both apps, Start-menu shortcuts, `vnc://` handler, firewall rule), portable `.zip` |
+| Windows 10/11 | x64, ARM64 | `farpane-<ver>-windows-<arch>.msi` (both apps, Start-menu shortcuts, `vnc://` handler, firewall rules for private and domain networks, `FarpaneServer` service), portable `.zip` |
 | macOS 12+ | Universal (Apple Silicon + Intel) | `farpane-viewer-<ver>-macos-universal.dmg`, `farpane-server-<ver>-macos-universal.dmg` |
 | Debian 12+, Ubuntu 22.04+ | amd64, arm64 | `farpane-viewer_<ver>-1_<arch>.deb`, `farpane-server_<ver>-1_<arch>.deb` |
 | Fedora, RHEL/Alma/Rocky 9+, openSUSE | x86_64, aarch64 | `.rpm` per app |
