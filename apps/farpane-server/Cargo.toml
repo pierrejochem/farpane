@@ -22,7 +22,7 @@ farpane-x11.workspace = true
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "macros", "signal"] }
 farpane-ui.workspace = true
 farpane-h264.workspace = true
-eframe = { version = "0.32.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "accesskit"] }
+eframe = { version = "0.33.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts", "accesskit"] }
 egui = { version = "0.32.3", default-features = false }
 egui-wgpu = "0.32.3"
 png = "0.18.1"
