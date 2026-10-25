@@ -40,6 +40,14 @@ pub enum ClientMessage {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `EnableContinuousUpdates`: while enabled the server sends updates for
+    /// `rect` without waiting for requests. Only valid once the server has
+    /// answered the `ContinuousUpdates` pseudo-encoding with
+    /// `EndOfContinuousUpdates`.
+    EnableContinuousUpdates {
+        enable: bool,
+        rect: Rect,
+    },
     /// Ask for a new framebuffer size and screen layout. Only valid after an
     /// `ExtendedDesktopSize` rectangle was received.
     SetDesktopSize {
@@ -110,6 +118,10 @@ impl ClientMessage {
                 let (flags, payload) = super::read_fence(&mut r)?;
                 Self::Fence { flags, payload }
             }
+            client_msg::ENABLE_CONTINUOUS_UPDATES => Self::EnableContinuousUpdates {
+                enable: r.u8()? != 0,
+                rect: read_rect(&mut r)?,
+            },
             client_msg::SET_DESKTOP_SIZE => {
                 r.skip(1)?;
                 let (width, height) = (r.u16()?, r.u16()?);
@@ -171,6 +183,10 @@ impl ClientMessage {
                     client_msg::FRAMEBUFFER_UPDATE_REQUEST,
                     u8::from(*incremental),
                 ]);
+                write_rect(out, *rect);
+            }
+            Self::EnableContinuousUpdates { enable, rect } => {
+                out.extend_from_slice(&[client_msg::ENABLE_CONTINUOUS_UPDATES, u8::from(*enable)]);
                 write_rect(out, *rect);
             }
             Self::KeyEvent { down, keysym } => {
@@ -285,6 +301,32 @@ mod tests {
                     },
                 },
                 vec![3, 1, 0, 1, 0, 2, 0x02, 0x80, 0x01, 0xE0],
+            ),
+            // rfbproto.rst, EnableContinuousUpdates: type 150, U8 enable,
+            // U16 x, y, width, height.
+            (
+                ClientMessage::EnableContinuousUpdates {
+                    enable: true,
+                    rect: Rect {
+                        x: 0,
+                        y: 0,
+                        width: 1920,
+                        height: 1080,
+                    },
+                },
+                vec![150, 1, 0, 0, 0, 0, 0x07, 0x80, 0x04, 0x38],
+            ),
+            (
+                ClientMessage::EnableContinuousUpdates {
+                    enable: false,
+                    rect: Rect {
+                        x: 5,
+                        y: 6,
+                        width: 7,
+                        height: 8,
+                    },
+                },
+                vec![150, 0, 0, 5, 0, 6, 0, 7, 0, 8],
             ),
             (
                 ClientMessage::KeyEvent {

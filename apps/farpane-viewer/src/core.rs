@@ -229,6 +229,7 @@ async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
                         username,
                         pins,
                         video: video.clone(),
+                        continuous_updates: true,
                         ..ConnectOptions::default()
                     };
                     break (addr, options);

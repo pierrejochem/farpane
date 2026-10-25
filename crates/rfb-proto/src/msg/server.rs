@@ -72,6 +72,10 @@ pub enum ServerMessage {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `EndOfContinuousUpdates`: the server supports `ContinuousUpdates`
+    /// (sent once after the client asked for the pseudo-encoding), and, after
+    /// the client disabled them, that the last continuous update was sent.
+    EndOfContinuousUpdates,
     /// `ServerFence`: a synchronisation request or the answer to ours.
     Fence {
         flags: u32,
@@ -114,6 +118,7 @@ impl ServerMessage {
                     }
                 }
             }
+            server_msg::END_OF_CONTINUOUS_UPDATES => Self::EndOfContinuousUpdates,
             server_msg::SERVER_FENCE => {
                 let (flags, payload) = super::read_fence(&mut r)?;
                 Self::Fence { flags, payload }
@@ -174,6 +179,7 @@ impl ServerMessage {
                 payload,
                 "ServerCutText length",
             )?,
+            Self::EndOfContinuousUpdates => out.push(server_msg::END_OF_CONTINUOUS_UPDATES),
             Self::Fence { flags, payload } => {
                 super::write_fence(out, server_msg::SERVER_FENCE, *flags, payload)?;
             }
@@ -228,6 +234,8 @@ mod tests {
                 },
                 vec![3, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFC, 0x08, 0x00, 0x00, 0x01],
             ),
+            // rfbproto.rst, EndOfContinuousUpdates: the type byte alone.
+            (ServerMessage::EndOfContinuousUpdates, vec![150]),
             // rfbproto.rst, ServerFence: type 248, 3 padding bytes, U32 flags
             // (Request | BlockBefore), U8 length, payload.
             (

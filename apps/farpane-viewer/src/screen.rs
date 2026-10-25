@@ -63,6 +63,9 @@ pub struct ConnectOptions {
     /// Picture quality 0 to 9 for lossy encodings. `None` leaves it to the
     /// server.
     pub quality: Option<u8>,
+    /// Ask the server to push updates without a request each (it needs
+    /// Fence too). Off by default.
+    pub continuous_updates: bool,
 }
 
 /// The host part of `host:port`, `[v6]:port` or a bare host: the name a
@@ -128,6 +131,11 @@ pub struct RemoteScreen {
     /// Fence requests sent and not yet answered: sequence number and send time.
     pings: VecDeque<(u64, Instant)>,
     next_ping: u64,
+    /// We asked for `ContinuousUpdates`, so the server may announce it.
+    wants_continuous: bool,
+    /// Continuous updates are on for a picture of this size: the server sends
+    /// updates by itself, and per-update requests would only add traffic.
+    continuous: Option<(u16, u16)>,
 }
 
 impl RemoteScreen {
@@ -210,6 +218,9 @@ impl RemoteScreen {
                 wanted.insert(0, enc::OPEN_H264);
             }
         }
+        if options.continuous_updates {
+            wanted.push(pseudo::CONTINUOUS_UPDATES);
+        }
         if let Some(level) = options.compression {
             wanted.push(pseudo::COMPRESS_0 + i32::from(level.min(9)));
         }
@@ -237,6 +248,8 @@ impl RemoteScreen {
             clip: ExtClipboard::new(Role::Client),
             pings: VecDeque::new(),
             next_ping: 0,
+            wants_continuous: options.continuous_updates,
+            continuous: None,
         };
         screen.request_update(false).await?;
         Ok(screen)
@@ -293,6 +306,10 @@ impl RemoteScreen {
     /// # Errors
     /// I/O errors.
     pub async fn request_update(&mut self, incremental: bool) -> Result<(), ConnectError> {
+        if incremental && self.continuous.is_some() {
+            // The server pushes changes by itself.
+            return Ok(());
+        }
         let rect = Rect {
             x: 0,
             y: 0,
@@ -325,9 +342,15 @@ impl RemoteScreen {
                             if layout.status == 0 {
                                 self.screens.clone_from(&layout.screens);
                             }
+                            self.follow_size().await?;
                             return Ok(ScreenEvent::Layout(layout));
                         }
-                        damage => return Ok(ScreenEvent::Damage(damage)),
+                        damage => {
+                            if matches!(damage, Damage::Resized) {
+                                self.follow_size().await?;
+                            }
+                            return Ok(ScreenEvent::Damage(damage));
+                        }
                     }
                 }
                 ClientConnEvent::UpdateEnd => {
@@ -371,11 +394,47 @@ impl RemoteScreen {
                         }
                     }
                 }
+                ClientConnEvent::EndOfContinuousUpdates => {
+                    // Either the server says it can push updates, or it has
+                    // stopped after we switched them off.
+                    if self.wants_continuous && self.continuous.is_none() {
+                        self.enable_continuous().await?;
+                    }
+                }
                 ClientConnEvent::Handshake(_)
                 | ClientConnEvent::UpdateBegin { .. }
                 | ClientConnEvent::ColourMap { .. } => {}
             }
         }
+    }
+
+    /// Switch continuous updates on for the whole picture.
+    async fn enable_continuous(&mut self) -> Result<(), ConnectError> {
+        let size = (self.fb.width(), self.fb.height());
+        self.session
+            .send(&ClientMessage::EnableContinuousUpdates {
+                enable: true,
+                rect: Rect {
+                    x: 0,
+                    y: 0,
+                    width: size.0,
+                    height: size.1,
+                },
+            })
+            .await?;
+        self.continuous = Some(size);
+        Ok(())
+    }
+
+    /// The picture changed size: continuous updates must cover the new one.
+    async fn follow_size(&mut self) -> Result<(), ConnectError> {
+        if self
+            .continuous
+            .is_some_and(|size| size != (self.fb.width(), self.fb.height()))
+        {
+            self.enable_continuous().await?;
+        }
+        Ok(())
     }
 
     /// Wait for one complete `FramebufferUpdate`, decode it into the picture

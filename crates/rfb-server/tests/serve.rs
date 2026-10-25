@@ -2036,3 +2036,105 @@ async fn a_client_without_a_quality_never_gets_jpeg() {
         TestPattern::background,
     );
 }
+
+#[tokio::test]
+async fn continuous_updates_are_announced_pushed_and_switched_off_again() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    let (mut v, _task) = connect(
+        &server,
+        PixelFormat::RGB888,
+        &[enc::RAW, pseudo::FENCE, pseudo::CONTINUOUS_UPDATES],
+    )
+    .await;
+    v.request(false).await;
+    v.update().await;
+    // The server told the client it has the extension, once.
+    let told = |v: &Viewer| {
+        v.other
+            .iter()
+            .filter(|e| matches!(e, ClientConnEvent::EndOfContinuousUpdates))
+            .count()
+    };
+    assert_eq!(told(&v), 1, "{:?}", v.other);
+    answer_fences(&mut v).await;
+    let all = Rect {
+        x: 0,
+        y: 0,
+        width: 64,
+        height: 64,
+    };
+    v.session
+        .send(&ClientMessage::EnableContinuousUpdates {
+            enable: true,
+            rect: all,
+        })
+        .await
+        .unwrap();
+    // Changes now arrive without any request.
+    for shade in [10u8, 20, 30] {
+        {
+            let mut p = plan.0.lock().unwrap();
+            p.shade = shade;
+            p.damage = vec![Rect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            }];
+        }
+        timeout(Duration::from_secs(2), v.update())
+            .await
+            .expect("pushed without a request");
+        answer_fences(&mut v).await;
+        v.matches(
+            Rect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            },
+            |_, _| [shade, shade, shade, 0],
+        );
+    }
+    // Switched off: the server confirms, and the next change waits for a request.
+    v.session
+        .send(&ClientMessage::EnableContinuousUpdates {
+            enable: false,
+            rect: all,
+        })
+        .await
+        .unwrap();
+    v.other.clear();
+    v.quiet(Duration::from_millis(200)).await;
+    assert_eq!(told(&v), 1, "{:?}", v.other);
+    {
+        let mut p = plan.0.lock().unwrap();
+        p.shade = 99;
+        p.damage = vec![Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        }];
+    }
+    assert!(
+        timeout(Duration::from_millis(400), v.update())
+            .await
+            .is_err(),
+        "no push once switched off"
+    );
+    v.request(true).await;
+    v.update().await;
+}

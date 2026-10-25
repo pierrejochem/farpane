@@ -53,6 +53,11 @@ struct State {
     dirty: Region,
     /// The area of the outstanding update request, if any.
     request: Option<Rect>,
+    /// The area the client asked to receive continuous updates for: while it
+    /// is set, updates go out without further requests.
+    continuous: Option<Rect>,
+    /// `EndOfContinuousUpdates` was sent once, so the client knows we have it.
+    announced_continuous: bool,
     zrle: ZrleEncoder,
     tight: TightEncoder,
     /// zlib level the client asked for (pseudo-encodings -256 to -247).
@@ -186,6 +191,8 @@ where
         handle: Arc::clone(&handle),
         dirty: Region::new(),
         request: None,
+        continuous: None,
+        announced_continuous: false,
         zrle: ZrleEncoder::with_level(level),
         tight: TightEncoder::with_level(level),
         compress_level: None,
@@ -228,7 +235,7 @@ where
         {
             st.in_flight.pop_front();
         }
-        if let Some(request) = st.request {
+        if let Some(request) = st.request.or(st.continuous) {
             let ready = !shared.paused.load(Ordering::Relaxed)
                 && (st.dirty.touches(request)
                 || st.layout_reply.is_some()
@@ -251,6 +258,7 @@ where
                 .await
                 .map_err(|_| Error::Io(std::io::ErrorKind::TimedOut.into()))??;
                 if sent {
+                    // A continuous area stays requested; a plain request is used up.
                     st.request = None;
                 }
             }
@@ -376,6 +384,12 @@ where
                 .iter()
                 .find(|e| (pseudo::JPEG_QUALITY_0..=pseudo::JPEG_QUALITY_9).contains(*e))
                 .and_then(|e| u8::try_from(e - pseudo::JPEG_QUALITY_0).ok());
+            // A client that asks for ContinuousUpdates is told once that we
+            // have it (it also needs Fence for flow control, which we do).
+            if list.contains(&pseudo::CONTINUOUS_UPDATES) && !st.announced_continuous {
+                st.announced_continuous = true;
+                session.send(&ServerMessage::EndOfContinuousUpdates).await?;
+            }
             st.wants_copy = list.contains(&enc::COPY_RECT);
             if !st.wants_copy {
                 st.copies.clear();
@@ -485,6 +499,16 @@ where
                         break;
                     }
                 }
+            }
+        }
+        ClientMessage::EnableContinuousUpdates { enable, rect } => {
+            if enable {
+                // Whatever changed since the last update inside the area is
+                // still in `dirty`, so the first update follows at once.
+                st.continuous = Some(rect);
+            } else if st.continuous.take().is_some() {
+                // Nothing more will be sent without a request: tell the client.
+                session.send(&ServerMessage::EndOfContinuousUpdates).await?;
             }
         }
         ClientMessage::SetDesktopSize { .. } => {

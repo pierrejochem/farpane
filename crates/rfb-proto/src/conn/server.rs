@@ -302,6 +302,13 @@ impl ServerConn {
         {
             return Err(ProtoError::ExtensionNotConfirmed("Fence"));
         }
+        if matches!(msg, ServerMessage::EndOfContinuousUpdates)
+            && !self
+                .encodings
+                .contains(&crate::consts::pseudo::CONTINUOUS_UPDATES)
+        {
+            return Err(ProtoError::ExtensionNotConfirmed("ContinuousUpdates"));
+        }
         if matches!(msg, ServerMessage::UpdateBegin { .. }) {
             return Err(ProtoError::Malformed {
                 ctx: "use send_update for FramebufferUpdate",

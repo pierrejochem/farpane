@@ -226,6 +226,7 @@ async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         extra_roots: Vec::new(),
         compression: args.compression,
         quality: args.quality,
+        continuous_updates: true,
         video: if args.h264 {
             let dir = h264_dir().ok_or("no settings folder")?;
             let codec = farpane_h264::OpenH264::open(&dir)?.ok_or(

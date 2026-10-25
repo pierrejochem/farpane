@@ -44,6 +44,9 @@ pub enum ClientConnEvent {
         flags: u32,
         payload: Vec<u8>,
     },
+    /// `EndOfContinuousUpdates`: the server supports continuous updates, or
+    /// has stopped sending them after the client switched them off.
+    EndOfContinuousUpdates,
     /// `ServerFence`. A request (`fence::REQUEST` set) must be answered with
     /// a `ClientFence` that echoes the payload and the flags the client
     /// understands; otherwise it is the answer to our own request.
@@ -83,6 +86,8 @@ pub struct ClientConn {
     /// `SetDesktopSize`.
     ext_desktop_seen: bool,
     fence_seen: bool,
+    /// The server answered `ContinuousUpdates` with `EndOfContinuousUpdates`.
+    continuous_seen: bool,
 }
 
 impl ClientConn {
@@ -96,6 +101,7 @@ impl ClientConn {
             pf: PixelFormat::RGB888,
             ext_desktop_seen: false,
             fence_seen: false,
+            continuous_seen: false,
         }
     }
 
@@ -140,6 +146,13 @@ impl ClientConn {
     #[must_use]
     pub fn supports_fence(&self) -> bool {
         self.fence_seen
+    }
+
+    /// Whether the server has shown it supports `ContinuousUpdates` (it sent
+    /// `EndOfContinuousUpdates`).
+    #[must_use]
+    pub fn supports_continuous_updates(&self) -> bool {
+        self.continuous_seen
     }
 
     /// True once `ServerInit` was received.
@@ -240,6 +253,9 @@ impl ClientConn {
         if matches!(msg, ClientMessage::Fence { .. }) && !self.fence_seen {
             return Err(ProtoError::ExtensionNotConfirmed("Fence"));
         }
+        if matches!(msg, ClientMessage::EnableContinuousUpdates { .. }) && !self.continuous_seen {
+            return Err(ProtoError::ExtensionNotConfirmed("ContinuousUpdates"));
+        }
         msg.write(out)?;
         if let ClientMessage::SetPixelFormat(pf) = msg {
             self.pf = *pf;
@@ -312,6 +328,10 @@ impl ClientConn {
             ServerMessage::ServerCutText(t) => ClientConnEvent::CutText(t),
             ServerMessage::ExtendedClipboard { flags, payload } => {
                 ClientConnEvent::ExtendedClipboard { flags, payload }
+            }
+            ServerMessage::EndOfContinuousUpdates => {
+                self.continuous_seen = true;
+                ClientConnEvent::EndOfContinuousUpdates
             }
             ServerMessage::Fence { flags, payload } => {
                 self.fence_seen = true;
