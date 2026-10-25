@@ -46,6 +46,12 @@ The bar under the picture shows the protocol version, security type, picture siz
 
 Tick **Ask servers for H.264** in Settings, or run with `--h264`. It needs Cisco's OpenH264 library: **Download OpenH264 from Cisco** in Settings, or `farpane-viewer --install-h264`, fetches it once and checks it against Cisco's published hash. Servers that cannot send H.264 are used as usual.
 
+## Picture quality and compression
+
+In Settings, **Picture quality** asks servers for lossy JPEG on photo-like areas (Lossy 0 to 8, smaller at the low end); the areas are repainted exactly once the picture is still. **Compression** asks for a zlib level for the servers that follow it: a low level costs the server less CPU and sends more data (good on a fast network), a high level sends less. Both apply at the next connection. Headless: `--quality 0-9` and `--compression 0-9`.
+
+The viewer also asks for continuous updates when a server offers them, so changes arrive without a request for each one.
+
 ## Settings
 
 Settings live in `farpane/viewer.toml` in your configuration folder (`~/.config` or `$XDG_CONFIG_HOME` on Linux, `~/Library/Application Support` on macOS, `%APPDATA%` on Windows). A damaged file is moved aside to `.broken`; a file written by a newer version is read but never overwritten.

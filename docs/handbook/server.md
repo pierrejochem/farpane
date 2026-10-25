@@ -46,6 +46,10 @@ Accounts sign in by name and password inside encryption: TLS (`--tls-self-signed
 
 Only pages from the same host may use the port unless you list others with `--ws-origin https://pages.example` (repeatable; `*` allows any page, which makes the server's own sign-in the only protection). The server does not serve noVNC itself: host its files anywhere and point it at the port.
 
+## Compression
+
+ZRLE and Tight use zlib. `--compression 0-9` (or `compression = N` in `server.toml`) sets the level for clients that do not ask for one; the default is 1, which encodes fast and suits a local network. A client that asks for a level (the viewer's Compression setting) gets its own. Level 6 sends about a third of the bytes on photo-like content at the cost of CPU. A client that asks for a JPEG quality also gets lossy Tight rectangles for photo-like areas, repainted exactly once the picture is still.
+
 ## H.264 video
 
 H.264 is off by default. It needs Cisco's OpenH264 library, which is not part of Farpane: run `farpane-server h264 install` (or use **Download from Cisco** on the Security page) once; the file is fetched from Cisco, checked against the hash Cisco published and kept in the config folder. Then start with `--h264` or tick **Offer H.264 video**. Clients that ask for it first get the whole screen as one H.264 stream (Constrained Baseline); other clients are served as before.

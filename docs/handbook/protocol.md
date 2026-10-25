@@ -32,14 +32,14 @@ RFB 3.3, 3.7 and 3.8, in both roles (viewer and server).
 | zlib | yes | no |
 | ZRLE | yes | yes |
 | TRLE | yes | yes |
-| Tight (no JPEG) | yes | yes |
+| Tight | yes (JPEG only if the viewer asked for a quality) | yes (JPEG only for a client that asked for a quality) |
 | Open H.264 (50) | yes, with Cisco's OpenH264 library | yes, with Cisco's OpenH264 library |
 
-Tight JPEG is refused because the viewer never asks for a JPEG quality level, which the specification requires before a server may send it.
+Tight JPEG follows the specification: a server sends it only to a client that asked for a JPEG quality level (pseudo-encodings -32 to -23), and the viewer accepts it only when it sent one. The server uses JPEG for photo-like rectangles (more than 96 colours, at least 256 pixels) and, once the picture has been still for 50 ms, sends those areas again without loss. Quality 9 and no quality at all mean lossless.
 
 ## Pseudo-encodings and extensions
 
-Cursor, DesktopSize, ExtendedDesktopSize (the viewer can ask a server to resize), Fence (round-trip measurement and pacing), Extended Clipboard (UTF-8 text) and LastRect.
+Cursor, DesktopSize, ExtendedDesktopSize (the viewer can ask a server to resize), Fence (round-trip measurement and pacing: the server keeps a byte window that follows the link, learnt from the fence round trips), ContinuousUpdates (the server pushes changes without a request for each, and the viewer asks for it), the compression level pseudo-encodings (-256 to -247: the server uses the client's zlib level for ZRLE and Tight), the JPEG quality pseudo-encodings (-32 to -23), Extended Clipboard (UTF-8 text) and LastRect.
 
 ## Verified against
 
