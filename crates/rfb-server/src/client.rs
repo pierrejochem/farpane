@@ -600,7 +600,7 @@ where
             } else {
                 u16::MAX
             };
-            for rect in split_width(piece, width_limit) {
+            for rect in split_rect(piece, width_limit) {
                 let payload = match chosen {
                     enc::ZRLE => st.zrle.encode(&fb, rect, &packer),
                     enc::TIGHT => st.tight.encode(&fb, rect, &packer),
@@ -724,19 +724,98 @@ where
     Ok(())
 }
 
-/// `rect` cut into pieces at most `limit` wide.
-fn split_width(rect: Rect, limit: u16) -> Vec<Rect> {
-    let limit = limit.max(1);
+/// The most pixels in one rectangle: bigger changes go out in several, so
+/// the client can show the first while the rest is still being encoded and
+/// sent, and no single encode holds the framebuffer lock for long.
+const MAX_RECT_AREA: u32 = 65_536;
+
+/// `rect` cut into pieces at most `limit` wide and at most
+/// [`MAX_RECT_AREA`] pixels, in raster order.
+fn split_rect(rect: Rect, limit: u16) -> Vec<Rect> {
+    let width_cap = limit.max(1);
+    // Every piece of a strip has this height; the widest piece sets it.
+    let widest = rect.width.clamp(1, width_cap);
+    let rows = u16::try_from(MAX_RECT_AREA / u32::from(widest))
+        .unwrap_or(u16::MAX)
+        .max(1);
     let mut pieces = Vec::new();
-    let mut x = 0;
-    while x < rect.width {
-        let width = (rect.width - x).min(limit);
-        pieces.push(Rect {
-            x: rect.x + x,
-            width,
-            ..rect
-        });
-        x += width;
+    let mut y = 0;
+    while y < rect.height {
+        let height = (rect.height - y).min(rows);
+        let mut x = 0;
+        while x < rect.width {
+            let width = (rect.width - x).min(width_cap);
+            pieces.push(Rect {
+                x: rect.x + x,
+                y: rect.y + y,
+                width,
+                height,
+            });
+            x += width;
+        }
+        y += height;
     }
     pieces
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn area(pieces: &[Rect]) -> u64 {
+        pieces
+            .iter()
+            .map(|r| u64::from(r.width) * u64::from(r.height))
+            .sum()
+    }
+
+    #[test]
+    fn small_rectangles_stay_whole() {
+        let r = Rect {
+            x: 5,
+            y: 7,
+            width: 200,
+            height: 100,
+        };
+        assert_eq!(split_rect(r, u16::MAX), [r]);
+    }
+
+    #[test]
+    fn big_rectangles_are_cut_into_pieces_that_tile_them_exactly() {
+        for (w, h, limit) in [
+            (1920, 1080, u16::MAX),
+            (1920, 1080, 700),
+            (5000, 40, 2048),
+            (3, 40_000, 64),
+        ] {
+            let r = Rect {
+                x: 11,
+                y: 13,
+                width: w,
+                height: h,
+            };
+            let pieces = split_rect(r, limit);
+            assert_eq!(
+                area(&pieces),
+                u64::from(w) * u64::from(h),
+                "{w}x{h} {limit}"
+            );
+            let mut seen = vec![false; usize::from(w) * usize::from(h)];
+            for p in &pieces {
+                assert!(
+                    u32::from(p.width) * u32::from(p.height)
+                        <= MAX_RECT_AREA.max(u32::from(p.width))
+                );
+                assert!(p.width <= limit);
+                for yy in p.y - r.y..p.y - r.y + p.height {
+                    for xx in p.x - r.x..p.x - r.x + p.width {
+                        let at = usize::from(yy) * usize::from(w) + usize::from(xx);
+                        assert!(!seen[at], "overlap in {w}x{h}");
+                        seen[at] = true;
+                    }
+                }
+            }
+            assert!(seen.iter().all(|&s| s), "gap in {w}x{h}");
+        }
+    }
 }

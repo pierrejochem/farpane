@@ -1,14 +1,17 @@
 //! Damage for sources that can only hand over whole pictures: compare the
-//! new picture with the one in the framebuffer, 64 x 64 pixels at a time.
+//! new picture with the one in the framebuffer, 64 x 64 pixels at a time, and
+//! report the smallest rectangle inside each tile that holds the changes.
 
 use rfb_codec::Framebuffer;
 use rfb_proto::types::Rect;
 
 const TILE: usize = 64;
 
-/// The 64 x 64 tiles of `new` (`B, G, R, X`, `w` x `h`, no padding between
-/// rows) that differ from the picture in `fb`. Only the colour bytes are
-/// compared: the framebuffer's fourth byte is always opaque.
+/// For every 64 x 64 tile of `new` (`B, G, R, X`, `w` x `h`, no padding
+/// between rows) that differs from the picture in `fb`, the bounding box of
+/// the pixels that differ. A blinking caret costs a few pixels, not a tile.
+/// Only the colour bytes are compared: the framebuffer's fourth byte is
+/// always opaque.
 ///
 /// `fb` must be at least `w` x `h`; `new` must hold `w * h * 4` bytes.
 #[must_use]
@@ -20,24 +23,41 @@ pub fn changed_tiles(fb: &Framebuffer, new: &[u8], w: usize, h: usize) -> Vec<Re
         let th = (h - ty).min(TILE);
         for tx in (0..w).step_by(TILE) {
             let tw = (w - tx).min(TILE);
-            let differs = (0..th).any(|row| {
-                let a = (ty + row) * stride + tx * 4;
-                let b = ((ty + row) * w + tx) * 4;
-                old[a..a + tw * 4]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(new[b..b + tw * 4].as_chunks::<4>().0)
-                    .any(|(o, n)| o[..3] != n[..3])
-            });
-            if differs {
+            // Bounds of the differing pixels as (left, top, right, bottom),
+            // right and bottom exclusive.
+            let mut bounds: Option<(usize, usize, usize, usize)> = None;
+            for row in 0..th {
+                let old_at = (ty + row) * stride + tx * 4;
+                let new_at = ((ty + row) * w + tx) * 4;
+                let pairs = || {
+                    old[old_at..old_at + tw * 4]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(new[new_at..new_at + tw * 4].as_chunks::<4>().0)
+                };
+                let Some(first) = pairs().position(|(o, n)| o[..3] != n[..3]) else {
+                    continue;
+                };
+                // A first difference exists, so there is a last one.
+                let last = pairs()
+                    .rposition(|(o, n)| o[..3] != n[..3])
+                    .unwrap_or(first);
+                bounds = Some(match bounds {
+                    None => (first, row, last + 1, row + 1),
+                    Some((left, top, right, _)) => {
+                        (left.min(first), top, right.max(last + 1), row + 1)
+                    }
+                });
+            }
+            if let Some((left, top, right, bottom)) = bounds {
                 // Tile sizes are at most 64.
                 #[allow(clippy::cast_possible_truncation)]
                 out.push(Rect {
-                    x: tx as u16,
-                    y: ty as u16,
-                    width: tw as u16,
-                    height: th as u16,
+                    x: (tx + left) as u16,
+                    y: (ty + top) as u16,
+                    width: (right - left) as u16,
+                    height: (bottom - top) as u16,
                 });
             }
         }
@@ -68,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_tiles_that_changed_are_reported() {
+    fn only_the_changed_pixels_of_each_tile_are_reported() {
         let (fb, mut new) = picture(150, 70);
         assert_eq!(changed_tiles(&fb, &new, 150, 70), []);
         // One pixel in the third tile of the first row and one in the last tile.
@@ -78,18 +98,35 @@ mod tests {
             changed_tiles(&fb, &new, 150, 70),
             [
                 Rect {
-                    x: 128,
-                    y: 0,
-                    width: 22,
-                    height: 64
+                    x: 130,
+                    y: 5,
+                    width: 1,
+                    height: 1
                 },
                 Rect {
-                    x: 128,
-                    y: 64,
-                    width: 22,
-                    height: 6
+                    x: 149,
+                    y: 69,
+                    width: 1,
+                    height: 1
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn the_box_spans_every_changed_pixel_of_the_tile() {
+        let (fb, mut new) = picture(64, 64);
+        // Two pixels far apart in one tile: the box covers both.
+        new[((10 * 64) + 20) * 4] ^= 1;
+        new[((40 * 64) + 3) * 4 + 1] ^= 1;
+        assert_eq!(
+            changed_tiles(&fb, &new, 64, 64),
+            [Rect {
+                x: 3,
+                y: 10,
+                width: 18,
+                height: 31
+            }]
         );
     }
 

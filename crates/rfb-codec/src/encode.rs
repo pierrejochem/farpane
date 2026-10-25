@@ -548,6 +548,22 @@ fn tiles_of(
                 width: tw,
                 height: th,
             };
+            // One colour all over, the usual state of a flat window or
+            // background: comparing rows is much cheaper than analysing.
+            if let Some(&first) = fb.row(tile, 0).as_chunks::<BYTES_PER_PIXEL>().0.first()
+                && (0..th).all(|row| {
+                    fb.row(tile, row)
+                        .as_chunks::<BYTES_PER_PIXEL>()
+                        .0
+                        .iter()
+                        .all(|px| *px == first)
+                })
+            {
+                // Same bytes as the solid branch of `encode_tile`.
+                out.push(1);
+                packer.pack_cpixel([first[0], first[1], first[2], 0xFF], &mut out);
+                continue;
+            }
             pixels.clear();
             for row in 0..th {
                 for px in fb.row(tile, row).as_chunks::<BYTES_PER_PIXEL>().0 {

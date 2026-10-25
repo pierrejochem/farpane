@@ -765,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_tiles_that_changed_are_reported() {
+    fn only_the_changed_pixels_of_each_tile_are_reported() {
         let base = |x: u16, y: u16| [(x % 251) as u8, (y % 241) as u8, 7, 0];
         let (fb, mut new) = picture(150, 70, base);
         assert_eq!(changed_tiles(&fb, &new, 150, 70), []);
@@ -777,16 +777,16 @@ mod tests {
             tiles,
             [
                 Rect {
-                    x: 128,
-                    y: 0,
-                    width: 22,
-                    height: 64
+                    x: 130,
+                    y: 5,
+                    width: 1,
+                    height: 1
                 },
                 Rect {
-                    x: 128,
-                    y: 64,
-                    width: 22,
-                    height: 6
+                    x: 149,
+                    y: 69,
+                    width: 1,
+                    height: 1
                 },
             ]
         );
