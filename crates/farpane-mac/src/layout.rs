@@ -152,7 +152,7 @@ mod tests {
         let l = Layout::from_displays(&[main, left]).unwrap();
         // Bounding box 3360 x 1080 points at scale 2.
         assert_eq!(l.size(), (6720, 2160));
-        assert_eq!(l.scale(), 2.0);
+        assert!((l.scale() - 2.0).abs() < f64::EPSILON);
         assert_eq!(
             l.display_rect(&left),
             Rect {

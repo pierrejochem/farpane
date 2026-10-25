@@ -3,7 +3,7 @@
 //!
 //! - [`keys`]: X11 keysyms (what RFB sends) to macOS virtual key codes, text
 //!   for what no key code covers, and the modifier flags every event carries;
-//! - [`pointer`]: client pointer events (position, button mask) to mouse
+//! - [`mod@pointer`]: client pointer events (position, button mask) to mouse
 //!   events, with drags, wheel steps and click counts;
 //! - [`layout`]: several displays as one picture, and the mapping from
 //!   picture pixels to global screen points;
