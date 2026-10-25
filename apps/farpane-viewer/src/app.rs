@@ -72,6 +72,14 @@ struct TrustPrompt {
     problem: CertProblem,
 }
 
+/// A server that wants credentials the user has not given, waiting for them.
+#[derive(Debug, Clone)]
+struct CredentialsPrompt {
+    addr: String,
+    /// Ask for a user name too.
+    username: bool,
+}
+
 /// The full-screen toolbar: a slim tab at the top edge that opens a pill of
 /// controls. Times are egui's clock, in seconds, so tests can drive them.
 #[derive(Debug, Default)]
@@ -117,6 +125,7 @@ pub struct ViewerApp {
     /// For servers that ask for a username as well (`VeNCrypt` `X509Plain`).
     username: String,
     trust_prompt: Option<TrustPrompt>,
+    credentials_prompt: Option<CredentialsPrompt>,
     error: Option<String>,
     theme: ThemePreference,
     accent: Accent,
@@ -218,6 +227,7 @@ impl ViewerApp {
             password: String::new(),
             username: String::new(),
             trust_prompt: None,
+            credentials_prompt: None,
             error: None,
             theme: appearance::theme_from(&look.theme),
             accent: appearance::accent_from(&look.accent),
@@ -490,6 +500,7 @@ impl ViewerApp {
         }
         self.sync_grab(ctx);
         self.trust_window(ctx, &tokens);
+        self.credentials_window(ctx, &tokens);
         self.settings_window(ctx);
         self.toast(ctx, &tokens);
         self.sync_appearance();
@@ -542,6 +553,7 @@ impl ViewerApp {
     fn connect_with(&mut self, password: Option<Vec<u8>>) {
         self.last_addr = self.addr.trim().to_owned();
         self.trust_prompt = None;
+        self.credentials_prompt = None;
         let username = (!self.username.is_empty()).then(|| self.username.clone().into_bytes());
         self.core.send(Command::SetVideo(crate::core::Video(
             self.video
@@ -580,6 +592,30 @@ impl ViewerApp {
     /// The user does not trust the waiting certificate.
     pub fn reject_pending(&mut self) {
         self.trust_prompt = None;
+    }
+
+    /// Whether the server asked for credentials, and whether it also wants a
+    /// user name.
+    #[must_use]
+    pub fn pending_credentials(&self) -> Option<bool> {
+        self.credentials_prompt.as_ref().map(|p| p.username)
+    }
+
+    /// The user typed what the server asked for: connect again with it.
+    pub fn submit_credentials(&mut self, username: &str, password: &str) {
+        if let Some(prompt) = self.credentials_prompt.take() {
+            self.addr = prompt.addr;
+            if prompt.username {
+                username.clone_into(&mut self.username);
+            }
+            password.clone_into(&mut self.password);
+            self.connect();
+        }
+    }
+
+    /// The user does not want to sign in.
+    pub fn cancel_credentials(&mut self) {
+        self.credentials_prompt = None;
     }
 
     fn tokens(&self, ctx: &Context) -> Tokens {
@@ -726,6 +762,10 @@ impl ViewerApp {
                         fingerprint,
                         problem,
                     });
+                }
+                UiEvent::CredentialsNeeded { addr, username } => {
+                    self.phase = Phase::Home;
+                    self.credentials_prompt = Some(CredentialsPrompt { addr, username });
                 }
                 UiEvent::Layout { reason, status, .. } => {
                     self.server_can_resize = true;
@@ -1836,6 +1876,70 @@ impl ViewerApp {
         }
     }
 
+    /// The "this server wants a password" dialog. The fields are the Quick
+    /// connect ones, so a retry after a typo starts from what was typed.
+    fn credentials_window(&mut self, ctx: &Context, tokens: &Tokens) {
+        let Some(prompt) = self.credentials_prompt.clone() else {
+            return;
+        };
+        let mut decision = None;
+        // A dialog over the connect form must be opaque, or both texts mix.
+        let solid = tokens.reduce_transparency();
+        egui::Window::new("Sign in")
+            .frame(
+                Frame::NONE
+                    .fill(solid.card.into())
+                    .stroke(egui::Stroke::new(1.0_f32, Color32::from(tokens.line)))
+                    .corner_radius(style::radius(tokens.radius / 1.5))
+                    .inner_margin(Margin::same(18)),
+            )
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                ui.set_max_width(360.0);
+                ui.label(format!("{} asks for your credentials.", prompt.addr));
+                ui.add_space(8.0);
+                let mut submit = false;
+                if prompt.username {
+                    ui.label(RichText::new("User name").color(tokens.muted));
+                    ui.add(widgets::text_field(&mut self.username).desired_width(f32::INFINITY));
+                }
+                ui.label(RichText::new("Password").color(tokens.muted));
+                let password = ui.add(
+                    widgets::text_field(&mut self.password)
+                        .password(true)
+                        .desired_width(f32::INFINITY),
+                );
+                if !prompt.username {
+                    // Put the cursor where the user types.
+                    password.request_focus();
+                }
+                submit |= password.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    let ready = !self.password.is_empty()
+                        && (!prompt.username || !self.username.is_empty());
+                    let button = egui::Button::new(RichText::new("Connect").color(Color32::WHITE))
+                        .fill(Color32::from(tokens.accent));
+                    if ui.add_enabled(ready, button).clicked() || (submit && ready) {
+                        decision = Some(true);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        decision = Some(false);
+                    }
+                });
+            });
+        match decision {
+            Some(true) => {
+                let (username, password) = (self.username.clone(), self.password.clone());
+                self.submit_credentials(&username, &password);
+            }
+            Some(false) => self.cancel_credentials(),
+            None => {}
+        }
+    }
+
     /// The "do you trust this server?" dialog.
     fn trust_window(&mut self, ctx: &Context, tokens: &Tokens) {
         let Some(prompt) = self.trust_prompt.clone() else {
@@ -2155,7 +2259,7 @@ impl ViewerApp {
         let ready = match self.connected_at {
             Some(at) => at.elapsed() > Duration::from_millis(2500),
             // A trust question on screen is what the screenshot is for.
-            None if self.trust_prompt.is_some() => {
+            None if self.trust_prompt.is_some() || self.credentials_prompt.is_some() => {
                 self.started.elapsed() > Duration::from_millis(1500)
             }
             None => {

@@ -124,6 +124,13 @@ pub enum UiEvent {
         fingerprint: Fingerprint,
         problem: CertProblem,
     },
+    /// The server wants credentials that were not supplied. Ask the user and
+    /// connect again with them.
+    CredentialsNeeded {
+        addr: String,
+        /// The server also wants a user name.
+        username: bool,
+    },
     /// The connection ended; `Some` carries the reason for an error.
     Disconnected(Option<String>),
 }
@@ -260,6 +267,12 @@ async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
                 host,
                 fingerprint,
                 problem,
+            }),
+            Err(Some(ConnectError::Session(
+                e @ (SessionError::PasswordRequired | SessionError::UsernameRequired),
+            ))) => ui.emit(UiEvent::CredentialsNeeded {
+                addr: addr.clone(),
+                username: matches!(e, SessionError::UsernameRequired),
             }),
             Err(Some(e)) => ui.emit(UiEvent::Disconnected(Some(e.to_string()))),
         }
