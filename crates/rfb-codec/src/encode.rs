@@ -548,6 +548,39 @@ fn tiles_of(
     Ok(out)
 }
 
+/// The distinct colours of `pixels` in order of first use, up to 128 of
+/// them: more than 127 means "too many for a palette". Pixels carry alpha
+/// 0xFF, so the packed value is never 0 and 0 marks an empty slot.
+fn first_colours(pixels: &[[u8; 4]]) -> Vec<[u8; 4]> {
+    const SLOTS: usize = 512;
+    let mut seen = [0u32; SLOTS];
+    let mut palette: Vec<[u8; 4]> = Vec::new();
+    for px in pixels {
+        let key = u32::from_le_bytes(*px) | 0xFF00_0000;
+        let mut at = (key.wrapping_mul(0x9E37_79B1) >> 23) as usize % SLOTS;
+        loop {
+            if seen[at] == key {
+                break;
+            }
+            if seen[at] == 0 {
+                seen[at] = key;
+                palette.push(*px);
+                if palette.len() > 127 {
+                    return palette;
+                }
+                break;
+            }
+            at = (at + 1) % SLOTS;
+        }
+    }
+    palette
+}
+
+/// How many runs [`runs`] would return.
+fn run_count(pixels: &[[u8; 4]]) -> usize {
+    1 + pixels.windows(2).filter(|w| w[0] != w[1]).count()
+}
+
 /// Runs of equal pixels in raster order, as (pixel, length).
 fn runs(pixels: &[[u8; 4]]) -> Vec<([u8; 4], usize)> {
     let mut runs: Vec<([u8; 4], usize)> = Vec::new();
@@ -587,19 +620,21 @@ fn encode_tile(
     reuse: Option<&mut Vec<[u8; 4]>>,
 ) {
     let cp = packer.cpixel_len();
-    // The distinct colours, in order of first use, while there are few.
-    let mut palette: Vec<[u8; 4]> = Vec::new();
-    for px in pixels {
-        if !palette.contains(px) {
-            palette.push(*px);
-            if palette.len() > 127 {
-                break;
-            }
-        }
-    }
+    let palette = first_colours(pixels);
     if palette.len() == 1 {
         out.push(1);
         packer.pack_cpixel(palette[0], out);
+        return;
+    }
+    // A tile with more than 127 colours can only be raw or plain RLE; when
+    // runs are too short to beat raw (noisy content) skip building them.
+    if palette.len() > 127 && run_count(pixels) * (cp + 1) >= pixels.len() * cp {
+        out.push(0);
+        out.reserve(pixels.len() * cp);
+        for &px in pixels {
+            packer.pack_cpixel(px, out);
+        }
+        // Raw tiles bring no palette, so the reuse state stays as it was.
         return;
     }
     let runs = runs(pixels);

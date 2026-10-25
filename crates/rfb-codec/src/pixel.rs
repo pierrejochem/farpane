@@ -251,6 +251,11 @@ impl PixelPacker {
 
     /// Append one wire pixel.
     pub fn pack(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {
+        if self.conv.identity {
+            // The common case: the wire pixel is the framebuffer pixel.
+            out.extend_from_slice(&[bgrx[0], bgrx[1], bgrx[2], 0]);
+            return;
+        }
         let full = self.wire(bgrx);
         let n = self.conv.bytes_per_pixel;
         // A 16 or 8 bit pixel was built in a `u32`: keep the bytes that count.
@@ -283,6 +288,8 @@ impl PixelPacker {
     pub fn pack_cpixel(&self, bgrx: [u8; 4], out: &mut Vec<u8>) {
         match self.conv.cpixel {
             CPixel::Full => self.pack(bgrx, out),
+            // Identity wire format, three low bytes: B, G, R as they are.
+            CPixel::Low3 if self.conv.identity => out.extend_from_slice(&bgrx[..3]),
             mode => {
                 let full = self.wire(bgrx);
                 // Little-endian: the low bytes come first. Big-endian: last.
