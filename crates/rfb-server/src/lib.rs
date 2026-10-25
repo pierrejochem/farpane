@@ -6,6 +6,7 @@
 //! TLS and the handshake come from `rfb-tokio`'s `ServerOptions`.
 
 mod client;
+mod congestion;
 mod region;
 mod registry;
 mod scroll;

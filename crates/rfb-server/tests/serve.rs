@@ -1277,7 +1277,62 @@ async fn answer_fences(v: &mut Viewer) {
 }
 
 #[tokio::test]
-async fn a_client_that_has_not_confirmed_earlier_updates_is_not_sent_more() {
+async fn a_client_that_has_not_confirmed_a_full_window_is_not_sent_more() {
+    let (source, plan) = scripted((64, 64));
+    let server = Arc::new(
+        Server::new(
+            source,
+            NoInput,
+            options(),
+            Settings {
+                fps: 100,
+                view_only: false,
+            },
+        )
+        .unwrap(),
+    );
+    // Raw: the first update is the whole 64 x 64 screen, 16 KiB, which fills
+    // the initial window of 16 KiB.
+    let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::RAW, pseudo::FENCE]).await;
+    v.request(false).await;
+    v.update().await;
+    let change = |n: u8| {
+        let mut p = plan.0.lock().unwrap();
+        p.shade = n;
+        p.damage = vec![Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        }];
+    };
+    change(20);
+    v.request(true).await;
+    assert!(
+        timeout(Duration::from_millis(400), v.update())
+            .await
+            .is_err(),
+        "a window's worth is unconfirmed, so the next update waits"
+    );
+    // Confirm it: the waiting update arrives, carrying the change.
+    answer_fences(&mut v).await;
+    let rects = v.update().await;
+    assert_eq!(rects.len(), 1);
+    v.matches(
+        Rect {
+            x: 0,
+            y: 0,
+            width: 8,
+            height: 8,
+        },
+        |_, _| [20, 20, 20, 0],
+    );
+    // The round trip was measured.
+    assert!(server.clients()[0].rtt.is_some(), "{:?}", server.clients());
+}
+
+#[tokio::test]
+async fn small_updates_flow_without_waiting_for_confirmations() {
     let (source, plan) = scripted((64, 64));
     let server = Arc::new(
         Server::new(
@@ -1293,43 +1348,25 @@ async fn a_client_that_has_not_confirmed_earlier_updates_is_not_sent_more() {
     );
     let (mut v, _task) = connect(&server, PixelFormat::RGB888, &[enc::ZRLE, pseudo::FENCE]).await;
     v.request(false).await;
-    v.update().await; // the first update: one fence in flight
-    let change = |n: u8| {
-        let mut p = plan.0.lock().unwrap();
-        p.shade = n;
-        p.damage = vec![Rect {
-            x: 0,
-            y: 0,
-            width: 8,
-            height: 8,
-        }];
-    };
-    change(10);
-    v.request(true).await;
-    v.update().await; // the second: two in flight
-    change(20);
-    v.request(true).await;
-    assert!(
-        timeout(Duration::from_millis(400), v.update())
+    v.update().await;
+    // Several tiny updates in a row, none confirmed: all well inside the
+    // window, so none waits.
+    for n in 1..=5u8 {
+        {
+            let mut p = plan.0.lock().unwrap();
+            p.shade = n * 10;
+            p.damage = vec![Rect {
+                x: 0,
+                y: 0,
+                width: 8,
+                height: 8,
+            }];
+        }
+        v.request(true).await;
+        timeout(Duration::from_millis(1500), v.update())
             .await
-            .is_err(),
-        "two updates are unconfirmed, so the third waits"
-    );
-    // Confirm them: the waiting update arrives, carrying everything since.
-    answer_fences(&mut v).await;
-    let rects = v.update().await;
-    assert_eq!(rects.len(), 1);
-    v.matches(
-        Rect {
-            x: 0,
-            y: 0,
-            width: 8,
-            height: 8,
-        },
-        |_, _| [20, 20, 20, 0],
-    );
-    // The round trip was measured.
-    assert!(server.clients()[0].rtt.is_some(), "{:?}", server.clients());
+            .expect("a small update is not held back");
+    }
 }
 
 #[tokio::test]

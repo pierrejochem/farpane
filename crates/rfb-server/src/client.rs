@@ -29,7 +29,8 @@ use crate::{
 };
 
 /// Updates that may be unconfirmed before the next one waits.
-const MAX_IN_FLIGHT: usize = 2;
+/// Most unconfirmed updates at once, whatever the byte window says.
+const MAX_IN_FLIGHT: usize = 16;
 /// How long the picture of a client that gets JPEG must stay unchanged before
 /// the JPEG areas are sent again without loss.
 const REFRESH_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
@@ -83,7 +84,9 @@ struct State {
     announced_fence: bool,
     /// Fence requests sent after updates and not yet answered: the number
     /// carried in the payload and when it was sent. They pace the updates.
-    in_flight: std::collections::VecDeque<(u32, std::time::Instant)>,
+    in_flight: std::collections::VecDeque<(u32, std::time::Instant, usize)>,
+    /// How many bytes may be unconfirmed, learnt from the round trips.
+    congestion: crate::congestion::Congestion,
     next_fence: u32,
     /// Keys and pointer buttons this client holds down on the shared
     /// machine, so they can be let go when it leaves or is made view-only.
@@ -201,6 +204,7 @@ where
         announced_clipboard: false,
         announced_fence: false,
         in_flight: std::collections::VecDeque::new(),
+        congestion: crate::congestion::Congestion::new(),
         next_fence: 0,
         held_keys: std::collections::HashSet::new(),
         pointer: (0, 0, 0),
@@ -220,7 +224,7 @@ where
         while st
             .in_flight
             .front()
-            .is_some_and(|&(_, at)| now.duration_since(at) > FENCE_PATIENCE)
+            .is_some_and(|&(_, at, _)| now.duration_since(at) > FENCE_PATIENCE)
         {
             st.in_flight.pop_front();
         }
@@ -234,7 +238,9 @@ where
             // caught up with the earlier ones: a slow link then skips
             // intermediate frames (the changes pile up in `dirty`) instead of
             // queueing them.
-            let paced = st.in_flight.len() < MAX_IN_FLIGHT;
+            let unconfirmed: usize = st.in_flight.iter().map(|&(_, _, bytes)| bytes).sum();
+            let paced = st.in_flight.is_empty()
+                || (st.in_flight.len() < MAX_IN_FLIGHT && unconfirmed < st.congestion.window());
             if ready && paced {
                 // A client that stops reading must not hold this task (and
                 // its slot) for ever; `kick` is handled around the loop.
@@ -468,10 +474,14 @@ where
                 // The answer to one of ours: the client has everything sent
                 // before it. Older unanswered ones are covered too.
                 let seq = u32::from_be_bytes(seq);
-                while let Some((n, at)) = st.in_flight.pop_front() {
+                let mut acked = 0;
+                while let Some((n, at, bytes)) = st.in_flight.pop_front() {
+                    acked += bytes;
                     if n == seq {
-                        let micros = u64::try_from(at.elapsed().as_micros()).unwrap_or(u64::MAX);
+                        let rtt = at.elapsed();
+                        let micros = u64::try_from(rtt.as_micros()).unwrap_or(u64::MAX);
                         st.handle.rtt_micros.store(micros.max(1), Ordering::Relaxed);
+                        st.congestion.confirmed(rtt, acked);
                         break;
                     }
                 }
@@ -697,6 +707,7 @@ where
             payload,
         })
         .collect();
+    let sent_before = session.bytes_sent();
     session.send_update(&rects).await?;
     st.handle.updates.fetch_add(1, Ordering::Relaxed);
     if st.announced_fence {
@@ -709,7 +720,9 @@ where
                 payload: seq.to_be_bytes().to_vec(),
             })
             .await?;
-        st.in_flight.push_back((seq, std::time::Instant::now()));
+        let bytes = usize::try_from(session.bytes_sent() - sent_before).unwrap_or(usize::MAX);
+        st.in_flight
+            .push_back((seq, std::time::Instant::now(), bytes));
     }
     st.handle.encoding.store(chosen, Ordering::Relaxed);
     Ok(true)
