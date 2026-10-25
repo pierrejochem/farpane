@@ -242,6 +242,7 @@ impl RemoteScreen {
         match self.session.security_type() {
             Some(security::NONE) => "None".to_owned(),
             Some(security::VNC_AUTH) => "VNC Auth".to_owned(),
+            Some(security::APPLE_DH) => "Apple Remote Desktop".to_owned(),
             Some(security::VENCRYPT) => match self.session.vencrypt_subtype() {
                 Some(vencrypt::X509_NONE) => "VeNCrypt X509None".to_owned(),
                 Some(vencrypt::X509_VNC) => "VeNCrypt X509Vnc".to_owned(),

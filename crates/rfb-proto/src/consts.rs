@@ -153,6 +153,9 @@ pub mod limits {
     /// Not from the spec; a frame is far smaller, even an intra frame of an
     /// 8K screen.
     pub const MAX_H264_DATA: u32 = 32 * 1024 * 1024;
+    /// Longest Diffie-Hellman prime or public key (bytes) accepted in Apple
+    /// Remote Desktop authentication. Not from a spec; servers use 128.
+    pub const MAX_DH_KEY_LEN: u16 = 1024;
 }
 
 #[cfg(test)]

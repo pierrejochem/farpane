@@ -334,6 +334,7 @@ fn loopback(subtype: u32, version: V, accept: bool) -> Result<Option<Credentials
             }
             Some(ClientEvent::ServerInit { .. }) => c_done = true,
             Some(ClientEvent::StartRa2 { .. }) => panic!("no RSA-AES here"),
+            Some(ClientEvent::AppleDhParams { .. }) => panic!("no Apple DH here"),
             None => {}
         }
         let mut out = Vec::new();

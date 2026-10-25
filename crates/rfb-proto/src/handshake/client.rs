@@ -34,6 +34,10 @@ impl Default for ClientConfig {
                 security::VENCRYPT,
                 security::RA2_256,
                 security::RA2,
+                // Apple's sign-in with an account, before the plain password
+                // that only reaches a Mac's login window (the caller removes
+                // it when it has no user name).
+                security::APPLE_DH,
                 security::VNC_AUTH,
                 security::NONE,
             ],
@@ -62,6 +66,14 @@ pub enum ClientEvent {
     StartRa2 { security: u8 },
     /// `X509Plain`: answer with [`ClientHandshake::plain_credentials`].
     PlainCredentialsNeeded,
+    /// Apple Remote Desktop (type 30): answer with
+    /// [`ClientHandshake::apple_dh_reply`]. The prime and the key are the same
+    /// length, at most `limits::MAX_DH_KEY_LEN`.
+    AppleDhParams {
+        generator: u16,
+        prime: Vec<u8>,
+        server_key: Vec<u8>,
+    },
     /// Handshake complete; the connection is now in the message loop.
     ServerInit {
         width: u16,
@@ -93,6 +105,10 @@ enum State {
     AwaitRa2,
     /// Waiting for the caller to supply a username and password.
     AwaitCredentials,
+    /// Apple Remote Desktop: the server's Diffie-Hellman parameters.
+    AwaitAppleParams,
+    /// Waiting for the caller to answer them.
+    AwaitAppleReply,
     Done,
     Failed,
 }
@@ -267,6 +283,29 @@ impl ClientHandshake {
         Ok(())
     }
 
+    /// Answer a [`ClientEvent::AppleDhParams`]: the encrypted credentials and
+    /// the client's public key (computed by `rfb-security::apple_dh`).
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if out of order or the public key's length is
+    /// not the prime's, which the caller knows from the event.
+    pub fn apple_dh_reply(
+        &mut self,
+        credentials: &[u8; 128],
+        public_key: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), ProtoError> {
+        if self.state != State::AwaitAppleReply {
+            return Err(ProtoError::Malformed {
+                ctx: "Apple DH reply out of order",
+            });
+        }
+        out.extend_from_slice(credentials);
+        out.extend_from_slice(public_key);
+        self.state = State::AwaitSecurityResult;
+        Ok(())
+    }
+
     /// The `VeNCrypt` subtype in use, once agreed.
     #[must_use]
     pub fn vencrypt_subtype(&self) -> Option<u32> {
@@ -396,6 +435,31 @@ impl ClientHandshake {
             | State::VencryptAck
             | State::VencryptSubtypes
             | State::VencryptSelectAck => self.vencrypt_step(input, out),
+            State::AwaitAppleParams => {
+                let Some((ev, n)) = try_read(input, |r| {
+                    let generator = r.u16()?;
+                    let len = r.u16()?;
+                    if len == 0 || len > limits::MAX_DH_KEY_LEN {
+                        return Err(ProtoError::LimitExceeded {
+                            field: "Apple DH key length",
+                            value: u64::from(len),
+                            limit: u64::from(limits::MAX_DH_KEY_LEN),
+                        });
+                    }
+                    let prime = r.take(usize::from(len))?.to_vec();
+                    let server_key = r.take(usize::from(len))?.to_vec();
+                    Ok(ClientEvent::AppleDhParams {
+                        generator,
+                        prime,
+                        server_key,
+                    })
+                })?
+                else {
+                    return Ok(Progress::Idle);
+                };
+                self.state = State::AwaitAppleReply;
+                Ok(Progress::Event(n, ev))
+            }
             State::AwaitCredentials if !self.credentials_asked => {
                 self.credentials_asked = true;
                 Ok(Progress::Event(0, ClientEvent::PlainCredentialsNeeded))
@@ -406,6 +470,7 @@ impl ClientHandshake {
                 Ok(Progress::Event(0, ClientEvent::StartRa2 { security }))
             }
             State::AwaitReply
+            | State::AwaitAppleReply
             | State::AwaitTls
             | State::AwaitRa2
             | State::AwaitCredentials
@@ -428,6 +493,9 @@ impl ClientHandshake {
             security::VNC_AUTH => self.state = State::AwaitChallenge,
             security::VENCRYPT if self.version != ProtocolVersion::V3_3 => {
                 self.state = State::VencryptVersion;
+            }
+            security::APPLE_DH if self.version != ProtocolVersion::V3_3 => {
+                self.state = State::AwaitAppleParams;
             }
             security::RA2 | security::RA2NE | security::RA2_256 | security::RA2NE_256
                 if self.version != ProtocolVersion::V3_3 =>

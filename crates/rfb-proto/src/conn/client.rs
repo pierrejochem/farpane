@@ -178,6 +178,20 @@ impl ClientConn {
         self.hs.plain_credentials(username, password, out)
     }
 
+    /// Answer Apple's Diffie-Hellman parameters; see
+    /// [`ClientHandshake::apple_dh_reply`].
+    ///
+    /// # Errors
+    /// [`ProtoError::Malformed`] if out of order.
+    pub fn apple_dh_reply(
+        &mut self,
+        credentials: &[u8; 128],
+        public_key: &[u8],
+        out: &mut Vec<u8>,
+    ) -> Result<(), ProtoError> {
+        self.hs.apple_dh_reply(credentials, public_key, out)
+    }
+
     /// Answer a VNC Auth challenge; see [`ClientHandshake::vnc_auth_reply`].
     ///
     /// # Errors

@@ -54,7 +54,8 @@ fn run(
                 Some(
                     other @ (ClientEvent::StartTls { .. }
                     | ClientEvent::StartRa2 { .. }
-                    | ClientEvent::PlainCredentialsNeeded),
+                    | ClientEvent::PlainCredentialsNeeded
+                    | ClientEvent::AppleDhParams { .. }),
                 ) => {
                     panic!("these tests use no VeNCrypt: {other:?}")
                 }

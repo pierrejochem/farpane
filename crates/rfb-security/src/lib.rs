@@ -7,8 +7,11 @@
 //! - [`ra2`]: RSA-AES (`RA2`, `RA2_256` and the `ne` variants): RSA keys, key
 //!   derivation and the AES-EAX message layer.
 //!
-//! Not implemented: SASL, Apple DH, MS-Logon II, the two-step RSA-AES types.
+//! - [`apple_dh`]: Apple Remote Desktop's Diffie-Hellman sign-in (type 30).
+//!
+//! Not implemented: SASL, MS-Logon II, the two-step RSA-AES types.
 
+pub mod apple_dh;
 pub mod ra2;
 pub mod tls;
 pub mod vnc_auth;

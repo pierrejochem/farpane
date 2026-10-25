@@ -8,6 +8,7 @@ use rfb_proto::{
     msg::client::ClientMessage,
 };
 use rfb_security::{
+    apple_dh,
     tls::{self, Fingerprint},
     vnc_auth,
 };
@@ -108,6 +109,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
                 )
             });
         }
+        // Apple's sign-in needs an account; without one the plain password
+        // type is the only thing left to try.
+        if opts.username.is_none() || opts.password.is_none() {
+            config.security.retain(|t| *t != security::APPLE_DH);
+        }
         if opts.ra2.is_none() || opts.password.is_none() {
             config.security.retain(|t| {
                 !matches!(
@@ -174,6 +180,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
                     let password = opts.password.as_deref().ok_or(Error::PasswordRequired)?;
                     self.conn
                         .plain_credentials(username, password, &mut self.io.outbuf)?;
+                    self.io.flush().await?;
+                }
+                ClientConnEvent::Handshake(ClientEvent::AppleDhParams {
+                    generator,
+                    prime,
+                    server_key,
+                }) => {
+                    let username = opts.username.as_deref().ok_or(Error::UsernameRequired)?;
+                    let password = opts.password.as_deref().ok_or(Error::PasswordRequired)?;
+                    let reply = apple_dh::respond(
+                        &apple_dh::Params {
+                            generator,
+                            prime: &prime,
+                            server_key: &server_key,
+                        },
+                        username,
+                        password,
+                    )
+                    .map_err(|e| Error::Config(apple_dh_problem(&e)))?;
+                    self.conn.apple_dh_reply(
+                        &reply.credentials,
+                        &reply.public_key,
+                        &mut self.io.outbuf,
+                    )?;
                     self.io.flush().await?;
                 }
                 ClientConnEvent::Handshake(ClientEvent::VncAuthChallenge(challenge)) => {
@@ -295,5 +325,16 @@ impl<S: AsyncRead + AsyncWrite + Unpin> ClientSession<S> {
     #[must_use]
     pub fn conn(&self) -> &ClientConn {
         &self.conn
+    }
+}
+
+/// `Error::Config` takes a static text.
+fn apple_dh_problem(e: &apple_dh::Error) -> &'static str {
+    match e {
+        apple_dh::Error::BadParams(_) => "the server sent unusable Apple sign-in parameters",
+        apple_dh::Error::BadCredential(_) => {
+            "Apple sign-in takes a user name and a password of at most 63 bytes, without NUL"
+        }
+        apple_dh::Error::Random => "no random numbers available",
     }
 }
