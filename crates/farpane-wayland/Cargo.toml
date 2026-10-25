@@ -14,9 +14,10 @@ rfb-proto.workspace = true
 rfb-server.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "screencast", "remote_desktop"] }
+ashpd = { version = "0.13.13", default-features = false, features = ["async-io", "clipboard", "screencast", "remote_desktop"] }
+futures-util = { version = "0.3.34", default-features = false }
 pipewire = "0.10.1"
-tokio = { version = "1.53.3", features = ["rt", "rt-multi-thread", "sync", "time", "macros"] }
+tokio = { version = "1.53.3", features = ["fs", "io-util", "rt", "rt-multi-thread", "sync", "time", "macros"] }
 
 [dev-dependencies]
 x11rb = "0.14.0"

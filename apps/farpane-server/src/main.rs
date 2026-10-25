@@ -415,6 +415,7 @@ fn open_wayland(config_dir: &std::path::Path) -> Result<SourceAndInput, String> 
     );
     let (source, input) = farpane_wayland::open(&farpane_wayland::Config {
         restore_token_file: Some(config_dir.join("wayland-restore-token")),
+        parent_window: None,
     })
     .map_err(|e| format!("cannot share the Wayland screen: {e}"))?;
     let (w, h) = source.size();

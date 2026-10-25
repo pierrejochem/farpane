@@ -83,6 +83,8 @@ pub(crate) struct Shared {
     /// The stream ended or failed; `error` says why.
     pub ended: AtomicBool,
     pub error: Mutex<Option<String>>,
+    /// Text another program copied on the desktop, until the source hands it on.
+    pub clipboard: Mutex<Option<String>>,
 }
 
 impl Shared {

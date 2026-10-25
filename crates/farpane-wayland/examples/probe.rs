@@ -16,6 +16,7 @@ mod live {
         let token = std::env::temp_dir().join("farpane-probe-token");
         let (source, input) = open(&Config {
             restore_token_file: Some(token),
+            parent_window: None,
         })
         .expect("open");
         let (w, h) = source.size();

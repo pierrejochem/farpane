@@ -1531,6 +1531,7 @@ name = "farpane-wayland"
 version = "0.1.0"
 dependencies = [
  "ashpd",
+ "futures-util",
  "pipewire",
  "rfb-codec",
  "rfb-proto",
