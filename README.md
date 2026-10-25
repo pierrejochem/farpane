@@ -8,7 +8,7 @@
 A VNC-compatible remote desktop viewer and server, written in Rust.
 
 - **Farpane Viewer** connects to any RFB/VNC server (TigerVNC, QEMU, macOS Screen Sharing, x11vnc, …).
-- **Farpane Server** shares a Linux desktop (X11, or Wayland through the desktop portal) with its own user accounts, TLS or RSA-AES, and a dashboard window. Windows and macOS capture and input backends are not written yet.
+- **Farpane Server** shares a Linux desktop (X11, or Wayland through the desktop portal) with its own user accounts, TLS or RSA-AES, and a dashboard window. A Windows backend (capture, input, service) exists and is verified on a Windows 11 VM. On macOS only the platform-independent half is written; the Apple capture and input calls are not.
 - Encrypted by default for signed-in users (VeNCrypt with X.509, RSA-AES), Glass, Slate and Light themes. Browsers can connect through a WebSocket port (noVNC).
 
 > Status: early development, not released. Viewer and server work against each other and against real servers (QEMU and a kiosk VNC server); the [handbook](https://pierrejochem.github.io/farpane/handbook/) says what is verified and what is not.
