@@ -64,9 +64,11 @@ pub(crate) struct Shared {
 }
 
 /// zlib level for new connections unless [`Server::set_compression`] says
-/// otherwise: fast, since a full 1080p picture of photo-like content took
-/// about 155 ms to encode at level 6 on one core.
-pub const DEFAULT_COMPRESSION: u32 = 1;
+/// otherwise: the fastest, level 0 (zlib stored blocks). A full 1080p
+/// picture of photo-like content took about 155 ms to encode at level 6 on
+/// one core and 26 ms at level 0, at the price of sending more bytes. A slow
+/// link wants a higher level, which a client can ask for.
+pub const DEFAULT_COMPRESSION: u32 = 0;
 
 /// Server behaviour that is not about one connection.
 #[derive(Debug, Clone, Copy)]

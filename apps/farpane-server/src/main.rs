@@ -62,7 +62,7 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
                          any; default: pages served from the same host)
   --h264                 offer H.264 to clients that ask for it (needs `farpane-server h264 install`)
   --require-approval     hold each new client until you allow it in the dashboard
-  --compression N        zlib level 0-9 for ZRLE and Tight (default 1: fast; 6 sends fewer bytes
+  --compression N        zlib level 0-9 for ZRLE and Tight (default 0: fastest; 6 sends far fewer bytes
                          on a slow link); applies to new connections
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit

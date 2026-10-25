@@ -48,7 +48,7 @@ Only pages from the same host may use the port unless you list others with `--ws
 
 ## Compression
 
-ZRLE and Tight use zlib. `--compression 0-9` (or `compression = N` in `server.toml`) sets the level for clients that do not ask for one; the default is 1, which encodes fast and suits a local network. A client that asks for a level (the viewer's Compression setting) gets its own. Level 6 sends about a third of the bytes on photo-like content at the cost of CPU. A client that asks for a JPEG quality also gets lossy Tight rectangles for photo-like areas, repainted exactly once the picture is still.
+ZRLE and Tight use zlib. `--compression 0-9` (or `compression = N` in `server.toml`) sets the level for clients that do not ask for one; the default is 0, the fastest (no compression, but still valid zlib), which suits a local network. A client that asks for a level (the viewer's Compression setting) gets its own. On photo-like content in our 1080p video test level 6 sent about a third of the bytes of level 1 (and far fewer than level 0) at the cost of CPU: use it for a slow link. A client that asks for a JPEG quality also gets lossy Tight rectangles for photo-like areas, repainted exactly once the picture is still.
 
 ## H.264 video
 
