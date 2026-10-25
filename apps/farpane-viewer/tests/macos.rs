@@ -227,6 +227,8 @@ async fn macos_clipboard_travels_in_both_directions() {
 /// How fast pictures arrive while the pointer moves about (which makes the
 /// Mac redraw). Prints updates per second, bytes, and decode time. Run it
 /// with `--release` to see what the viewer does for real.
+/// Compare how many update requests are kept in flight. Needs motion on the
+/// Mac (play a video), since only the pictures that change are counted.
 #[tokio::test(flavor = "current_thread")]
 #[ignore = "a measurement, not a check"]
 #[allow(clippy::cast_precision_loss)]
@@ -234,38 +236,40 @@ async fn macos_update_rate() {
     let Some(mac) = Mac::from_env() else {
         return;
     };
-    for encodings in ["zrle,raw", "zlib,raw", "raw"] {
-        let mut screen = mac.connect(encodings).await;
-        first_update(&mut screen).await;
-        let start = Instant::now();
-        let (mut updates, mut pixels) = (0u32, 0u64);
-        let mut step = 0u16;
-        while start.elapsed() < Duration::from_secs(8) {
-            step = step.wrapping_add(1);
-            screen
-                .pointer(0, 600 + step % 400, 500 + step * 3 % 300)
-                .await
-                .unwrap();
-            screen.request_update(true).await.unwrap();
-            let Ok(Ok(damage)) =
-                tokio::time::timeout(Duration::from_millis(500), screen.next_update()).await
-            else {
-                continue;
-            };
-            updates += 1;
-            for d in &damage {
-                if let rfb_codec::Damage::Rect(r) = d {
-                    pixels += u64::from(r.width) * u64::from(r.height);
+    for encodings in ["zrle,raw", "zlib,raw"] {
+        for depth in [1u32, 2, 4] {
+            let mut screen = mac.connect(encodings).await;
+            first_update(&mut screen).await;
+            let start = Instant::now();
+            let (mut updates, mut pixels, mut outstanding) = (0u32, 0u64, 0u32);
+            while start.elapsed() < Duration::from_secs(8) {
+                while outstanding < depth {
+                    screen.request_update(true).await.unwrap();
+                    outstanding += 1;
+                }
+                let Ok(Ok(damage)) =
+                    tokio::time::timeout(Duration::from_secs(2), screen.next_update()).await
+                else {
+                    // Nothing changed for 2 s: ask afresh.
+                    outstanding = 0;
+                    continue;
+                };
+                outstanding = outstanding.saturating_sub(1);
+                updates += 1;
+                for d in &damage {
+                    if let rfb_codec::Damage::Rect(r) = d {
+                        pixels += u64::from(r.width) * u64::from(r.height);
+                    }
                 }
             }
+            let secs = start.elapsed().as_secs_f64();
+            let stats = screen.sample_stats(Instant::now());
+            println!(
+                "{encodings} depth {depth}: {:.1} updates/s, {:.1} Mpixel/s changed, in {:.1} Mbit/s",
+                f64::from(updates) / secs,
+                pixels as f64 / secs / 1e6,
+                stats.rx_per_sec * 8.0 / 1e6,
+            );
         }
-        let secs = start.elapsed().as_secs_f64();
-        let stats = screen.sample_stats(Instant::now());
-        println!(
-            "{encodings}: {:.1} updates/s, {:.1} Mpixel/s changed, in {:.1} Mbit/s",
-            f64::from(updates) / secs,
-            pixels as f64 / secs / 1e6,
-            stats.rx_per_sec * 8.0 / 1e6,
-        );
     }
 }
