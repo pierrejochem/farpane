@@ -271,7 +271,6 @@ dependencies = [
  "getrandom 0.4.3",
  "serde",
  "serde_repr",
- "tokio",
  "zbus",
 ]
 
@@ -1703,8 +1702,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
  "futures-core",
+ "futures-io",
  "futures-macro",
  "futures-task",
+ "memchr",
  "pin-project-lite",
  "slab",
 ]
@@ -4168,7 +4169,6 @@ dependencies = [
  "signal-hook-registry",
  "socket2",
  "tokio-macros",
- "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -5491,7 +5491,6 @@ dependencies = [
  "rustix 1.1.5",
  "serde",
  "serde_repr",
- "tokio",
  "tracing",
  "uds_windows",
  "uuid",
