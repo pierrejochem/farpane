@@ -41,7 +41,7 @@ cargo test --workspace
 | `docs/handbook/` | The handbook (Markdown), published as the project site |
 | `site/` | Landing page generator, styles and social preview for the site |
 | `docs/design/` | Design reference and UI mockups |
-| `docs/brand/` | Icon and brand assets |
+| `docs/brand/` | Icon and brand assets; `marketing/` has the guidelines, copy deck, press kit and social images |
 | `tools/interop/` | Independent RSA-AES implementation in Python, used to cross-check the Rust one |
 
 ## Releases

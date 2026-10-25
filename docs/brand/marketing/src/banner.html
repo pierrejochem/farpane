@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8">
+<link rel="stylesheet" href="common.css">
+<style>
+html[data-size=xheader]{--w:1500px;--h:500px}
+html[data-size=linkedin]{--w:1584px;--h:396px}
+.stage{width:var(--w);height:var(--h)}
+/* The profile picture covers the lower left on both networks: text starts right of it. */
+.copy{position:absolute;left:290px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:center;width:560px}
+h1{font-size:62px}
+.lede{font-size:24px;margin-top:16px;max-width:480px}
+.lede b{color:var(--text);font-weight:600}
+.brand{position:absolute;left:290px;top:40px}
+.brand img{width:44px;height:44px}.brand b{font-size:26px}
+.panes{width:700px;height:640px;right:-120px;top:-110px;opacity:.85}
+.front{width:470px;height:308px;right:70px;top:96px}
+.back{width:360px;height:254px;right:290px;top:50px}
+html[data-size=linkedin] h1{font-size:54px}
+html[data-size=linkedin] .lede{font-size:22px;margin-top:12px;max-width:500px}
+html[data-size=linkedin] .brand{top:30px}
+html[data-size=linkedin] .panes{width:560px;height:520px;top:-90px}
+html[data-size=linkedin] .front{width:430px;height:282px;top:84px;right:80px}
+html[data-size=linkedin] .back{width:330px;height:233px;top:34px;right:300px}
+</style>
+<div class="stage">
+  <img class="panes" src="panes.svg" alt="">
+  <div class="shot back"><img src="../../../../site/static/screenshots/server-overview.png" alt=""></div>
+  <div class="shot front glow"><img src="../../../../site/static/screenshots/viewer-session.png" alt=""></div>
+  <div class="brand"><img src="../../farpane-mark.svg" alt=""><b>Farpane</b></div>
+  <div class="copy">
+    <h1>Far screens,<br><em>close at hand.</em></h1>
+    <p class="lede"><b>VNC-compatible</b> remote desktop viewer and server. Open source, written in Rust.</p>
+  </div>
+</div>
+<script>document.documentElement.dataset.size=location.hash.slice(1)||'xheader'</script>

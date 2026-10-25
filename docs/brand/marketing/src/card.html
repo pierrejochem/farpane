@@ -1,0 +1,48 @@
+<!doctype html><meta charset="utf-8">
+<link rel="stylesheet" href="common.css">
+<style>
+/* data-size picks the canvas; zoom scales a smaller design up. */
+html[data-size=social]{--w:1280px;--h:640px;zoom:1}
+html[data-size=og]{--w:1200px;--h:630px;zoom:1}
+html[data-size=xcard]{--w:1280px;--h:720px;zoom:1.25}
+html[data-size=square]{--w:1080px;--h:1080px;zoom:1}
+.stage{width:var(--w);height:var(--h)}
+.copy{position:absolute;left:64px;top:56px;bottom:56px;width:560px;display:flex;flex-direction:column;justify-content:space-between}
+h1{font-size:78px}
+.lede{font-size:28px;margin-top:22px;max-width:520px}
+.lede b{color:var(--text);font-weight:600}
+.panes{width:760px;height:700px;right:-150px;top:-70px;opacity:.85}
+.front{width:560px;height:367px;right:30px;top:214px}
+.back{width:430px;height:304px;right:96px;top:92px}
+html[data-size=og] .copy{left:60px;width:540px}
+html[data-size=og] h1{font-size:74px}
+html[data-size=og] .front{width:540px;height:354px;top:214px}
+html[data-size=og] .back{width:420px;height:297px;right:96px}
+html[data-size=xcard] .front{top:250px}
+html[data-size=xcard] .back{top:112px}
+/* Square: copy on top, panes below. */
+html[data-size=square] .copy{left:72px;right:72px;top:64px;bottom:auto;width:auto;height:470px}
+html[data-size=square] h1{font-size:96px}
+html[data-size=square] .lede{font-size:32px;max-width:760px}
+html[data-size=square] .panes{right:-260px;top:480px;width:900px;height:830px}
+html[data-size=square] .front{width:860px;height:563px;right:50px;top:610px}
+html[data-size=square] .back{display:none}
+html[data-size=square] .chips-wrap{display:none}
+</style>
+<div class="stage">
+  <img class="panes" src="panes.svg" alt="">
+  <div class="shot back"><img src="../../../../site/static/screenshots/server-overview.png" alt=""></div>
+  <div class="shot front glow"><img src="../../../../site/static/screenshots/viewer-session.png" alt=""></div>
+  <div class="copy">
+    <div class="brand"><img src="../../farpane-mark.svg" alt=""><b>Farpane</b></div>
+    <div>
+      <h1>Far screens,<br><em>close at hand.</em></h1>
+      <p class="lede"><b>VNC-compatible</b> remote desktop viewer and server. Open source, written in Rust.</p>
+    </div>
+    <div class="chips-wrap">
+      <div class="chips"><span class="chip">Encrypted sign-in</span><span class="chip">Wayland &amp; X11</span></div>
+      <p class="fine" style="margin-top:14px">MIT or Apache-2.0 · Early development, not yet released</p>
+    </div>
+  </div>
+</div>
+<script>document.documentElement.dataset.size=location.hash.slice(1)||'social'</script>
