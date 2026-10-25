@@ -51,6 +51,12 @@ struct State {
     request: Option<Rect>,
     zrle: ZrleEncoder,
     tight: TightEncoder,
+    /// zlib level the client asked for (pseudo-encodings -256 to -247).
+    compress_level: Option<u32>,
+    /// JPEG quality 0 to 9 the client asked for (pseudo-encodings -32 to -23).
+    quality: Option<u8>,
+    /// The level the zlib streams run at now.
+    applied_level: Option<u32>,
     clipboard: ExtClipboard,
     /// Whether the client has been told the layout (`ExtendedDesktopSize`).
     layout_told: bool,
@@ -170,6 +176,9 @@ where
         request: None,
         zrle: ZrleEncoder::with_level(level),
         tight: TightEncoder::with_level(level),
+        compress_level: None,
+        quality: None,
+        applied_level: Some(level),
         clipboard: ExtClipboard::new(Role::Server),
         layout_told: false,
         layout_reply: None,
@@ -315,6 +324,16 @@ where
             st.dirty.add(whole((fb.width(), fb.height())));
         }
         ClientMessage::SetEncodings(list) => {
+            // Compression level -256 (0) to -247 (9) and JPEG quality -32 (0)
+            // to -23 (9): the client's own choice beats the server default.
+            st.compress_level = list
+                .iter()
+                .find(|e| (pseudo::COMPRESS_0..=pseudo::COMPRESS_9).contains(*e))
+                .and_then(|e| u32::try_from(e - pseudo::COMPRESS_0).ok());
+            st.quality = list
+                .iter()
+                .find(|e| (pseudo::JPEG_QUALITY_0..=pseudo::JPEG_QUALITY_9).contains(*e))
+                .and_then(|e| u8::try_from(e - pseudo::JPEG_QUALITY_0).ok());
             st.wants_copy = list.contains(&enc::COPY_RECT);
             if !st.wants_copy {
                 st.copies.clear();
@@ -479,6 +498,14 @@ where
         })
         .unwrap_or(enc::RAW);
     let mut h264_frame: Option<(Vec<u8>, (u16, u16))> = None;
+    let level = st
+        .compress_level
+        .unwrap_or_else(|| shared.compression.load(Ordering::Relaxed));
+    if st.applied_level != Some(level) {
+        st.zrle.set_level(level);
+        st.tight.set_level(level);
+        st.applied_level = Some(level);
+    }
 
     // Encode under the read lock, send after releasing it.
     let (headers, payloads) = {

@@ -73,6 +73,13 @@ impl SyncDeflate {
         Self(flate2::Compress::new(Compression::new(level.min(9)), true))
     }
 
+    /// Change the level between chunks. The stream stays valid: zlib lets
+    /// the level change at a flush point, and every chunk ends in one.
+    fn set_level(&mut self, level: u32) {
+        // A refusal leaves the old level, which is only slower or larger.
+        let _ = self.0.set_level(Compression::new(level.min(9)));
+    }
+
     /// The compressed form of `input` as the next chunk of the stream.
     fn compress(&mut self, input: &[u8]) -> Vec<u8> {
         let start = self.0.total_in();
@@ -137,6 +144,11 @@ impl ZrleEncoder {
         Self {
             z: SyncDeflate::new(level),
         }
+    }
+
+    /// Change the zlib level for the rectangles that follow.
+    pub fn set_level(&mut self, level: u32) {
+        self.z.set_level(level);
     }
 
     /// Encode `rect`: a `U32` length and the zlib data, sync-flushed.
@@ -211,6 +223,13 @@ impl TightEncoder {
                 SyncDeflate::new(level),
                 SyncDeflate::new(level),
             ],
+        }
+    }
+
+    /// Change the zlib level for the rectangles that follow.
+    pub fn set_level(&mut self, level: u32) {
+        for stream in &mut self.streams {
+            stream.set_level(level);
         }
     }
 

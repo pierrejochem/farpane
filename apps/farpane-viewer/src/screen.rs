@@ -57,6 +57,12 @@ pub struct ConnectOptions {
     /// Ask for H.264 and decode it with this codec. `None` (the default) never
     /// asks for it.
     pub video: Option<std::sync::Arc<dyn rfb_codec::video::VideoCodec>>,
+    /// zlib level 0 to 9 to ask the server for (lower is faster to encode and
+    /// bigger on the wire). `None` leaves it to the server.
+    pub compression: Option<u8>,
+    /// Picture quality 0 to 9 for lossy encodings. `None` leaves it to the
+    /// server.
+    pub quality: Option<u8>,
 }
 
 /// The host part of `host:port`, `[v6]:port` or a bare host: the name a
@@ -203,6 +209,12 @@ impl RemoteScreen {
                 // H.264 first: a server that has it sends it, others use the rest.
                 wanted.insert(0, enc::OPEN_H264);
             }
+        }
+        if let Some(level) = options.compression {
+            wanted.push(pseudo::COMPRESS_0 + i32::from(level.min(9)));
+        }
+        if let Some(quality) = options.quality {
+            wanted.push(pseudo::JPEG_QUALITY_0 + i32::from(quality.min(9)));
         }
         session
             .send(&ClientMessage::SetPixelFormat(PixelFormat::RGB888))

@@ -310,6 +310,39 @@ fn zrle_and_tight_round_trip_at_every_zlib_level() {
 }
 
 #[test]
+fn changing_the_zlib_level_mid_stream_keeps_the_stream_valid() {
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: 150,
+        height: 90,
+    };
+    for (pattern, f) in patterns() {
+        let fb = picture(150, 90, &f);
+        let mut zrle = ZrleEncoder::with_level(6);
+        let mut tight = rfb_codec::TightEncoder::with_level(6);
+        let mut zshown = Framebuffer::new(150, 90).unwrap();
+        let mut tshown = Framebuffer::new(150, 90).unwrap();
+        let mut zdec = Decoder::new(&pf).unwrap();
+        let mut tdec = Decoder::new(&pf).unwrap();
+        for level in [6, 0, 9, 1, 1, 6] {
+            zrle.set_level(level);
+            tight.set_level(level);
+            let payload = zrle.encode(&fb, rect, &packer).unwrap();
+            zdec.decode(&mut zshown, &header(rect, enc::ZRLE), &payload)
+                .unwrap();
+            assert_matches(&zshown, &fb, rect, &pf, &format!("zrle {level} {pattern}"));
+            let payload = tight.encode(&fb, rect, &packer).unwrap();
+            tdec.decode(&mut tshown, &header(rect, enc::TIGHT), &payload)
+                .unwrap();
+            assert_matches(&tshown, &fb, rect, &pf, &format!("tight {level} {pattern}"));
+        }
+    }
+}
+
+#[test]
 fn zrle_compresses_flat_pictures_well() {
     let pf = PixelFormat::RGB888;
     let packer = PixelPacker::new(&pf).unwrap();

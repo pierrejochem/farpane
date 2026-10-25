@@ -32,6 +32,9 @@ struct Args {
     h264: bool,
     /// Download Cisco's `OpenH264` library and exit.
     install_h264: bool,
+    /// zlib level 0 to 9 and picture quality 0 to 9 to ask the server for.
+    compression: Option<u8>,
+    quality: Option<u8>,
     /// Keep applying updates for this long before saving, so a slowly drawn
     /// screen is complete.
     settle: Duration,
@@ -45,6 +48,7 @@ fn parse_args() -> Result<Args, String> {
     let mut settle = Duration::from_millis(1500);
     let mut encodings = DEFAULT_ENCODINGS.to_vec();
     let (mut h264, mut install_h264) = (false, false);
+    let (mut compression, mut quality) = (None, None);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--screenshot" => {
@@ -73,6 +77,8 @@ fn parse_args() -> Result<Args, String> {
             "--encodings" => {
                 encodings = parse_encodings(&args.next().ok_or("--encodings needs a list")?)?;
             }
+            "--compression" => compression = Some(level(args.next(), "--compression")?),
+            "--quality" => quality = Some(level(args.next(), "--quality")?),
             "--settle-ms" => {
                 let ms = args.next().ok_or("--settle-ms needs a number")?;
                 settle =
@@ -99,13 +105,23 @@ fn parse_args() -> Result<Args, String> {
         encodings,
         h264,
         install_h264,
+        compression,
+        quality,
         settle,
     })
 }
 
+/// A 0 to 9 setting.
+fn level(value: Option<String>, name: &str) -> Result<u8, String> {
+    value
+        .and_then(|v| v.parse().ok())
+        .filter(|n| *n <= 9)
+        .ok_or_else(|| format!("{name} needs a number from 0 to 9"))
+}
+
 fn usage() {
     eprintln!(
-        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--h264] [--username NAME] [--pin SHA256] [--password-file FILE] HOST:PORT\n\
+        "usage: farpane-viewer [--fullscreen] [--stats] [--password-file FILE] [HOST:PORT]\n       farpane-viewer --screenshot FILE.png|FILE.ppm [--encodings zrle,hextile,zlib,corre,copyrect,raw]\n                      [--settle-ms N] [--compression 0-9] [--quality 0-9] [--h264] [--username NAME] [--pin SHA256] [--password-file FILE] HOST:PORT\n\
          The password comes from $FARPANE_PASSWORD or --password-file, never from an argument."
     );
 }
@@ -208,6 +224,8 @@ async fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         username: args.username.clone().map(String::into_bytes),
         pins: args.pins.clone(),
         extra_roots: Vec::new(),
+        compression: args.compression,
+        quality: args.quality,
         video: if args.h264 {
             let dir = h264_dir().ok_or("no settings folder")?;
             let codec = farpane_h264::OpenH264::open(&dir)?.ok_or(
