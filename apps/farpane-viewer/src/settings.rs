@@ -76,6 +76,12 @@ pub struct Video {
     /// Ask servers for H.264 (needs Cisco's `OpenH264` library, which is
     /// downloaded on request and not part of Farpane).
     pub h264: bool,
+    /// Picture quality 0 to 8 to ask servers for; JPEG is used for photo-like
+    /// areas and repainted exactly once the picture is still. `None`: lossless.
+    pub quality: Option<u8>,
+    /// zlib level 0 to 9 to ask servers for; lower encodes faster and sends
+    /// more. `None`: the server's own choice.
+    pub compression: Option<u8>,
 }
 
 /// One address book entry.
@@ -369,6 +375,20 @@ mod tests {
         let (store, warning) = Store::load(Some(dir.path().join("nope.toml")));
         assert_eq!(store.settings, Settings::default());
         assert_eq!(warning, None);
+    }
+
+    #[test]
+    fn picture_quality_and_compression_are_remembered_and_default_to_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, path) = store_in(&dir);
+        assert_eq!(store.settings.video.quality, None);
+        assert_eq!(store.settings.video.compression, None);
+        store.settings.video.quality = Some(5);
+        store.settings.video.compression = Some(1);
+        store.save().unwrap();
+        let (again, _) = Store::load(Some(path));
+        assert_eq!(again.settings.video.quality, Some(5));
+        assert_eq!(again.settings.video.compression, Some(1));
     }
 
     #[test]

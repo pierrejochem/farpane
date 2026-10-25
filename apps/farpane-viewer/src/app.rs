@@ -163,6 +163,10 @@ pub struct ViewerApp {
     show_footer: bool,
     /// Ask for H.264, when Cisco's `OpenH264` library is installed.
     h264: bool,
+    /// Picture quality 0 to 8 asked of servers (`None`: lossless).
+    quality: Option<u8>,
+    /// zlib level 0 to 9 asked of servers (`None`: the server decides).
+    compression: Option<u8>,
     video: Option<Arc<farpane_h264::OpenH264>>,
     /// A download of the library in progress, and the last thing to tell about it.
     h264_installer: Option<farpane_h264::Installer>,
@@ -220,6 +224,10 @@ impl ViewerApp {
         let look = store.settings.appearance.clone();
         let input = store.settings.input.clone();
         let h264 = store.settings.video.h264;
+        let (quality, compression) = (
+            store.settings.video.quality,
+            store.settings.video.compression,
+        );
         let mut app = Self {
             core,
             phase: Phase::Home,
@@ -258,6 +266,8 @@ impl ViewerApp {
             session_info: None,
             show_footer: look.show_footer,
             h264,
+            quality,
+            compression,
             video: None,
             h264_installer: None,
             h264_note: None,
@@ -560,6 +570,10 @@ impl ViewerApp {
                 .clone()
                 .map(|v| v as Arc<dyn rfb_codec::video::VideoCodec>),
         )));
+        self.core.send(Command::SetQuality {
+            compression: self.compression,
+            quality: self.quality,
+        });
         self.core.send(Command::Connect {
             addr: self.last_addr.clone(),
             password,
@@ -666,6 +680,52 @@ impl ViewerApp {
 
     /// The H.264 setting: a switch, the state of the library, and the way to
     /// download it.
+    /// The "Picture quality" and "Compression" rows of the settings grid.
+    fn transfer_rows(&mut self, ui: &mut egui::Ui) {
+        ui.label("Picture quality");
+        egui::ComboBox::from_id_salt("settings-quality")
+            .selected_text(match self.quality {
+                None => "Lossless".to_owned(),
+                Some(q) => format!("Lossy {q} of 8"),
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.quality, None, "Lossless");
+                for q in 0..=8u8 {
+                    ui.selectable_value(
+                        &mut self.quality,
+                        Some(q),
+                        format!("Lossy {q} of 8"),
+                    );
+                }
+            })
+            .response
+            .on_hover_text(
+                "Lossy sends photo-like areas as JPEG and repaints them exactly once the picture is still. Takes effect at the next connection.",
+            );
+        ui.end_row();
+        ui.label("Compression");
+        egui::ComboBox::from_id_salt("settings-compression")
+            .selected_text(match self.compression {
+                None => "Server decides".to_owned(),
+                Some(c) => format!("Level {c}"),
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut self.compression, None, "Server decides");
+                for c in 0..=9u8 {
+                    ui.selectable_value(
+                        &mut self.compression,
+                        Some(c),
+                        format!("Level {c}"),
+                    );
+                }
+            })
+            .response
+            .on_hover_text(
+                "Low levels use less CPU and send more data (good on a fast network); high levels send less. Takes effect at the next connection.",
+            );
+        ui.end_row();
+    }
+
     fn h264_row(&mut self, ui: &mut egui::Ui) {
         if let Some(done) = self
             .h264_installer
@@ -855,7 +915,11 @@ impl ViewerApp {
             capture: self.capture_pref.key().to_owned(),
             resize_remote: self.resize_remote,
         };
-        let video = settings::Video { h264: self.h264 };
+        let video = settings::Video {
+            h264: self.h264,
+            quality: self.quality,
+            compression: self.compression,
+        };
         if now != self.store.settings.appearance
             || input != self.store.settings.input
             || video != self.store.settings.video
@@ -2100,6 +2164,7 @@ impl ViewerApp {
                         ui.label("H.264 video");
                         self.h264_row(ui);
                         ui.end_row();
+                        self.transfer_rows(ui);
                         ui.label("Capture keyboard");
                         ui.horizontal(|ui| {
                             for pref in [CapturePref::Auto, CapturePref::Always, CapturePref::Never]

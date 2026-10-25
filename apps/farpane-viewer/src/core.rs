@@ -44,6 +44,12 @@ impl Eq for Video {}
 pub enum Command {
     /// Use this H.264 codec for the connections that follow (none: no H.264).
     SetVideo(Video),
+    /// Ask servers for this zlib level and picture quality in the
+    /// connections that follow (`None`: leave it to the server / lossless).
+    SetQuality {
+        compression: Option<u8>,
+        quality: Option<u8>,
+    },
     Connect {
         addr: String,
         password: Option<Vec<u8>>,
@@ -213,11 +219,16 @@ impl Notifier {
 
 async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
     let mut video: Option<std::sync::Arc<dyn rfb_codec::video::VideoCodec>> = None;
+    let (mut compression, mut quality) = (None, None);
     loop {
         // Idle: wait for a Connect; other commands have nothing to act on.
         let (addr, options) = loop {
             match commands.recv().await {
                 Some(Command::SetVideo(v)) => video = v.0,
+                Some(Command::SetQuality {
+                    compression: c,
+                    quality: q,
+                }) => (compression, quality) = (c, q),
                 Some(Command::Connect {
                     addr,
                     password,
@@ -230,6 +241,8 @@ async fn run(mut commands: UnboundedReceiver<Command>, ui: Notifier) {
                         pins,
                         video: video.clone(),
                         continuous_updates: true,
+                        compression,
+                        quality,
                         ..ConnectOptions::default()
                     };
                     break (addr, options);
@@ -322,7 +335,9 @@ async fn session(
                     let Some(command) = command else { return Err(String::new()) };
                     match command {
                         // Read when the next connection starts.
-                        Command::SetVideo(_) | Command::Connect { .. } => {}
+                        Command::SetVideo(_)
+                        | Command::SetQuality { .. }
+                        | Command::Connect { .. } => {}
                         Command::Disconnect => return Ok(()),
                         Command::Resize { width, height } => {
                             screen.request_size(width, height).await.map_err(|e| e.to_string())?;
