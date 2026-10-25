@@ -22,9 +22,9 @@ farpane-ui.workspace = true
 farpane-h264.workspace = true
 tokio = { version = "1.53.3", features = ["rt", "macros", "net", "time", "sync"] }
 png = "0.18.1"
-eframe = { version = "0.32.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
-egui = { version = "0.32.3", default-features = false }
-egui-wgpu = "0.32.3"
+eframe = { version = "0.33.3", default-features = false, features = ["wgpu", "wayland", "x11", "default_fonts"] }
+egui = { version = "0.33.3", default-features = false }
+egui-wgpu = "0.33.3"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 

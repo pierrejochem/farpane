@@ -9,7 +9,7 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-egui = { version = "0.32.3", default-features = false }
+egui = { version = "0.33.3", default-features = false }
 
 [lints]
 workspace = true

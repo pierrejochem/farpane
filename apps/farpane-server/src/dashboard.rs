@@ -823,7 +823,7 @@ impl Dashboard {
                 };
                 badge(ui, text, tone.into());
                 // Window width, not what is left: the controls only fit in a wide window.
-                let width = ui.ctx().screen_rect().width();
+                let width = ui.ctx().content_rect().width();
                 if width >= 1100.0 {
                     ui.add(
                         widgets::text_field(&mut self.search)

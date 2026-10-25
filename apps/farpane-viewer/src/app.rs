@@ -1138,7 +1138,7 @@ impl ViewerApp {
                     let (dot, _) = ui.allocate_exact_size(vec2(10.0, 10.0), Sense::hover());
                     ui.painter().circle_filled(dot.center(), 4.0, colour);
                     // The controls fill the bar in a narrow window.
-                    let roomy = ctx.screen_rect().width() > 1280.0;
+                    let roomy = ctx.content_rect().width() > 1280.0;
                     if roomy || !matches!(self.phase, Phase::Connected { .. }) {
                         ui.label(RichText::new(text).color(colour));
                     }
@@ -1171,7 +1171,7 @@ impl ViewerApp {
                     }
                     // In a narrow window the less used controls move into a
                     // menu, so the bar never runs out of room.
-                    let narrow = ctx.screen_rect().width() < NARROW_BAR;
+                    let narrow = ctx.content_rect().width() < NARROW_BAR;
                     let connected = matches!(self.phase, Phase::Connected { .. });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         egui::ComboBox::from_id_salt("theme")
