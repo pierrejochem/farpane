@@ -46,6 +46,10 @@ pub struct ServerSettings {
     /// Offer H.264 to clients that ask for it (needs Cisco's `OpenH264` library).
     #[serde(default)]
     pub h264: bool,
+    /// zlib level 0 to 9 for ZRLE and Tight; lower is faster and sends more
+    /// bytes. `None`: the server's default (1).
+    #[serde(default)]
+    pub compression: Option<u32>,
 }
 
 impl Default for ServerSettings {
@@ -59,6 +63,7 @@ impl Default for ServerSettings {
             require_approval: false,
             websocket: None,
             h264: false,
+            compression: None,
         }
     }
 }

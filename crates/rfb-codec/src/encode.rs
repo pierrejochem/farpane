@@ -69,8 +69,8 @@ const TILE: u16 = 64;
 struct SyncDeflate(flate2::Compress);
 
 impl SyncDeflate {
-    fn new() -> Self {
-        Self(flate2::Compress::new(Compression::default(), true))
+    fn new(level: u32) -> Self {
+        Self(flate2::Compress::new(Compression::new(level.min(9)), true))
     }
 
     /// The compressed form of `input` as the next chunk of the stream.
@@ -123,10 +123,19 @@ impl Default for ZrleEncoder {
 }
 
 impl ZrleEncoder {
+    /// An encoder at zlib's default level (6).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_level(Compression::default().level())
+    }
+
+    /// An encoder at zlib `level`, 0 (none) to 9 (smallest, slowest); larger
+    /// values count as 9. Low levels trade size for speed, which pays on a
+    /// fast link.
+    #[must_use]
+    pub fn with_level(level: u32) -> Self {
         Self {
-            z: SyncDeflate::new(),
+            z: SyncDeflate::new(level),
         }
     }
 
@@ -187,10 +196,21 @@ fn compact_length(out: &mut Vec<u8>, len: usize) {
 }
 
 impl TightEncoder {
+    /// An encoder at zlib's default level (6).
     #[must_use]
     pub fn new() -> Self {
+        Self::with_level(Compression::default().level())
+    }
+
+    /// An encoder at zlib `level`; see [`ZrleEncoder::with_level`].
+    #[must_use]
+    pub fn with_level(level: u32) -> Self {
         Self {
-            streams: [SyncDeflate::new(), SyncDeflate::new(), SyncDeflate::new()],
+            streams: [
+                SyncDeflate::new(level),
+                SyncDeflate::new(level),
+                SyncDeflate::new(level),
+            ],
         }
     }
 

@@ -161,12 +161,15 @@ where
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         (fb.width(), fb.height())
     };
+    let level = shared
+        .compression
+        .load(std::sync::atomic::Ordering::Relaxed);
     let mut st = State {
         handle: Arc::clone(&handle),
         dirty: Region::new(),
         request: None,
-        zrle: ZrleEncoder::new(),
-        tight: TightEncoder::new(),
+        zrle: ZrleEncoder::with_level(level),
+        tight: TightEncoder::with_level(level),
         clipboard: ExtClipboard::new(Role::Server),
         layout_told: false,
         layout_reply: None,

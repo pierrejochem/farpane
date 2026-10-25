@@ -28,7 +28,7 @@ use tokio::net::TcpListener;
 
 const USAGE: &str = "\
 Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH]
-                      [--fps N] [--config-dir DIR] [--view-only]
+                      [--fps N] [--compression 0-9] [--config-dir DIR] [--view-only]
                       [--tls-self-signed [--tls-name NAME]... | --tls-cert FILE --tls-key FILE] [--ra2]
                       [--password-file FILE] [--allow-no-auth]
        farpane-server user COMMAND ...     (see `farpane-server user --help`)
@@ -62,6 +62,8 @@ Usage: farpane-server [--headless] [--listen ADDR] [--x11 [DISPLAY]] [--size WxH
                          any; default: pages served from the same host)
   --h264                 offer H.264 to clients that ask for it (needs `farpane-server h264 install`)
   --require-approval     hold each new client until you allow it in the dashboard
+  --compression N        zlib level 0-9 for ZRLE and Tight (default 1: fast; 6 sends fewer bytes
+                         on a slow link); applies to new connections
   --view-only            ignore keyboard, pointer and clipboard input
   --ui-screenshot FILE   save a picture of the dashboard and quit
   --ui-wizard            with --ui-screenshot: show the first-run wizard (first run only)
@@ -85,6 +87,8 @@ struct Args {
     listen: SocketAddr,
     size: (u16, u16),
     fps: u32,
+    /// zlib level; `None` = saved setting, then the server default.
+    compression: Option<u32>,
     max_connections: Option<usize>,
     theme: Option<farpane_ui::ThemePreference>,
     require_approval: bool,
@@ -137,6 +141,7 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
             .map_err(|_| "bad default address")?,
         size: (1024, 768),
         fps: 30,
+        compression: None,
         max_connections: None,
         theme: None,
         require_approval: false,
@@ -226,6 +231,15 @@ fn parse_from(words: impl Iterator<Item = String> + 'static) -> Result<Args, Str
                     .parse()
                     .map_err(|_| "--fps: not a number")?;
             }
+            "--compression" => {
+                let level: u32 = value(&mut it, "--compression")?
+                    .parse()
+                    .map_err(|_| "--compression: not a number")?;
+                if level > 9 {
+                    return Err("--compression: 0 to 9".into());
+                }
+                args.compression = Some(level);
+            }
             "--max-connections" => {
                 args.max_connections = Some(
                     value(&mut it, "--max-connections")?
@@ -296,6 +310,9 @@ fn merge_settings(mut args: Args, saved: &ServerSettings) -> Result<Args, String
     args.view_only |= saved.view_only;
     args.require_approval |= saved.require_approval;
     args.h264 |= saved.h264;
+    if args.compression.is_none() {
+        args.compression = saved.compression;
+    }
     if !args.ws_given {
         args.ws = match &saved.websocket {
             Some(ws) => Some(
@@ -743,6 +760,9 @@ async fn start(args: &Args) -> Result<Running, ExitCode> {
             log(&format!("cannot start: {e}"));
             ExitCode::FAILURE
         })?;
+    if let Some(level) = args.compression {
+        server.set_compression(level);
+    }
     if let Some(auth) = access.authenticator.clone() {
         server.set_policy(move |user| auth.permission(user));
     }
@@ -1076,6 +1096,7 @@ fn apply_live(
     server.set_view_only_for_all(args.view_only);
     server.set_require_approval(args.require_approval);
     server.set_video(video_codec(&args, config_dir)?);
+    server.set_compression(args.compression.unwrap_or(rfb_server::DEFAULT_COMPRESSION));
     Ok(live_info(&args, &access, authenticated))
 }
 

@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex, RwLock,
-        atomic::{AtomicBool, AtomicI32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -56,10 +56,17 @@ pub(crate) struct Shared {
     /// Sharing is paused: clients keep their last picture and their input
     /// is ignored.
     pub paused: AtomicBool,
+    /// zlib level for the ZRLE and Tight streams of connections made from now on.
+    pub compression: AtomicU32,
     /// Why capturing stopped, if it did.
     failure: Mutex<Option<String>>,
     clients: AtomicUsize,
 }
+
+/// zlib level for new connections unless [`Server::set_compression`] says
+/// otherwise: fast, since a full 1080p picture of photo-like content took
+/// about 155 ms to encode at level 6 on one core.
+pub const DEFAULT_COMPRESSION: u32 = 1;
 
 /// Server behaviour that is not about one connection.
 #[derive(Debug, Clone, Copy)]
@@ -264,6 +271,7 @@ impl Server {
             video: RwLock::new(None),
             stop: AtomicBool::new(false),
             paused: AtomicBool::new(false),
+            compression: AtomicU32::new(DEFAULT_COMPRESSION),
             failure: Mutex::new(None),
             clients: AtomicUsize::new(0),
         });
@@ -417,6 +425,15 @@ impl Server {
             .video
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = codec;
+    }
+
+    /// Set the zlib level (0 to 9) of ZRLE and Tight for connections made from
+    /// now on; connections already open keep theirs. Lower is faster and
+    /// sends more bytes: 1 suits a LAN, 6 a slow link.
+    pub fn set_compression(&self, level: u32) {
+        self.shared
+            .compression
+            .store(level.min(9), Ordering::Relaxed);
     }
 
     /// Pause or resume sharing. While paused clients stay connected but get
