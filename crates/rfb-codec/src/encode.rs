@@ -173,6 +173,43 @@ impl ZrleEncoder {
 /// specification does): wider ones must be split by the caller.
 pub const TIGHT_MAX_WIDTH: u16 = 2048;
 
+/// Fewer colours than this stay lossless (palette or copy filter).
+const JPEG_MIN_COLOURS: usize = 96;
+/// Rectangles smaller than this stay lossless: the JPEG headers alone cost
+/// more than they save.
+const JPEG_MIN_AREA: usize = 256;
+
+/// JPEG quality for the client's 0 to 9 level, as `TigerVNC` maps it.
+const JPEG_QUALITY: [u8; 10] = [15, 29, 41, 42, 62, 77, 79, 86, 92, 100];
+
+/// Whether a Tight payload is a JPEG rectangle.
+#[must_use]
+pub fn is_tight_jpeg(payload: &[u8]) -> bool {
+    payload.first().is_some_and(|c| c >> 4 == 0b1001)
+}
+
+fn encode_jpeg(pixels: &[[u8; 4]], rect: Rect, quality: u8) -> Result<Vec<u8>, DecodeError> {
+    use jpeg_encoder::{ColorType, Encoder, SamplingFactor};
+
+    let mut rgb = Vec::with_capacity(pixels.len() * 3);
+    for px in pixels {
+        rgb.extend_from_slice(&[px[2], px[1], px[0]]);
+    }
+    let level = usize::from(quality.min(9));
+    let mut out = Vec::new();
+    let mut encoder = Encoder::new(&mut out, JPEG_QUALITY[level]);
+    // Colour detail matters little at low quality: halve the chroma.
+    encoder.set_sampling_factor(if level <= 6 {
+        SamplingFactor::F_2_2
+    } else {
+        SamplingFactor::F_1_1
+    });
+    encoder
+        .encode(&rgb, rect.width, rect.height, ColorType::Rgb)
+        .map_err(|_| DecodeError::Malformed("JPEG encoder"))?;
+    Ok(out)
+}
+
 /// A Tight encoder without JPEG: fill for one colour, the palette filter for
 /// up to 256 colours and the copy filter otherwise, with the zlib streams
 /// kept for the whole connection (stream 0 for full colour, 1 for two
@@ -244,6 +281,24 @@ impl TightEncoder {
         rect: Rect,
         packer: &PixelPacker,
     ) -> Result<Vec<u8>, DecodeError> {
+        self.encode_lossy(fb, rect, packer, None)
+    }
+
+    /// As [`TightEncoder::encode`], but with `quality` (0 to 9) a rectangle
+    /// of photo-like content (more than 96 colours) goes out as JPEG. Send
+    /// these only to clients that asked for a JPEG quality level; the
+    /// caller should repaint the rectangle losslessly once things are quiet.
+    /// Whether the result is JPEG is told by [`is_tight_jpeg`].
+    ///
+    /// # Errors
+    /// As [`TightEncoder::encode`].
+    pub fn encode_lossy(
+        &mut self,
+        fb: &Framebuffer,
+        rect: Rect,
+        packer: &PixelPacker,
+        quality: Option<u8>,
+    ) -> Result<Vec<u8>, DecodeError> {
         fb.check(rect)?;
         if rect.width > TIGHT_MAX_WIDTH {
             return Err(DecodeError::Malformed("Tight rectangle wider than 2048"));
@@ -273,6 +328,17 @@ impl TightEncoder {
             return Ok(out);
         }
         let n = palette.len();
+        // Many colours in a rectangle big enough to matter: JPEG.
+        if let Some(quality) = quality
+            && n > JPEG_MIN_COLOURS
+            && w * h >= JPEG_MIN_AREA
+        {
+            let jpeg = encode_jpeg(&pixels, rect, quality)?;
+            out.push(0x90);
+            compact_length(&mut out, jpeg.len());
+            out.extend_from_slice(&jpeg);
+            return Ok(out);
+        }
         let indexed_size = if n == 2 { w.div_ceil(8) * h } else { w * h };
         if n <= 256 && n * tp + indexed_size < w * h * tp {
             // Palette filter.

@@ -215,6 +215,13 @@ impl RemoteScreen {
         }
         if let Some(quality) = options.quality {
             wanted.push(pseudo::JPEG_QUALITY_0 + i32::from(quality.min(9)));
+            // A server sends JPEG only inside Tight, so Tight must come
+            // first; the decoder may now read it.
+            if let Some(at) = wanted.iter().position(|e| *e == enc::TIGHT) {
+                wanted.remove(at);
+                wanted.insert(0, enc::TIGHT);
+            }
+            decoder.allow_jpeg(true);
         }
         session
             .send(&ClientMessage::SetPixelFormat(PixelFormat::RGB888))

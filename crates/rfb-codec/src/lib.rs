@@ -31,7 +31,7 @@ mod zrle;
 pub use decoder::{Cursor, Damage, Decoder, DesktopLayout};
 pub use encode::{
     TIGHT_MAX_WIDTH, TightEncoder, ZrleEncoder, encode_cursor, encode_hextile, encode_raw,
-    encode_trle,
+    encode_trle, is_tight_jpeg,
 };
 pub use error::DecodeError;
 pub use framebuffer::Framebuffer;

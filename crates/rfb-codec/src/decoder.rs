@@ -69,6 +69,8 @@ pub struct Decoder {
     tight: [Inflater; 4],
     /// The H.264 contexts, once an H.264 codec was supplied.
     video: Option<crate::video::Contexts>,
+    /// Tight JPEG rectangles are allowed (the client asked for a quality).
+    jpeg: bool,
 }
 
 impl Decoder {
@@ -81,7 +83,15 @@ impl Decoder {
             zrle: Inflater::default(),
             tight: Default::default(),
             video: None,
+            jpeg: false,
         })
+    }
+
+    /// Allow Tight JPEG rectangles. The protocol permits a server to send
+    /// them only to a client that asked for a JPEG quality level, so call
+    /// this only when the quality pseudo-encoding went out.
+    pub fn allow_jpeg(&mut self, yes: bool) {
+        self.jpeg = yes;
     }
 
     /// Let the decoder read the Open H.264 encoding with `codec`. Without it
@@ -141,7 +151,14 @@ impl Decoder {
                 Ok(Damage::Rect(rect))
             }
             enc::TIGHT => {
-                crate::tight::decode(fb, &self.converter, rect, payload, &mut self.tight)?;
+                crate::tight::decode(
+                    fb,
+                    &self.converter,
+                    rect,
+                    payload,
+                    &mut self.tight,
+                    self.jpeg,
+                )?;
                 Ok(Damage::Rect(rect))
             }
             enc::HEXTILE => {

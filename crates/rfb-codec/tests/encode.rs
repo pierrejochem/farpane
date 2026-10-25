@@ -343,6 +343,115 @@ fn changing_the_zlib_level_mid_stream_keeps_the_stream_valid() {
 }
 
 #[test]
+fn tight_jpeg_is_lossy_only_for_photo_like_rectangles_and_only_when_allowed() {
+    use rfb_codec::{TightEncoder, is_tight_jpeg};
+
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: 96,
+        height: 64,
+    };
+    // Smooth gradient with a little noise: many colours.
+    let photo = picture(96, 64, |x, y| {
+        let n = ((u32::from(x) * 7 + u32::from(y) * 13) % 5) as u8;
+        [
+            (x as u8).wrapping_mul(2).wrapping_add(n),
+            (y as u8).wrapping_mul(3).wrapping_add(n),
+            ((x + y) as u8).wrapping_mul(2).wrapping_add(n),
+        ]
+    });
+    let mut encoder = TightEncoder::new();
+    let payload = encoder
+        .encode_lossy(&photo, rect, &packer, Some(5))
+        .unwrap();
+    assert!(is_tight_jpeg(&payload));
+    // Never without a quality.
+    let lossless = encoder.encode_lossy(&photo, rect, &packer, None).unwrap();
+    assert!(!is_tight_jpeg(&lossless));
+    // The framer accepts it as one rectangle.
+    assert_eq!(
+        frame(&header(rect, enc::TIGHT), &pf, &payload),
+        Ok(payload.len())
+    );
+    // A decoder that was not allowed JPEG refuses it.
+    let mut shown = Framebuffer::new(96, 64).unwrap();
+    let mut decoder = Decoder::new(&pf).unwrap();
+    assert!(
+        decoder
+            .decode(&mut shown, &header(rect, enc::TIGHT), &payload)
+            .is_err()
+    );
+    // Allowed: close to the original, not equal.
+    decoder.allow_jpeg(true);
+    decoder
+        .decode(&mut shown, &header(rect, enc::TIGHT), &payload)
+        .unwrap();
+    let mut total = 0u64;
+    for y in 0..64 {
+        for x in 0..96 {
+            let (a, b) = (shown.pixel(x, y).unwrap(), photo.pixel(x, y).unwrap());
+            total += (0..3).map(|i| u64::from(a[i].abs_diff(b[i]))).sum::<u64>();
+        }
+    }
+    // Mean error per channel below 8 levels.
+    assert!(total < 8 * 96 * 64 * 3, "total error {total}");
+    // A few colours (a UI) stays lossless even with a quality.
+    let flat = picture(
+        96,
+        64,
+        |x, _| if x < 48 { [10, 20, 30] } else { [200, 100, 50] },
+    );
+    let payload = encoder.encode_lossy(&flat, rect, &packer, Some(5)).unwrap();
+    assert!(!is_tight_jpeg(&payload));
+}
+
+#[test]
+fn tight_jpeg_of_the_wrong_size_or_with_garbage_is_refused() {
+    use rfb_codec::{TightEncoder, is_tight_jpeg};
+
+    let pf = PixelFormat::RGB888;
+    let packer = PixelPacker::new(&pf).unwrap();
+    let photo = picture(96, 64, |x, y| {
+        [(x * 2) as u8, (y * 3) as u8, ((x ^ y) * 4) as u8]
+    });
+    let big = Rect {
+        x: 0,
+        y: 0,
+        width: 96,
+        height: 64,
+    };
+    let payload = TightEncoder::new()
+        .encode_lossy(&photo, big, &packer, Some(5))
+        .unwrap();
+    assert!(is_tight_jpeg(&payload));
+    let mut decoder = Decoder::new(&pf).unwrap();
+    decoder.allow_jpeg(true);
+    let mut shown = Framebuffer::new(96, 64).unwrap();
+    // The same JPEG claimed for a smaller rectangle.
+    let small = Rect {
+        width: 48,
+        height: 32,
+        ..big
+    };
+    assert!(
+        decoder
+            .decode(&mut shown, &header(small, enc::TIGHT), &payload)
+            .is_err()
+    );
+    // Damaged data never panics.
+    for cut in [2, payload.len() / 2, payload.len() - 1] {
+        let mut broken = payload[..cut].to_vec();
+        if cut > 4 {
+            broken[cut / 2] ^= 0xFF;
+        }
+        let _ = decoder.decode(&mut shown, &header(big, enc::TIGHT), &broken);
+    }
+}
+
+#[test]
 fn zrle_compresses_flat_pictures_well() {
     let pf = PixelFormat::RGB888;
     let packer = PixelPacker::new(&pf).unwrap();

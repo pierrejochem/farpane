@@ -5,7 +5,7 @@ use std::sync::{Arc, atomic::Ordering};
 use rfb_codec::{
     Cursor, PixelPacker, TIGHT_MAX_WIDTH, TightEncoder, ZrleEncoder,
     clipboard::{ExtClipboard, Role},
-    encode_cursor, encode_hextile, encode_raw, encode_trle,
+    encode_cursor, encode_hextile, encode_raw, encode_trle, is_tight_jpeg,
 };
 use rfb_proto::{
     conn::EncodedRect,
@@ -30,6 +30,9 @@ use crate::{
 
 /// Updates that may be unconfirmed before the next one waits.
 const MAX_IN_FLIGHT: usize = 2;
+/// How long the picture of a client that gets JPEG must stay unchanged before
+/// the JPEG areas are sent again without loss.
+const REFRESH_DELAY: std::time::Duration = std::time::Duration::from_millis(50);
 /// How long an unanswered fence counts before it is given up.
 const FENCE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(5);
 
@@ -57,6 +60,12 @@ struct State {
     quality: Option<u8>,
     /// The level the zlib streams run at now.
     applied_level: Option<u32>,
+    /// Areas sent as JPEG that still owe the client a lossless repaint.
+    lossy: Region,
+    /// When to repaint `lossy` if nothing else changed meanwhile.
+    refresh_at: Option<std::time::Instant>,
+    /// The next update is the lossless repaint: no JPEG in it.
+    lossless: bool,
     clipboard: ExtClipboard,
     /// Whether the client has been told the layout (`ExtendedDesktopSize`).
     layout_told: bool,
@@ -179,6 +188,9 @@ where
         compress_level: None,
         quality: None,
         applied_level: Some(level),
+        lossy: Region::new(),
+        refresh_at: None,
+        lossless: false,
         clipboard: ExtClipboard::new(Role::Server),
         layout_told: false,
         layout_reply: None,
@@ -246,8 +258,32 @@ where
         handle
             .bytes_out
             .store(session.bytes_sent(), Ordering::Relaxed);
+        let refresh = st.refresh_at;
         tokio::select! {
             _ = tick.tick() => {}
+            () = async {
+                match refresh {
+                    Some(at) => tokio::time::sleep_until(tokio::time::Instant::from_std(at)).await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                st.refresh_at = None;
+                if st.dirty.is_empty() {
+                    // Quiet: repaint what went out as JPEG, without loss.
+                    for rect in st.lossy.take_within(Rect {
+                        x: 0,
+                        y: 0,
+                        width: u16::MAX,
+                        height: u16::MAX,
+                    }) {
+                        st.dirty.add(rect);
+                    }
+                    st.lossless = true;
+                } else {
+                    // Still changing: look again later.
+                    st.refresh_at = Some(std::time::Instant::now() + REFRESH_DELAY);
+                }
+            }
             message = session.next_message() => {
                 handle_message(&mut session, &shared, &mut st, message?).await?;
             }
@@ -498,6 +534,14 @@ where
         })
         .unwrap_or(enc::RAW);
     let mut h264_frame: Option<(Vec<u8>, (u16, u16))> = None;
+    // JPEG only for a client that asked for a quality, and not in the pass
+    // that repaints earlier JPEG areas.
+    let jpeg_quality = if st.lossless || chosen != enc::TIGHT {
+        None
+    } else {
+        st.quality.filter(|q| *q < 9)
+    };
+    let mut lossy_sent: Vec<Rect> = Vec::new();
     let level = st
         .compress_level
         .unwrap_or_else(|| shared.compression.load(Ordering::Relaxed));
@@ -603,7 +647,14 @@ where
             for rect in split_rect(piece, width_limit) {
                 let payload = match chosen {
                     enc::ZRLE => st.zrle.encode(&fb, rect, &packer),
-                    enc::TIGHT => st.tight.encode(&fb, rect, &packer),
+                    enc::TIGHT => st
+                        .tight
+                        .encode_lossy(&fb, rect, &packer, jpeg_quality)
+                        .inspect(|p| {
+                            if is_tight_jpeg(p) {
+                                lossy_sent.push(rect);
+                            }
+                        }),
                     enc::TRLE => encode_trle(&fb, rect, &packer),
                     enc::HEXTILE => encode_hextile(&fb, rect, &packer),
                     _ => encode_raw(&fb, rect, &packer),
@@ -628,8 +679,15 @@ where
         });
         payloads.push(payload);
     }
+    st.lossless = false;
     if headers.is_empty() {
         return Ok(false);
+    }
+    if !lossy_sent.is_empty() {
+        for rect in lossy_sent {
+            st.lossy.add(rect);
+        }
+        st.refresh_at = Some(std::time::Instant::now() + REFRESH_DELAY);
     }
     let rects: Vec<EncodedRect<'_>> = headers
         .iter()

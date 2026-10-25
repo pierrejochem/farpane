@@ -1886,3 +1886,116 @@ async fn clients_that_ask_for_h264_get_whole_frames_when_a_codec_is_set() {
     let rects = v.update().await;
     assert!(rects.iter().all(|r| r.1 != enc::OPEN_H264), "{rects:?}");
 }
+
+/// A gradient that is painted once and never changes again.
+struct Still {
+    size: (u16, u16),
+    painted: bool,
+}
+
+impl Source for Still {
+    fn size(&self) -> (u16, u16) {
+        self.size
+    }
+
+    fn capture(&mut self, fb: &mut Framebuffer) -> io::Result<Capture> {
+        if self.painted {
+            return Ok(Capture::default());
+        }
+        self.painted = true;
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: fb.width(),
+            height: fb.height(),
+        };
+        let mut data = Vec::new();
+        for y in 0..whole.height {
+            for x in 0..whole.width {
+                data.extend_from_slice(&TestPattern::background(x, y));
+            }
+        }
+        fb.write_bgrx(whole, &data).unwrap();
+        Ok(Capture {
+            damage: vec![whole],
+            ..Capture::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_client_that_asks_for_quality_gets_jpeg_and_then_the_exact_picture() {
+    let server = Arc::new(
+        Server::new(
+            Still {
+                size: (400, 300),
+                painted: false,
+            },
+            NoInput,
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    let (mut v, _t) = connect(
+        &server,
+        PixelFormat::RGB888,
+        &[enc::TIGHT, enc::RAW, pseudo::JPEG_QUALITY_0 + 3],
+    )
+    .await;
+    v.decoder.allow_jpeg(true);
+    v.request(false).await;
+    let first = v.update().await;
+    assert!(first.iter().all(|&(_, e)| e == enc::TIGHT), "{first:?}");
+    // Not exact yet: JPEG. Within a few levels.
+    let probe = Rect {
+        x: 100,
+        y: 100,
+        width: 40,
+        height: 40,
+    };
+    let exact = |v: &Viewer| {
+        (probe.y..probe.y + probe.height).all(|y| {
+            (probe.x..probe.x + probe.width).all(|x| {
+                v.fb.pixel(x, y).map(|p| [p[0], p[1], p[2]])
+                    == Some({
+                        let [b, g, r, _] = TestPattern::background(x, y);
+                        [b, g, r]
+                    })
+            })
+        })
+    };
+    assert!(!exact(&v), "the first picture should be lossy");
+    // The client asks again; once nothing changed the server repaints the
+    // JPEG areas losslessly.
+    v.request(true).await;
+    let again = v.update().await;
+    assert_ne!(again, Vec::new());
+    assert!(exact(&v), "the repaint should be exact");
+}
+
+#[tokio::test]
+async fn a_client_without_a_quality_never_gets_jpeg() {
+    let server = Arc::new(
+        Server::new(
+            TestPattern::new(400, 300),
+            NoInput,
+            options(),
+            Settings::default(),
+        )
+        .unwrap(),
+    );
+    // The decoder refuses JPEG by default: a JPEG rectangle would fail.
+    let (mut v, _t) = connect(&server, PixelFormat::RGB888, &[enc::TIGHT, enc::RAW]).await;
+    v.request(false).await;
+    let _ = v.update().await;
+    v.matches(
+        Rect {
+            x: 100,
+            y: 100,
+            width: 40,
+            height: 40,
+        },
+        TestPattern::background,
+    );
+}

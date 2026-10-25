@@ -1,7 +1,8 @@
 //! Tight: fill, basic (copy, palette or gradient filter, optionally zlib).
 //!
-//! JPEG rectangles are refused: they are only allowed after a client asked
-//! for a JPEG quality level, which Farpane does not do.
+//! JPEG rectangles are refused unless the caller allowed them: the protocol
+//! lets a server send them only to a client that asked for a JPEG quality
+//! level.
 
 use rfb_proto::{types::Rect, wire::Reader};
 
@@ -16,6 +17,7 @@ pub(crate) fn decode(
     rect: Rect,
     payload: &[u8],
     streams: &mut [Inflater; 4],
+    jpeg: bool,
 ) -> Result<(), DecodeError> {
     fb.check(rect)?;
     let short = |_| DecodeError::Malformed("truncated Tight payload");
@@ -40,7 +42,15 @@ pub(crate) fn decode(
                 fb.fill_rect(rect, pixel);
                 return Ok(());
             }
-            0b1001 => return Err(DecodeError::Malformed("Tight JPEG was not requested")),
+            0b1001 => {
+                if !jpeg {
+                    return Err(DecodeError::Malformed("Tight JPEG was not requested"));
+                }
+                let len = compact_length(&mut r).map_err(short)?;
+                let data = r.take(len).map_err(short)?;
+                end(&r)?;
+                return paint_jpeg(fb, rect, data);
+            }
             0b1010 => (false, false),
             0b1110 => (false, true),
             _ => return Err(DecodeError::Malformed("Tight compression control")),
@@ -205,4 +215,38 @@ fn gradient(fb: &mut Framebuffer, conv: &PixelConverter, rect: Rect, data: &[u8]
         }
         above.clone_from(&row_values);
     }
+}
+
+/// The largest JPEG a rectangle may carry: the pixels of the biggest
+/// rectangle at three bytes each, which no sane encoder exceeds.
+const MAX_JPEG: usize = 16 << 20;
+
+/// Decode `data` and write it into `rect`. The picture must have exactly the
+/// rectangle's size.
+fn paint_jpeg(fb: &mut Framebuffer, rect: Rect, data: &[u8]) -> Result<(), DecodeError> {
+    use zune_core::{colorspace::ColorSpace, options::DecoderOptions};
+
+    let bad = |_| DecodeError::Malformed("Tight JPEG data");
+    if data.len() > MAX_JPEG {
+        return Err(DecodeError::Malformed("Tight JPEG too large"));
+    }
+    let (w, h) = (usize::from(rect.width), usize::from(rect.height));
+    // Refuse a picture bigger than the rectangle before decoding it.
+    let options = DecoderOptions::default()
+        .jpeg_set_out_colorspace(ColorSpace::RGB)
+        .set_max_width(w)
+        .set_max_height(h);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, options);
+    let rgb = decoder.decode().map_err(bad)?;
+    let info = decoder
+        .info()
+        .ok_or(DecodeError::Malformed("Tight JPEG data"))?;
+    if usize::from(info.width) != w || usize::from(info.height) != h || rgb.len() != w * h * 3 {
+        return Err(DecodeError::Malformed("Tight JPEG has the wrong size"));
+    }
+    let mut bgrx = Vec::with_capacity(w * h * 4);
+    for px in rgb.as_chunks::<3>().0 {
+        bgrx.extend_from_slice(&[px[2], px[1], px[0], 0xFF]);
+    }
+    fb.write_bgrx(rect, &bgrx)
 }
