@@ -20,7 +20,7 @@ jobs:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Toolchain
         run: rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
@@ -59,7 +59,7 @@ jobs:
     env:
       RUSTFLAGS: "" # cargo-fuzz adds its own flags; warnings are checked by the other job
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Nightly toolchain and cargo-fuzz
         run: |
           rustup toolchain install nightly --profile minimal
