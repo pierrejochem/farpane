@@ -27,14 +27,29 @@ mod live {
             (p.root_x, p.root_y)
         };
         let start = at(&conn);
+        sleep(Duration::from_millis(300));
+        if at(&conn) != start {
+            println!("pointer moved by itself before the test: hands off the mouse");
+        }
         println!("pointer starts at {start:?}");
+        // The pointer is reported in desktop coordinates, the portal takes
+        // stream coordinates. The first move finds the stream's offset in the
+        // desktop; the other two must land at that offset plus the target.
+        let targets = [(w / 2, h / 2), (w / 4, h / 3), (w / 5 * 4, h / 6)];
+        let mut offset = (0i32, 0i32);
         let mut ok = 0;
-        for (x, y) in [(w / 2, h / 2), (w / 4, h / 3), (w / 5 * 4, h / 6)] {
+        for (i, (x, y)) in targets.into_iter().enumerate() {
             input.pointer(x, y, 0);
             sleep(Duration::from_millis(500));
             let got = at(&conn);
-            let hit = i32::from(got.0).abs_diff(i32::from(x)) <= 2
-                && i32::from(got.1).abs_diff(i32::from(y)) <= 2;
+            let (gx, gy) = (i32::from(got.0), i32::from(got.1));
+            if i == 0 {
+                offset = (gx - i32::from(x), gy - i32::from(y));
+                println!("moved to ({x}, {y}): pointer is at {got:?}, stream offset {offset:?}");
+                continue;
+            }
+            let hit = (gx - offset.0 - i32::from(x)).abs() <= 2
+                && (gy - offset.1 - i32::from(y)).abs() <= 2;
             println!(
                 "moved to ({x}, {y}): pointer is at {got:?} {}",
                 if hit { "ok" } else { "MISMATCH" }
@@ -44,16 +59,18 @@ mod live {
         // A Shift tap: harmless wherever the keyboard focus is.
         input.key(0xFFE1, true);
         input.key(0xFFE1, false);
-        // Back to where it was.
-        input.pointer(
-            u16::try_from(start.0).unwrap_or(0),
-            u16::try_from(start.1).unwrap_or(0),
-            0,
-        );
-        sleep(Duration::from_millis(600));
-        println!("pointer restored to {:?}", at(&conn));
+        // Back to where it was, if that was on the shared stream.
+        let back = (i32::from(start.0) - offset.0, i32::from(start.1) - offset.1);
+        match (u16::try_from(back.0), u16::try_from(back.1)) {
+            (Ok(x), Ok(y)) if x < w && y < h => {
+                input.pointer(x, y, 0);
+                sleep(Duration::from_millis(600));
+                println!("pointer restored to {:?} (wanted {start:?})", at(&conn));
+            }
+            _ => println!("start {start:?} is off the shared stream: not restored"),
+        }
         println!("portal errors: {:?}", input.first_error());
-        println!("{ok} of 3 moves arrived");
+        println!("{ok} of 2 checked moves arrived");
     }
 }
 
