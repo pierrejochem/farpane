@@ -236,7 +236,10 @@ fn paint_jpeg(fb: &mut Framebuffer, rect: Rect, data: &[u8]) -> Result<(), Decod
         .jpeg_set_out_colorspace(ColorSpace::RGB)
         .set_max_width(w)
         .set_max_height(h);
-    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(data, options);
+    let mut decoder = zune_jpeg::JpegDecoder::new_with_options(
+        zune_core::bytestream::ZCursor::new(data),
+        options,
+    );
     let rgb = decoder.decode().map_err(bad)?;
     let info = decoder
         .info()
