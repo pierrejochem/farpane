@@ -96,7 +96,7 @@ pub fn load_or_generate_ra2(dir: &Path) -> io::Result<Arc<rfb_security::ra2::Key
     let path = dir.join("ra2_key.pem");
     let pair = match fs::read_to_string(&path) {
         Ok(pem) => {
-            let private = rsa::RsaPrivateKey::from_pkcs8_pem(&pem)
+            let private = rsa::PrivateKey::from_pkcs8_pem(&pem)
                 .map_err(|e| bad(format!("{}: {e}", path.display())))?;
             rfb_security::ra2::KeyPair::from_private(private)
                 .map_err(|e| bad(format!("{}: {e}", path.display())))?
