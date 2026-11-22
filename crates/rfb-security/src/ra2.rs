@@ -12,7 +12,10 @@ use eax::{
 };
 use rand_core::UnwrapErr;
 use rfb_proto::consts::security;
-use rsa::{BoxedUint, Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey, traits::PublicKeyParts};
+use rsa::{
+    BoxedUint, Pkcs1v15Encrypt, PrivateKey as RsaPrivateKey, PublicKey as RsaPublicKey,
+    traits::PublicKeyParts,
+};
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
@@ -221,7 +224,7 @@ impl KeyPair {
     /// # Errors
     /// [`Ra2Error::BadKey`] if its size is out of range.
     pub fn from_private(private: RsaPrivateKey) -> Result<Self, Ra2Error> {
-        let bits = private.n().bits();
+        let bits = private.n().bit_width();
         let len = PublicKey::part_len(bits);
         let pad = |bytes: Box<[u8]>| {
             let mut v = vec![0u8; len.saturating_sub(bytes.len())];
